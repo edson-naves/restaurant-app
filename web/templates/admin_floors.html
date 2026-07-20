@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block body %}
+{% include "admin_nav.html" %}
+
+<div class="between">
+  <div>
+    <h1>Floors &amp; zones</h1>
+    <p class="sub">
+      {{ floors|length }} floor{{ '' if floors|length == 1 else 's' }} ·
+      {{ floors|sum(attribute='zones', start=[])|length }} zones
+      · <span class="spec">req 4.1.1</span>
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <strong>Add floors</strong>
+  <p class="sub" style="margin:2px 0 10px">
+    e.g. 3 floors with 4 zones each gives Zone A–D on every floor. Floors
+    already present are skipped, so running this again only adds what is
+    missing.
+  </p>
+  <form method="post" action="/admin/floors/create-batch" class="filters">
+    <div class="field" style="max-width:130px">
+      <label>How many floors</label>
+      <input type="number" name="count" min="1" max="20" value="3" required>
+    </div>
+    <div class="field" style="max-width:150px">
+      <label>Zones on each</label>
+      <input type="number" name="zones_each" min="0" max="26" value="4">
+    </div>
+    <button class="btn primary">Add floors</button>
+  </form>
+</div>
+
+{% for f in floors %}
+<div class="card">
+  <form method="post" action="/admin/floors/{{ f.id }}/edit" id="ff{{ f.id }}"></form>
+  {% for z in f.zones %}
+  <form method="post" action="/admin/zones/{{ z.id }}/edit" id="zf{{ z.id }}"></form>
+  {% endfor %}
+
+  <div class="between">
+    <div class="filters">
+      <div class="field" style="max-width:220px">
+        <label>Floor name</label>
+        <input form="ff{{ f.id }}" type="text" name="name" value="{{ f.name }}">
+      </div>
+      <div class="field" style="max-width:90px">
+        <label>Order</label>
+        <input form="ff{{ f.id }}" type="number" name="sort_order" value="{{ f.sort_order }}">
+      </div>
+      <button form="ff{{ f.id }}" class="btn sm">Save</button>
+      {% if not f.is_active %}<span class="pill open">retired</span>{% endif %}
+    </div>
+    <div>
+      {% if f.is_active %}
+      <form method="post" action="/admin/floors/{{ f.id }}/active" style="display:inline">
+        <input type="hidden" name="active" value="0">
+        <button class="btn sm danger">Retire floor</button>
+      </form>
+      {% else %}
+      <form method="post" action="/admin/floors/{{ f.id }}/active" style="display:inline">
+        <input type="hidden" name="active" value="1">
+        <button class="btn sm good">Restore floor</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="scroll" style="margin-top:12px">
+    <table>
+      <thead><tr><th>Zone</th><th class="num">Order</th><th class="num">Tables</th><th></th></tr></thead>
+      <tbody>
+      {% for z in f.zones %}
+        <tr class="{{ '' if z.is_active else 'dim' }}">
+          <td>
+            <input form="zf{{ z.id }}" type="text" name="name" value="{{ z.name }}" style="width:200px">
+            {% if not z.is_active %}<span class="pill open">retired</span>{% endif %}
+          </td>
+          <td class="num">
+            <input form="zf{{ z.id }}" type="number" name="sort_order" value="{{ z.sort_order }}" style="width:80px">
+          </td>
+          <td class="num">{{ counts.get(z.id, 0) }}</td>
+          <td style="white-space:nowrap">
+            <button form="zf{{ z.id }}" class="btn sm">Save</button>
+            {% if z.is_active %}
+              <form method="post" action="/admin/zones/{{ z.id }}/active" style="display:inline">
+                <input type="hidden" name="active" value="0">
+                <button class="btn sm danger" {{ 'disabled' if counts.get(z.id, 0) else '' }}
+                        title="{{ 'Move its tables out first' if counts.get(z.id, 0) else 'Retire this zone' }}">
+                  Retire
+                </button>
+              </form>
+            {% else %}
+              <form method="post" action="/admin/zones/{{ z.id }}/active" style="display:inline">
+                <input type="hidden" name="active" value="1">
+                <button class="btn sm good">Restore</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty">No zones on this floor yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <form method="post" action="/admin/floors/{{ f.id }}/zones/create-batch"
+        class="filters" style="margin-top:12px">
+    <div class="field" style="max-width:130px">
+      <label>Add zones</label>
+      <input type="number" name="count" min="1" max="26" value="4" required>
+    </div>
+    <button class="btn sm primary">Add to {{ f.name }}</button>
+  </form>
+</div>
+{% else %}
+<div class="card"><p class="empty">No floors yet — add some above.</p></div>
+{% endfor %}
+{% endblock %}

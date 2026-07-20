@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import render, require
 from app.models.oltp import (
+    Floor,
     MenuCategory,
     MenuItem,
     Modifier,
@@ -35,6 +36,7 @@ from app.models.oltp import (
     Role,
     Staff,
     TableStatus,
+    Zone,
 )
 
 router = APIRouter(prefix="/admin")
@@ -73,22 +75,26 @@ def _cents(value: str, field: str = "Price") -> int:
     return -cents if negative else cents
 
 
-def _active_tables(db: Session) -> list[RestaurantTable]:
-    return db.execute(
+def _active_tables(db: Session, floor_id: int | None = None) -> list[RestaurantTable]:
+    tables = db.execute(
         select(RestaurantTable).where(RestaurantTable.is_active.is_(True))
     ).scalars().all()
+    if floor_id is None:
+        return tables
+    return [t for t in tables if t.floor_id == floor_id]
 
 
-def _free_cells(db: Session, count: int) -> list[tuple[int, int]]:
-    """Pick `count` unoccupied grid squares, scanning row-major.
+def _free_cells(db: Session, count: int, floor_id: int | None) -> list[tuple[int, int]]:
+    """Pick `count` unoccupied grid squares on one floor, scanning row-major.
 
     A new table's position cannot be derived from how many tables exist: the
     seeded floor is laid out 8 to a row while the editor grid is GRID_COLS
     wide, so counting drops the new table straight onto an occupied square.
     Retired tables are ignored — they are off the floor and their stale
-    coordinates should not reserve space.
+    coordinates should not reserve space. Each floor has its own grid, so only
+    tables on the same floor contend for a square.
     """
-    taken = {(t.pos_x, t.pos_y) for t in _active_tables(db)}
+    taken = {(t.pos_x, t.pos_y) for t in _active_tables(db, floor_id)}
     cells: list[tuple[int, int]] = []
     i = 0
     while len(cells) < count:
@@ -98,6 +104,32 @@ def _free_cells(db: Session, count: int) -> list[tuple[int, int]]:
             cells.append(cell)
         i += 1
     return cells
+
+
+def _ordinal(n: int) -> str:
+    if 11 <= n % 100 <= 13:
+        return f"{n}th"
+    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
+
+
+def _zone_or_400(db: Session, zone_id: int) -> Zone:
+    zone = db.get(Zone, zone_id)
+    if zone is None:
+        raise HTTPException(404, "Zone not found")
+    if not zone.is_active or not zone.floor.is_active:
+        raise HTTPException(400, f"{zone.label} is retired — pick an active zone.")
+    return zone
+
+
+def _assign_zone(table: RestaurantTable, zone: Zone) -> None:
+    """Point a table at a zone, keeping the denormalized label in step.
+
+    RestaurantTable.zone is what the ETL copies into DimTable and what the
+    floor plan prints; letting it drift from zone_id would make the floor plan
+    and the reports disagree about where a table is.
+    """
+    table.zone_id = zone.id
+    table.zone = zone.name
 
 
 def _live_order_for_table(db: Session, table_id: int) -> Order | None:
@@ -123,6 +155,7 @@ def tables_page(
     done: int = 0,
     created: str = "",
     skipped: str = "",
+    floor: int = 0,
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
@@ -131,29 +164,39 @@ def tables_page(
     ).scalars().all()
     active = [t for t in tables if t.is_active]
 
-    # The editor canvas is a fixed-width grid; give it enough rows to hold
-    # every table plus a spare row to drag into.
-    rows = max([t.pos_y for t in active] + [len(active) // GRID_COLS]) + 2
+    floors = db.execute(
+        select(Floor).where(Floor.is_active.is_(True))
+        .order_by(Floor.sort_order, Floor.name)
+    ).scalars().all()
+    # The grid shows one floor at a time; coordinates are per floor.
+    current = next((f for f in floors if f.id == floor), floors[0] if floors else None)
+    on_floor = [t for t in active if current and t.floor_id == current.id]
+
+    # Enough rows to hold this floor's tables plus a spare row to drag into.
+    rows = max([t.pos_y for t in on_floor] + [len(on_floor) // GRID_COLS]) + 2
 
     waiters = db.execute(
         select(Staff).where(Staff.role == Role.WAITER, Staff.is_active.is_(True))
         .order_by(Staff.name)
     ).scalars().all()
     zones = db.execute(
-        select(RestaurantTable.zone).distinct().order_by(RestaurantTable.zone)
+        select(Zone).where(Zone.is_active.is_(True)).order_by(Zone.floor_id, Zone.sort_order)
     ).scalars().all()
 
     return render(request, "admin_tables.html", {
         "db": db, "staff": staff,
         "tables": tables,
         "active_tables": active,
+        "floor_tables": on_floor,
         "retired": [t for t in tables if not t.is_active],
         "busy_ids": {
             t.id for t in active
             if t.status != TableStatus.FREE or _live_order_for_table(db, t.id)
         },
         "cols": GRID_COLS, "rows": rows,
-        "zones": zones, "waiters": waiters,
+        "floors": floors, "current_floor": current,
+        "zones": [z for z in zones if z.floor.is_active],
+        "waiters": waiters,
         "seats_total": sum(t.capacity for t in active),
         "done": done, "created": created,
         "skipped": [s for s in skipped.split(",") if s],
@@ -164,7 +207,7 @@ def tables_page(
 @router.post("/tables/create")
 def create_table(
     number: int = Form(...),
-    zone: str = Form("Main"),
+    zone_id: int = Form(...),
     capacity: int = Form(4),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
@@ -185,20 +228,23 @@ def create_table(
             + ("" if clash.is_active else " (retired — reactivate it instead).")
         )
 
-    (pos_x, pos_y), = _free_cells(db, 1)
-    db.add(RestaurantTable(
-        number=number, zone=zone.strip() or "Main", capacity=capacity,
+    zone = _zone_or_400(db, zone_id)
+    (pos_x, pos_y), = _free_cells(db, 1, zone.floor_id)
+    table = RestaurantTable(
+        number=number, capacity=capacity,
         status=TableStatus.FREE, is_active=True, pos_x=pos_x, pos_y=pos_y,
-    ))
+    )
+    _assign_zone(table, zone)
+    db.add(table)
     db.commit()
-    return RedirectResponse("/admin/tables", status_code=303)
+    return RedirectResponse(f"/admin/tables?floor={zone.floor_id}", status_code=303)
 
 
 @router.post("/tables/create-batch")
 def create_tables_batch(
     count: int = Form(...),
     capacity: int = Form(4),
-    zone: str = Form("Main"),
+    zone_id: int = Form(...),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
@@ -214,12 +260,12 @@ def create_tables_batch(
         raise HTTPException(400, "Choose between 1 and 50 tables to add.")
     if not 1 <= capacity <= 20:
         raise HTTPException(400, "Capacity must be between 1 and 20 seats.")
-    zone = zone.strip() or "Main"
+    zone = _zone_or_400(db, zone_id)
 
     taken_numbers = {
         t.number for t in db.execute(select(RestaurantTable)).scalars().all()
     }
-    cells = _free_cells(db, count)
+    cells = _free_cells(db, count, zone.floor_id)
 
     number = max(taken_numbers, default=0)
     made: list[int] = []
@@ -227,16 +273,19 @@ def create_tables_batch(
         number += 1
         while number in taken_numbers:
             number += 1
-        db.add(RestaurantTable(
-            number=number, zone=zone, capacity=capacity,
+        table = RestaurantTable(
+            number=number, capacity=capacity,
             status=TableStatus.FREE, is_active=True, pos_x=pos_x, pos_y=pos_y,
-        ))
+        )
+        _assign_zone(table, zone)
+        db.add(table)
         made.append(number)
 
     db.commit()
     span = f"{made[0]}" if len(made) == 1 else f"{made[0]}–{made[-1]}"
     return RedirectResponse(
-        f"/admin/tables?done={len(made)}&created={span}", status_code=303
+        f"/admin/tables?done={len(made)}&created={span}&floor={zone.floor_id}",
+        status_code=303,
     )
 
 
@@ -244,7 +293,7 @@ def create_tables_batch(
 def edit_table(
     table_id: int,
     number: int = Form(...),
-    zone: str = Form("Main"),
+    zone_id: int = Form(...),
     capacity: int = Form(4),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
@@ -274,10 +323,15 @@ def edit_table(
             )
         table.number = number
 
-    table.zone = zone.strip() or "Main"
+    zone = _zone_or_400(db, zone_id)
+    # Moving to another floor moves the table to a different grid, where its
+    # old coordinates may already be taken.
+    if zone.floor_id != table.floor_id:
+        (table.pos_x, table.pos_y), = _free_cells(db, 1, zone.floor_id)
+    _assign_zone(table, zone)
     table.capacity = capacity
     db.commit()
-    return RedirectResponse("/admin/tables", status_code=303)
+    return RedirectResponse(f"/admin/tables?floor={zone.floor_id}", status_code=303)
 
 
 @router.post("/tables/{table_id}/active")
@@ -314,7 +368,7 @@ def toggle_table(
 def bulk_tables(
     action: str = Form(...),
     table_ids: list[int] = Form([]),
-    zone: str = Form(""),
+    zone_id: int = Form(0),
     capacity: int = Form(0),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
@@ -335,8 +389,7 @@ def bulk_tables(
         raise HTTPException(400, f"Unknown bulk action '{action}'.")
     if action == "capacity" and not 1 <= capacity <= 20:
         raise HTTPException(400, "Capacity must be between 1 and 20 seats.")
-    if action == "zone" and not zone.strip():
-        raise HTTPException(400, "Zone is required.")
+    target_zone = _zone_or_400(db, zone_id) if action == "zone" else None
 
     tables = db.execute(
         select(RestaurantTable).where(RestaurantTable.id.in_(table_ids))
@@ -360,7 +413,13 @@ def bulk_tables(
                 continue
             table.is_active = True
         elif action == "zone":
-            table.zone = zone.strip()
+            if target_zone.floor_id != table.floor_id:
+                (table.pos_x, table.pos_y), = _free_cells(db, 1, target_zone.floor_id)
+            _assign_zone(table, target_zone)
+            # The session does not autoflush, so without this the next
+            # _free_cells call would not see this table and would hand out the
+            # same square again.
+            db.flush()
         elif action == "capacity":
             table.capacity = capacity
         done += 1
@@ -390,11 +449,14 @@ def save_layout(
         int(c.split(":")[0]) for c in layout.split(",")
         if c.strip() and c.split(":")[0].strip().lstrip("-").isdigit()
     }
-    # Squares held by active tables the payload does not mention. The drag
-    # editor always submits every chip, so this is normally empty — but a
+    # Squares held by active tables the payload does not mention, keyed by
+    # floor — each floor is its own grid, so (0,0) upstairs and (0,0)
+    # downstairs are different squares. The drag editor submits every chip on
+    # the floor being edited, so this normally only holds other floors; a
     # partial payload must not be able to park one table on top of another.
-    seen: set[tuple[int, int]] = {
-        (t.pos_x, t.pos_y) for t in _active_tables(db) if t.id not in moving
+    seen: set[tuple[int | None, int, int]] = {
+        (t.floor_id, t.pos_x, t.pos_y)
+        for t in _active_tables(db) if t.id not in moving
     }
     for chunk in layout.split(","):
         if not chunk.strip():
@@ -408,12 +470,212 @@ def save_layout(
             raise HTTPException(400, f"Unknown table id {tid} in layout.")
         if not (0 <= x < GRID_COLS and 0 <= y):
             raise HTTPException(400, f"Position {x},{y} is off the grid.")
-        if (x, y) in seen:
+        if (table.floor_id, x, y) in seen:
             raise HTTPException(400, f"Two tables share position {x},{y}.")
-        seen.add((x, y))
+        seen.add((table.floor_id, x, y))
         table.pos_x, table.pos_y = x, y
     db.commit()
     return RedirectResponse("/admin/tables", status_code=303)
+
+
+# --------------------------------------------------------------------------
+# Floors & zones — the two-level location behind 4.1.1
+# --------------------------------------------------------------------------
+
+@router.get("/floors")
+def floors_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    floors = db.execute(
+        select(Floor).order_by(Floor.sort_order, Floor.name)
+    ).scalars().all()
+    tables = db.execute(select(RestaurantTable)).scalars().all()
+
+    counts: dict[int, int] = {}
+    for t in tables:
+        if t.zone_id is not None:
+            counts[t.zone_id] = counts.get(t.zone_id, 0) + 1
+
+    return render(request, "admin_floors.html", {
+        "db": db, "staff": staff,
+        "floors": floors, "counts": counts,
+        "title": "Manage floors & zones",
+    })
+
+
+@router.post("/floors/create-batch")
+def create_floors(
+    count: int = Form(...),
+    zones_each: int = Form(0),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Create N floors at once, optionally each with M lettered zones."""
+    if not 1 <= count <= 20:
+        raise HTTPException(400, "Choose between 1 and 20 floors.")
+    if not 0 <= zones_each <= 26:
+        raise HTTPException(400, "Zones per floor must be between 0 and 26 (A–Z).")
+
+    existing = {f.name for f in db.execute(select(Floor)).scalars().all()}
+    made = 0
+    n = 0
+    while made < count:
+        n += 1
+        name = f"{_ordinal(n)} floor"
+        if name in existing:
+            continue                           # keep going past floors already there
+        floor = Floor(name=name, sort_order=n, is_active=True)
+        db.add(floor)
+        db.flush()
+        for i in range(zones_each):
+            db.add(Zone(
+                floor_id=floor.id, name=f"Zone {chr(ord('A') + i)}",
+                sort_order=i, is_active=True,
+            ))
+        existing.add(name)
+        made += 1
+
+    db.commit()
+    return RedirectResponse(f"/admin/floors?done={made}", status_code=303)
+
+
+@router.post("/floors/{floor_id}/zones/create-batch")
+def create_zones(
+    floor_id: int,
+    count: int = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Add M lettered zones to one floor, continuing past letters in use."""
+    floor = db.get(Floor, floor_id)
+    if floor is None:
+        raise HTTPException(404, "Floor not found")
+    if not 1 <= count <= 26:
+        raise HTTPException(400, "Choose between 1 and 26 zones (A–Z).")
+
+    existing = {z.name for z in floor.zones}
+    made = 0
+    i = 0
+    while made < count and i < 26:
+        name = f"Zone {chr(ord('A') + i)}"
+        i += 1
+        if name in existing:
+            continue
+        db.add(Zone(floor_id=floor.id, name=name, sort_order=i, is_active=True))
+        made += 1
+    if made < count:
+        raise HTTPException(400, "Ran out of letters — a floor holds at most 26 zones.")
+
+    db.commit()
+    return RedirectResponse(f"/admin/floors?done={made}", status_code=303)
+
+
+@router.post("/floors/{floor_id}/edit")
+def edit_floor(
+    floor_id: int,
+    name: str = Form(...),
+    sort_order: int = Form(0),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    floor = db.get(Floor, floor_id)
+    if floor is None:
+        raise HTTPException(404, "Floor not found")
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "Floor name is required.")
+    clash = db.execute(
+        select(Floor).where(Floor.name == name, Floor.id != floor_id)
+    ).scalars().first()
+    if clash is not None:
+        raise HTTPException(400, f"A floor called '{name}' already exists.")
+    floor.name = name
+    floor.sort_order = sort_order
+    db.commit()
+    return RedirectResponse("/admin/floors", status_code=303)
+
+
+@router.post("/floors/{floor_id}/active")
+def toggle_floor(
+    floor_id: int,
+    active: int = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    floor = db.get(Floor, floor_id)
+    if floor is None:
+        raise HTTPException(404, "Floor not found")
+    if not active:
+        held = [
+            t for t in _active_tables(db) if t.floor_id == floor_id
+        ]
+        if held:
+            raise HTTPException(
+                400,
+                f"{floor.name} still holds {len(held)} active table(s). "
+                "Move or retire them first.",
+            )
+    floor.is_active = bool(active)
+    db.commit()
+    return RedirectResponse("/admin/floors", status_code=303)
+
+
+@router.post("/zones/{zone_id}/edit")
+def edit_zone(
+    zone_id: int,
+    name: str = Form(...),
+    sort_order: int = Form(0),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    zone = db.get(Zone, zone_id)
+    if zone is None:
+        raise HTTPException(404, "Zone not found")
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "Zone name is required.")
+    clash = db.execute(
+        select(Zone).where(
+            Zone.floor_id == zone.floor_id, Zone.name == name, Zone.id != zone_id
+        )
+    ).scalars().first()
+    if clash is not None:
+        raise HTTPException(400, f"{zone.floor.name} already has a '{name}'.")
+
+    zone.name = name
+    zone.sort_order = sort_order
+    # Keep every table's denormalized label in step with the rename.
+    for t in db.execute(
+        select(RestaurantTable).where(RestaurantTable.zone_id == zone_id)
+    ).scalars().all():
+        t.zone = name
+    db.commit()
+    return RedirectResponse("/admin/floors", status_code=303)
+
+
+@router.post("/zones/{zone_id}/active")
+def toggle_zone(
+    zone_id: int,
+    active: int = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    zone = db.get(Zone, zone_id)
+    if zone is None:
+        raise HTTPException(404, "Zone not found")
+    if not active:
+        held = [t for t in _active_tables(db) if t.zone_id == zone_id]
+        if held:
+            raise HTTPException(
+                400,
+                f"{zone.label} still holds {len(held)} active table(s). "
+                "Move or retire them first.",
+            )
+    zone.is_active = bool(active)
+    db.commit()
+    return RedirectResponse("/admin/floors", status_code=303)
 
 
 # --------------------------------------------------------------------------

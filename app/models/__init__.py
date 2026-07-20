@@ -4,6 +4,7 @@ from app.models.oltp import (  # noqa: F401
     DeliveryOrder,
     DeliveryStatus,
     Discount,
+    Floor,
     KitchenStatus,
     MenuCategory,
     MenuItem,
@@ -23,6 +24,7 @@ from app.models.oltp import (  # noqa: F401
     SharedItemShare,
     Staff,
     TableStatus,
+    Zone,
 )
 from app.models.star import (  # noqa: F401
     UNKNOWN_KEY,

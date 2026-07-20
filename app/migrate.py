@@ -19,11 +19,14 @@ from sqlalchemy.engine import Engine
 # behaviour — every table that exists today is an active one.
 ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("restaurant_table", "is_active", "BOOLEAN NOT NULL DEFAULT 1"),
+    ("restaurant_table", "zone_id", "INTEGER REFERENCES zone(id)"),
 )
+
+DEFAULT_FLOOR = "1st floor"
 
 
 def run(engine: Engine) -> list[str]:
-    """Apply any missing columns. Returns the ones actually added."""
+    """Apply any missing columns, then backfill. Returns what changed."""
     applied: list[str] = []
     with engine.begin() as conn:
         for table, column, ddl in ADDED_COLUMNS:
@@ -34,4 +37,61 @@ def run(engine: Engine) -> list[str]:
                 continue                       # already migrated
             conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
             applied.append(f"{table}.{column}")
+
+        applied.extend(_backfill_locations(conn))
     return applied
+
+
+def _backfill_locations(conn) -> list[str]:
+    """Give tables that predate floors and zones a home.
+
+    Zones used to be a free-text column. Every existing distinct value becomes
+    a real Zone on a single default floor, keeping its name so no report
+    changes meaning — "Patio" stays "Patio", it just now sits on the 1st floor.
+
+    Guarded on tables that still have no zone_id, so this is a no-op once the
+    backfill has run and safe if new floors were added afterwards.
+    """
+    orphans = conn.execute(text(
+        "SELECT COUNT(*) FROM restaurant_table WHERE zone_id IS NULL"
+    )).scalar_one()
+    if not orphans:
+        return []
+
+    floor_id = conn.execute(
+        text("SELECT id FROM floor WHERE name = :n"), {"n": DEFAULT_FLOOR}
+    ).scalar_one_or_none()
+    if floor_id is None:
+        conn.execute(
+            text("INSERT INTO floor (name, sort_order, is_active) "
+                 "VALUES (:n, 0, 1)"),
+            {"n": DEFAULT_FLOOR},
+        )
+        floor_id = conn.execute(
+            text("SELECT id FROM floor WHERE name = :n"), {"n": DEFAULT_FLOOR}
+        ).scalar_one()
+
+    names = [r[0] for r in conn.execute(text(
+        "SELECT DISTINCT COALESCE(NULLIF(zone, ''), 'Main') FROM restaurant_table "
+        "WHERE zone_id IS NULL ORDER BY 1"
+    ))]
+    for i, name in enumerate(names):
+        exists = conn.execute(
+            text("SELECT id FROM zone WHERE floor_id = :f AND name = :n"),
+            {"f": floor_id, "n": name},
+        ).scalar_one_or_none()
+        if exists is None:
+            conn.execute(
+                text("INSERT INTO zone (floor_id, name, sort_order, is_active) "
+                     "VALUES (:f, :n, :s, 1)"),
+                {"f": floor_id, "n": name, "s": i},
+            )
+
+    conn.execute(text(
+        "UPDATE restaurant_table SET zone_id = ("
+        "  SELECT z.id FROM zone z WHERE z.floor_id = :f"
+        "    AND z.name = COALESCE(NULLIF(restaurant_table.zone, ''), 'Main')"
+        ") WHERE zone_id IS NULL"
+    ), {"f": floor_id})
+
+    return [f"backfilled {orphans} tables onto '{DEFAULT_FLOOR}' ({len(names)} zones)"]

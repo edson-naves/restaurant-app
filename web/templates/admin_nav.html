@@ -1,5 +1,6 @@
 <nav class="subtabs">
   {% if can('settings') %}
+  <a href="/admin/floors" class="{{ 'on' if request.url.path.startswith('/admin/floors') else '' }}">Floors &amp; zones</a>
   <a href="/admin/tables" class="{{ 'on' if request.url.path.startswith('/admin/tables') else '' }}">Tables</a>
   {% endif %}
   {% if can('staff.manage') %}

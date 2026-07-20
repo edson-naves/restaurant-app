@@ -16,7 +16,7 @@
 <div class="card">
   <div class="between" style="margin-bottom:12px">
     <div>
-      <strong>Floor layout</strong>
+      <strong>Floor layout{% if current_floor %} — {{ current_floor.name }}{% endif %}</strong>
       <p class="sub" style="margin:2px 0 0">
         Drag a table onto any square to move it. Drop it on an occupied square to
         swap the two. Nothing is saved until you press Save layout.
@@ -28,10 +28,24 @@
     </form>
   </div>
 
+  {% if floors|length > 1 %}
+  <nav class="subtabs" style="margin-bottom:12px">
+    {% for f in floors %}
+    <a href="/admin/tables?floor={{ f.id }}"
+       class="{{ 'on' if current_floor and f.id == current_floor.id else '' }}">{{ f.name }}</a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+
+  {% if not current_floor %}
+  <p class="empty">
+    No floors defined yet — <a href="/admin/floors">create one</a> before adding tables.
+  </p>
+  {% else %}
   <div class="plan" id="plan" style="--cols: {{ cols }}">
     {% for y in range(rows) %}{% for x in range(cols) %}
       <div class="cell" data-x="{{ x }}" data-y="{{ y }}">
-        {% for t in active_tables if t.pos_x == x and t.pos_y == y %}
+        {% for t in floor_tables if t.pos_x == x and t.pos_y == y %}
         <div class="chip {{ t.status }}" draggable="true" data-id="{{ t.id }}">
           <span class="n">{{ t.number }}</span>
           <span class="meta">{{ t.zone }}</span>
@@ -42,8 +56,10 @@
     {% endfor %}{% endfor %}
   </div>
   <p class="sub" style="margin:12px 0 0">
-    Tables sharing a square appear once here; drag them apart after saving.
+    {{ floor_tables|length }} table{{ '' if floor_tables|length == 1 else 's' }} on this
+    floor. Each floor has its own grid, so squares do not clash between floors.
   </p>
+  {% endif %}
 </div>
 
 <div class="row">
@@ -65,10 +81,19 @@
         </div>
       </div>
       <div class="field">
-        <label>Zone</label>
-        <input type="text" name="zone" list="zones" value="Main">
+        <label>Floor &amp; zone</label>
+        <select name="zone_id" required>
+          {% for z in zones %}
+          <option value="{{ z.id }}"
+            {{ 'selected' if current_floor and z.floor_id == current_floor.id and loop.first else '' }}>
+            {{ z.label }}
+          </option>
+          {% endfor %}
+        </select>
       </div>
-      <button class="btn primary" style="width:100%">Add tables</button>
+      <button class="btn primary" style="width:100%" {{ 'disabled' if not zones else '' }}>
+        Add tables
+      </button>
     </form>
 
     <hr style="border:none;border-top:1px solid var(--line);margin:18px 0">
@@ -81,17 +106,18 @@
                value="{{ (active_tables|map(attribute='number')|max|default(0)) + 1 }}">
       </div>
       <div class="field">
-        <label>Zone</label>
-        <input type="text" name="zone" list="zones" value="Main">
-        <datalist id="zones">
-          {% for z in zones %}<option value="{{ z }}">{% endfor %}
-        </datalist>
+        <label>Floor &amp; zone</label>
+        <select name="zone_id" required>
+          {% for z in zones %}<option value="{{ z.id }}">{{ z.label }}</option>{% endfor %}
+        </select>
       </div>
       <div class="field">
         <label>Capacity</label>
         <input type="number" name="capacity" min="1" max="20" value="4">
       </div>
-      <button class="btn primary" style="width:100%">Add table</button>
+      <button class="btn primary" style="width:100%" {{ 'disabled' if not zones else '' }}>
+        Add table
+      </button>
     </form>
   </div>
 
@@ -123,8 +149,10 @@
       <button name="action" value="retire" class="btn sm danger bulk-act" disabled>Retire</button>
       <button name="action" value="restore" class="btn sm good bulk-act" disabled>Restore</button>
       <span class="sep"></span>
-      <input type="text" name="zone" list="zones" placeholder="Zone" style="width:130px">
-      <button name="action" value="zone" class="btn sm bulk-act" disabled>Set zone</button>
+      <select name="zone_id" style="width:auto">
+        {% for z in zones %}<option value="{{ z.id }}">{{ z.label }}</option>{% endfor %}
+      </select>
+      <button name="action" value="zone" class="btn sm bulk-act" disabled>Move to</button>
       <input type="number" name="capacity" min="1" max="20" placeholder="Seats" style="width:90px">
       <button name="action" value="capacity" class="btn sm bulk-act" disabled>Set seats</button>
     </form>
@@ -136,7 +164,7 @@
             <th style="width:34px">
               <input type="checkbox" id="selAll" title="Select all" style="width:auto;min-height:0">
             </th>
-            <th>#</th><th>Zone</th><th class="num">Seats</th>
+            <th>#</th><th>Floor &amp; zone</th><th class="num">Seats</th>
             <th>Status</th><th>Waiter</th><th></th>
           </tr>
         </thead>
@@ -148,7 +176,13 @@
                      value="{{ t.id }}" style="width:auto;min-height:0">
             </td>
             <td><input form="tf{{ t.id }}" type="number" name="number" value="{{ t.number }}" min="1" style="width:80px"></td>
-            <td><input form="tf{{ t.id }}" type="text" name="zone" list="zones" value="{{ t.zone }}" style="width:130px"></td>
+            <td>
+              <select form="tf{{ t.id }}" name="zone_id" style="width:190px">
+                {% for z in zones %}
+                <option value="{{ z.id }}" {{ 'selected' if z.id == t.zone_id else '' }}>{{ z.label }}</option>
+                {% endfor %}
+              </select>
+            </td>
             <td class="num"><input form="tf{{ t.id }}" type="number" name="capacity" value="{{ t.capacity }}" min="1" max="20" style="width:74px"></td>
             <td>
               {% if t.is_active %}

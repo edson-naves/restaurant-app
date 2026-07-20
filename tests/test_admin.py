@@ -24,6 +24,7 @@ from sqlalchemy import select  # noqa: E402
 from app.database import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models.oltp import (  # noqa: E402
+    Floor,
     MenuCategory,
     MenuItem,
     Order,
@@ -31,6 +32,7 @@ from app.models.oltp import (  # noqa: E402
     RestaurantTable,
     Role,
     Staff,
+    Zone,
 )
 
 TEST_TABLE_NO = 9001
@@ -64,6 +66,28 @@ def fresh(model, **where):
     """Re-read a row, bypassing the identity map this session already holds."""
     db.expire_all()
     return db.execute(select(model).filter_by(**where)).scalars().first()
+
+
+# Everything that exists before the run is production data and must survive it.
+# Anything created during the run is torn down at the end, so the suite is
+# repeatable and leaves no floors or zones behind in the real database.
+PRE_FLOOR_IDS = {f.id for f in db.execute(select(Floor)).scalars().all()}
+PRE_ZONE_IDS = {z.id for z in db.execute(select(Zone)).scalars().all()}
+
+# A throwaway floor with two zones, so fixtures never land in a real one.
+QA_FLOOR = "QA Floor"
+qa_floor = fresh(Floor, name=QA_FLOOR)
+if qa_floor is None:
+    qa_floor = Floor(name=QA_FLOOR, sort_order=99, is_active=True)
+    db.add(qa_floor)
+    db.flush()
+    db.add_all([
+        Zone(floor_id=qa_floor.id, name="QA Zone A", sort_order=0, is_active=True),
+        Zone(floor_id=qa_floor.id, name="QA Zone B", sort_order=1, is_active=True),
+    ])
+    db.commit()
+zone_a = fresh(Zone, floor_id=qa_floor.id, name="QA Zone A")
+zone_b = fresh(Zone, floor_id=qa_floor.id, name="QA Zone B")
 
 
 # ------------------------------------------------------------------ migration
@@ -104,47 +128,62 @@ as_owner()
 # ----------------------------------------------------------------------- tables
 print("\n--- tables (4.1.1) ---")
 r = client.post("/admin/tables/create", data={
-    "number": TEST_TABLE_NO, "zone": "QA", "capacity": 4,
+    "number": TEST_TABLE_NO, "zone_id": zone_a.id, "capacity": 4,
 })
 t = fresh(RestaurantTable, number=TEST_TABLE_NO)
 check(r.status_code == 200 and t is not None, "create table", f"id={t.id if t else None}")
 check(t is not None and t.is_active and t.status == "free", "new table is free and active")
 
 r = client.post("/admin/tables/create", data={
-    "number": TEST_TABLE_NO, "zone": "QA", "capacity": 4,
+    "number": TEST_TABLE_NO, "zone_id": zone_a.id, "capacity": 4,
 })
 check(r.status_code == 400, "duplicate table number refused", str(r.status_code))
 
-r = client.post("/admin/tables/create", data={"number": 9002, "capacity": 99})
+r = client.post("/admin/tables/create", data={
+    "number": 9002, "zone_id": zone_a.id, "capacity": 99,
+})
 check(r.status_code == 400, "capacity 99 refused", str(r.status_code))
 check(fresh(RestaurantTable, number=9002) is None, "refused create wrote nothing")
 
 r = client.post(f"/admin/tables/{t.id}/edit", data={
-    "number": TEST_TABLE_NO, "zone": "Patio QA", "capacity": 6,
+    "number": TEST_TABLE_NO, "zone_id": zone_b.id, "capacity": 6,
 })
 t = fresh(RestaurantTable, number=TEST_TABLE_NO)
-check(t.zone == "Patio QA" and t.capacity == 6, "edit zone and capacity",
+check(t.zone_id == zone_b.id and t.capacity == 6, "edit zone and capacity",
       f"{t.zone} / {t.capacity}")
+check(t.zone == "QA Zone B",
+      "the denormalized label the ETL reads follows zone_id", t.zone)
 
 # A new table must never be dropped onto an occupied square. Positions cannot
 # be derived from the table count: the seeded floor is 8 wide, the editor grid
 # is 10, so counting would collide.
-def occupied_cells(exclude_id=None):
+def occupied_cells(floor_id, exclude_id=None):
+    """Squares in use on one floor. Each floor is an independent grid."""
     db.expire_all()
     return {
         (x.pos_x, x.pos_y)
         for x in db.execute(
             select(RestaurantTable).where(RestaurantTable.is_active.is_(True))
         ).scalars().all()
-        if x.id != exclude_id
+        if x.id != exclude_id and x.floor_id == floor_id
     }
 
 
-check((t.pos_x, t.pos_y) not in occupied_cells(exclude_id=t.id),
+check((t.pos_x, t.pos_y) not in occupied_cells(t.floor_id, exclude_id=t.id),
       "a newly created table lands on a free square", f"({t.pos_x},{t.pos_y})")
 
-# Layout: move the test table to a square nothing else holds.
-busy_cells = occupied_cells(exclude_id=t.id)
+# A second table on the same floor, to prove squares are contested per floor.
+client.post("/admin/tables/create", data={
+    "number": 9200, "zone_id": zone_a.id, "capacity": 2,
+})
+neighbour = fresh(RestaurantTable, number=9200)
+check(neighbour is not None
+      and (neighbour.pos_x, neighbour.pos_y) != (t.pos_x, t.pos_y),
+      "a second table on the same floor gets its own square",
+      f"({neighbour.pos_x},{neighbour.pos_y}) vs ({t.pos_x},{t.pos_y})")
+
+# Layout: move the test table to a square nothing else on its floor holds.
+busy_cells = occupied_cells(t.floor_id, exclude_id=t.id)
 free_cell = next(
     (cx, cy) for cy in range(20) for cx in range(10) if (cx, cy) not in busy_cells
 )
@@ -162,8 +201,9 @@ t = fresh(RestaurantTable, number=TEST_TABLE_NO)
 check((t.pos_x, t.pos_y) == free_cell, "refused layout left positions untouched")
 
 # The payload need not mention every table, so a partial one must not be able
-# to park a table on a square someone else already holds.
-squatted = next(iter(occupied_cells(exclude_id=t.id)))
+# to park a table on a square someone else on that floor already holds.
+neighbour = fresh(RestaurantTable, number=9200)
+squatted = (neighbour.pos_x, neighbour.pos_y)
 r = client.post("/admin/tables/layout", data={
     "layout": f"{t.id}:{squatted[0]}:{squatted[1]}"
 })
@@ -171,6 +211,18 @@ check(r.status_code == 400, "cannot move onto a table absent from the payload",
       str(r.status_code))
 t = fresh(RestaurantTable, number=TEST_TABLE_NO)
 check((t.pos_x, t.pos_y) == free_cell, "that refusal left the position untouched")
+
+# The same coordinates on another floor are a different square entirely.
+other_floor_table = db.execute(
+    select(RestaurantTable).where(
+        RestaurantTable.is_active.is_(True), RestaurantTable.number < 9000
+    )
+).scalars().first()
+r = client.post("/admin/tables/layout", data={
+    "layout": f"{t.id}:{other_floor_table.pos_x}:{other_floor_table.pos_y}"
+})
+check(r.status_code == 200 and other_floor_table.floor_id != t.floor_id,
+      "the same square on a different floor does not clash", str(r.status_code))
 
 r = client.post("/admin/tables/layout", data={"layout": f"{t.id}:99:0"})
 check(r.status_code == 400, "off-grid column refused", str(r.status_code))
@@ -206,18 +258,107 @@ r = client.post(f"/admin/tables/{t.id}/active", data={"active": 1})
 r = client.get("/")
 check(f"Table {TEST_TABLE_NO}" in r.text, "restored table is back on the floor plan")
 
+# ------------------------------------------------------------ floors & zones
+print("\n--- floors & zones ---")
+r = client.get("/admin/floors")
+check(r.status_code == 200, "GET /admin/floors", str(r.status_code))
+
+before_floors = db.execute(select(Floor)).scalars().all()
+r = client.post("/admin/floors/create-batch", data={"count": 3, "zones_each": 4})
+db.expire_all()
+after_floors = db.execute(select(Floor).order_by(Floor.sort_order)).scalars().all()
+made_floors = [f for f in after_floors if f not in before_floors]
+check(r.status_code == 200 and len(after_floors) >= 3,
+      "3 floors created with 4 zones each", f"{len(after_floors)} floors total")
+
+ordinals = {f.name for f in after_floors}
+check({"1st floor", "2nd floor", "3rd floor"} <= ordinals,
+      "floors are named by ordinal", str(sorted(ordinals)))
+third = fresh(Floor, name="3rd floor")
+new_zone_names = [z.name for z in third.zones if z.id not in PRE_ZONE_IDS]
+check(len(new_zone_names) == 4, "each new floor got 4 zones", str(new_zone_names))
+check(sorted(new_zone_names)[:4] == ["Zone A", "Zone B", "Zone C", "Zone D"],
+      "zones are lettered A-D", str(sorted(new_zone_names)))
+
+# Re-running must not duplicate: floors already present are skipped.
+r = client.post("/admin/floors/create-batch", data={"count": 3, "zones_each": 4})
+db.expire_all()
+names = [f.name for f in db.execute(select(Floor)).scalars().all()]
+check(len(names) == len(set(names)), "re-running creates no duplicate floors",
+      str(sorted(names)))
+
+r = client.post(f"/admin/floors/{third.id}/zones/create-batch", data={"count": 2})
+db.expire_all()
+third = fresh(Floor, name="3rd floor")
+grown = [z.name for z in third.zones if z.id not in PRE_ZONE_IDS]
+check(len(grown) == 6 and "Zone E" in grown and "Zone F" in grown,
+      "adding 2 more zones continues past D", str(sorted(grown)))
+
+for bad in ({"count": 0, "zones_each": 1}, {"count": 21, "zones_each": 1},
+            {"count": 1, "zones_each": 27}):
+    r = client.post("/admin/floors/create-batch", data=bad)
+    check(r.status_code == 400, f"floors batch {bad} refused", str(r.status_code))
+
+# Zones are scoped to their floor, so the same name on two floors is fine.
+first = fresh(Floor, name="1st floor")
+r = client.post(f"/admin/floors/{first.id}/zones/create-batch", data={"count": 1})
+check(r.status_code == 200, "'Zone A' can exist on more than one floor",
+      str(r.status_code))
+
+# A zone holding tables cannot be retired out from under them.
+occupied_zone = db.execute(
+    select(Zone).where(Zone.id == zone_a.id)
+).scalars().first()
+client.post("/admin/tables/create", data={
+    "number": 9300, "zone_id": occupied_zone.id, "capacity": 2,
+})
+r = client.post(f"/admin/zones/{occupied_zone.id}/active", data={"active": 0})
+check(r.status_code == 400, "zone holding active tables cannot be retired",
+      str(r.status_code))
+check(fresh(Zone, id=occupied_zone.id).is_active, "that zone is still active")
+r = client.post(f"/admin/floors/{qa_floor.id}/active", data={"active": 0})
+check(r.status_code == 400, "floor holding active tables cannot be retired",
+      str(r.status_code))
+
+held = fresh(RestaurantTable, number=9300)
+db.delete(held)
+db.commit()
+
+# Renaming a zone must carry through to the label the ETL copies.
+r = client.post(f"/admin/zones/{zone_b.id}/edit", data={
+    "name": "QA Zone B2", "sort_order": 1,
+})
+db.expire_all()
+tagged = db.execute(
+    select(RestaurantTable).where(RestaurantTable.zone_id == zone_b.id)
+).scalars().all()
+check(r.status_code == 200 and fresh(Zone, id=zone_b.id).name == "QA Zone B2",
+      "zone renames")
+check(all(x.zone == "QA Zone B2" for x in tagged),
+      "rename updates every table's denormalized label",
+      str({x.zone for x in tagged}) or "no tables in zone")
+client.post(f"/admin/zones/{zone_b.id}/edit", data={"name": "QA Zone B", "sort_order": 1})
+
+r = client.post(f"/admin/zones/{zone_b.id}/edit", data={"name": "QA Zone A"})
+check(r.status_code == 400, "duplicate zone name on the same floor refused",
+      str(r.status_code))
+
+
 # ----------------------------------------------------------- batch create
 print("\n--- add several tables at once ---")
 before = db.execute(select(RestaurantTable)).scalars().all()
 highest = max(t.number for t in before)
+before_numbers = {t.number for t in before}
 
 r = client.post("/admin/tables/create-batch", data={
-    "count": 4, "capacity": 2, "zone": "Batch QA",
+    "count": 4, "capacity": 2, "zone_id": zone_a.id,
 })
+db.expire_all()
 batch = db.execute(
-    select(RestaurantTable).where(RestaurantTable.zone == "Batch QA")
+    select(RestaurantTable).where(RestaurantTable.zone_id == zone_a.id)
     .order_by(RestaurantTable.number)
 ).scalars().all()
+batch = [t for t in batch if t.number not in before_numbers]
 check(r.status_code == 200 and len(batch) == 4, "4 tables with 2 seats created",
       f"{len(batch)} made")
 check(all(t.capacity == 2 for t in batch), "every one has 2 seats",
@@ -229,19 +370,16 @@ check(all(t.is_active and t.status == "free" for t in batch),
       "all are active and free")
 
 # Grid cells must not collide, or the layout editor would stack them.
-cells = [(t.pos_x, t.pos_y) for t in batch]
+cells = [(x.pos_x, x.pos_y) for x in batch]
 check(len(set(cells)) == 4, "each lands on its own grid square", str(cells))
-occupied = {
-    (t.pos_x, t.pos_y)
-    for t in db.execute(
-        select(RestaurantTable).where(RestaurantTable.is_active.is_(True))
-    ).scalars().all()
-}
+
+# Squares are per floor, so identity is (floor, x, y).
 all_active = db.execute(
     select(RestaurantTable).where(RestaurantTable.is_active.is_(True))
 ).scalars().all()
+occupied = {(x.floor_id, x.pos_x, x.pos_y) for x in all_active}
 check(len(occupied) == len(all_active),
-      "no two active tables share a square after the batch",
+      "no two active tables share a square on the same floor",
       f"{len(occupied)} cells / {len(all_active)} tables")
 
 # The banner rides on the redirect's query string, so it is only on the
@@ -252,7 +390,7 @@ check(f"{highest + 1}–{highest + 4}" in r.text,
 
 for bad in ({"count": 0, "capacity": 2}, {"count": 51, "capacity": 2},
             {"count": 2, "capacity": 0}, {"count": 2, "capacity": 21}):
-    r = client.post("/admin/tables/create-batch", data=bad)
+    r = client.post("/admin/tables/create-batch", data={**bad, "zone_id": zone_a.id})
     check(r.status_code == 400, f"batch {bad} refused", str(r.status_code))
 after = db.execute(select(RestaurantTable)).scalars().all()
 check(len(after) == len(before) + 4, "refused batches created nothing",
@@ -262,11 +400,15 @@ check(len(after) == len(before) + 4, "refused batches created nothing",
 retired_no = batch[-1].number
 client.post(f"/admin/tables/{batch[-1].id}/active", data={"active": 0})
 r = client.post("/admin/tables/create-batch", data={
-    "count": 2, "capacity": 4, "zone": "Batch QA2",
+    "count": 2, "capacity": 4, "zone_id": zone_b.id,
 })
-reused = db.execute(
-    select(RestaurantTable).where(RestaurantTable.zone == "Batch QA2")
-).scalars().all()
+db.expire_all()
+reused = [
+    x for x in db.execute(
+        select(RestaurantTable).where(RestaurantTable.zone_id == zone_b.id)
+    ).scalars().all()
+    if x.number not in before_numbers and x.number not in {t.number for t in batch}
+]
 check(all(t.number != retired_no for t in reused),
       "a retired table's number is not reused",
       f"retired {retired_no}, made {[t.number for t in reused]}")
@@ -276,18 +418,26 @@ print("\n--- bulk table edits ---")
 # Three throwaway tables to batch against.
 bulk_ids = []
 for n in (9101, 9102, 9103):
-    client.post("/admin/tables/create", data={"number": n, "zone": "QA", "capacity": 2})
+    client.post("/admin/tables/create", data={
+        "number": n, "zone_id": zone_a.id, "capacity": 2,
+    })
     row = fresh(RestaurantTable, number=n)
     if row is not None:
         bulk_ids.append(row.id)
 check(len(bulk_ids) == 3, "three bulk fixtures created", f"{len(bulk_ids)}/3")
 
 r = client.post("/admin/tables/bulk", data={
-    "action": "zone", "table_ids": bulk_ids, "zone": "Terrace QA",
+    "action": "zone", "table_ids": bulk_ids, "zone_id": zone_b.id,
 })
-zones = [fresh(RestaurantTable, id=i).zone for i in bulk_ids]
-check(r.status_code == 200 and zones == ["Terrace QA"] * 3,
-      "bulk set zone applies to every selected table", str(set(zones)))
+moved = [fresh(RestaurantTable, id=i) for i in bulk_ids]
+check(r.status_code == 200 and all(x.zone_id == zone_b.id for x in moved),
+      "bulk move to zone applies to every selected table",
+      str({x.zone for x in moved}))
+check(all(x.zone == "QA Zone B" for x in moved),
+      "bulk move keeps the denormalized label in step")
+cells = [(x.pos_x, x.pos_y) for x in moved]
+check(len(set(cells)) == 3,
+      "tables moved in one batch do not stack on the same square", str(cells))
 
 r = client.post("/admin/tables/bulk", data={
     "action": "capacity", "table_ids": bulk_ids, "capacity": 6,
@@ -449,16 +599,50 @@ for model, where in targets:
         db.delete(row)
         removed += 1
 
-# The batch-created tables are found by zone, not by a known number.
+# Everything else the test made lives on the throwaway QA floor.
 db.expire_all()
+qa_zone_ids = [
+    z.id for z in db.execute(
+        select(Zone).where(Zone.floor_id == qa_floor.id)
+    ).scalars().all()
+]
 batched = db.execute(
-    select(RestaurantTable).where(RestaurantTable.zone.in_(("Batch QA", "Batch QA2")))
+    select(RestaurantTable).where(RestaurantTable.zone_id.in_(qa_zone_ids))
 ).scalars().all()
 for row in batched:
     db.delete(row)
 db.commit()
+db.commit()
+
+# Every zone and floor this run created — including the ordinal floors made by
+# the floors-batch test — goes away. Anything that existed beforehand stays.
+db.expire_all()
+for z in db.execute(select(Zone)).scalars().all():
+    if z.id not in PRE_ZONE_IDS:
+        db.delete(z)
+db.flush()
+for f in db.execute(select(Floor)).scalars().all():
+    if f.id not in PRE_FLOOR_IDS:
+        db.delete(f)
+db.commit()
+
+db.expire_all()
+floors_now = {f.id for f in db.execute(select(Floor)).scalars().all()}
+zones_now = {z.id for z in db.execute(select(Zone)).scalars().all()}
+
 check(removed == len(targets), "test fixtures removed", f"{removed}/{len(targets)}")
-check(len(batched) == 6, "batch fixtures removed", f"{len(batched)}/6")
+check(len(batched) >= 6, "tables on the QA floor removed", f"{len(batched)} rows")
+check(fresh(Floor, name=QA_FLOOR) is None, "QA floor and its zones removed")
+check(floors_now == PRE_FLOOR_IDS, "no floors left behind",
+      f"{len(floors_now)} now / {len(PRE_FLOOR_IDS)} before")
+check(zones_now == PRE_ZONE_IDS, "no zones left behind",
+      f"{len(zones_now)} now / {len(PRE_ZONE_IDS)} before")
+check(
+    not db.execute(
+        select(RestaurantTable).where(RestaurantTable.zone_id.is_(None))
+    ).scalars().all(),
+    "every surviving table still has a zone",
+)
 check(
     all(fresh(RestaurantTable, number=n) is None for n in (9101, 9102, 9103)),
     "no bulk fixtures left behind",

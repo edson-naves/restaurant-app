@@ -94,12 +94,60 @@ class Staff(Base):
     )
 
 
+class Floor(Base):
+    """A storey of the restaurant. Section 4.1.1's floor plan, one per level.
+
+    Grid coordinates are unique per floor, not globally: the second floor has
+    its own square (0,0).
+    """
+    __tablename__ = "floor"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(60), unique=True, nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    zones: Mapped[list["Zone"]] = relationship(
+        back_populates="floor", order_by="Zone.sort_order, Zone.name"
+    )
+
+
+class Zone(Base):
+    """A named area within one floor — Zone A, Patio, Bar.
+
+    Zones belong to a floor rather than being a global list, so each floor
+    carries its own set and count.
+    """
+    __tablename__ = "zone"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    floor_id: Mapped[int] = mapped_column(ForeignKey("floor.id"), nullable=False)
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    floor: Mapped["Floor"] = relationship(back_populates="zones", lazy="joined")
+
+    __table_args__ = (
+        UniqueConstraint("floor_id", "name", name="uq_zone_floor_name"),
+    )
+
+    @property
+    def label(self) -> str:
+        return f"{self.floor.name} · {self.name}"
+
+
 class RestaurantTable(Base):
     """Section 4.1.1 — the floor plan. 26-50 tables."""
     __tablename__ = "restaurant_table"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     number: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
+    zone_id: Mapped[int | None] = mapped_column(ForeignKey("zone.id"), nullable=True)
+    # Denormalized copy of zone_ref.name, kept in sync on every write. The ETL
+    # (etl.py) and the floor plan read this string directly, and DimTable
+    # stores it; carrying it here keeps a historical zone label resolvable even
+    # if the Zone row is later renamed. zone_id is the source of truth.
     zone: Mapped[str] = mapped_column(String(40), default="Main")
     capacity: Mapped[int] = mapped_column(Integer, default=4)
     status: Mapped[str] = mapped_column(String(20), default=TableStatus.FREE, nullable=False)
@@ -112,12 +160,22 @@ class RestaurantTable(Base):
     current_waiter_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
 
     current_waiter: Mapped["Staff | None"] = relationship("Staff", lazy="joined")
+    zone_ref: Mapped["Zone | None"] = relationship("Zone", lazy="joined")
 
     __table_args__ = (
         CheckConstraint(
             "status IN ('free','occupied','ready_to_pay')", name="ck_table_status"
         ),
     )
+
+    @property
+    def floor(self) -> "Floor | None":
+        return self.zone_ref.floor if self.zone_ref else None
+
+    @property
+    def floor_id(self) -> int | None:
+        """Which grid this table lives on. Coordinates are unique per floor."""
+        return self.zone_ref.floor_id if self.zone_ref else None
 
 
 class Channel(Base):
