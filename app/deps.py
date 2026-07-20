@@ -22,6 +22,24 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 templates.env.filters["money"] = money
 
+
+def asset_v(name: str = "app.css") -> str:
+    """Cache-busting stamp for a static file, from its modification time.
+
+    Browsers cache /static/app.css aggressively and will happily keep serving
+    a stale copy after an edit — the page then renders with half its rules
+    missing, which looks like a broken layout rather than a caching problem.
+    Appending the mtime changes the URL whenever the file changes, so a new
+    stylesheet is always fetched and an unchanged one stays cached.
+    """
+    try:
+        return str(int((WEB_DIR / "static" / name).stat().st_mtime))
+    except OSError:
+        return "0"
+
+
+templates.env.globals["asset_v"] = asset_v
+
 # Section 3 — access matrix.
 PERMISSIONS: dict[str, set[str]] = {
     "orders.view":     {Role.OWNER, Role.MANAGER, Role.WAITER, Role.KITCHEN, Role.DELIVERY_COORDINATOR},

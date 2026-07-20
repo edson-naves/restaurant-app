@@ -216,6 +216,21 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tr.dim > td { opacity: .5; }
 tr.dim:hover > td { opacity: 1; }
 
+.bulkbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 12px; padding: 10px 12px; border-radius: 10px;
+  background: var(--panel-2); border: 1px solid var(--line);
+}
+.bulkbar .count { color: var(--muted); font-size: 12px; margin-right: 4px; }
+.bulkbar .count b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.bulkbar .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
+.bulkbar input { width: auto; }
+
+.note {
+  background: rgba(47,158,94,.12); border: 1px solid rgba(47,158,94,.4);
+  color: #6ee7a0; padding: 12px 14px; border-radius: 10px;
+}
+
 /* Drag-to-arrange floor plan editor. */
 .plan {
   display: grid; grid-template-columns: repeat(var(--cols, 10), minmax(0, 1fr));

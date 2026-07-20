@@ -93,6 +93,8 @@ def admin_home():
 @router.get("/tables")
 def tables_page(
     request: Request,
+    done: int = 0,
+    skipped: str = "",
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
@@ -125,6 +127,7 @@ def tables_page(
         "cols": GRID_COLS, "rows": rows,
         "zones": zones, "waiters": waiters,
         "seats_total": sum(t.capacity for t in active),
+        "done": done, "skipped": [s for s in skipped.split(",") if s],
         "title": "Manage tables",
     })
 
@@ -234,6 +237,67 @@ def toggle_table(
     table.is_active = bool(active)
     db.commit()
     return RedirectResponse("/admin/tables", status_code=303)
+
+
+@router.post("/tables/bulk")
+def bulk_tables(
+    action: str = Form(...),
+    table_ids: list[int] = Form([]),
+    zone: str = Form(""),
+    capacity: int = Form(0),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Apply one change to many tables.
+
+    Partial application on purpose: a batch that touches one table in service
+    applies to the rest and reports what it skipped. The all-or-nothing
+    alternative would make a 30-table retire fail because a single table has a
+    live order, and the operator would have to hunt for it by hand.
+
+    Input errors (bad action, invalid capacity) still reject the whole batch —
+    those are wrong for every row, not just some.
+    """
+    if not table_ids:
+        raise HTTPException(400, "No tables selected.")
+    if action not in ("retire", "restore", "zone", "capacity"):
+        raise HTTPException(400, f"Unknown bulk action '{action}'.")
+    if action == "capacity" and not 1 <= capacity <= 20:
+        raise HTTPException(400, "Capacity must be between 1 and 20 seats.")
+    if action == "zone" and not zone.strip():
+        raise HTTPException(400, "Zone is required.")
+
+    tables = db.execute(
+        select(RestaurantTable).where(RestaurantTable.id.in_(table_ids))
+    ).scalars().all()
+
+    done = 0
+    skipped: list[str] = []
+    for table in tables:
+        if action == "retire":
+            # Same guard as the single-table route: a table with a live order
+            # or a seated party stays on the floor.
+            if not table.is_active:
+                continue                       # already retired, not a failure
+            if table.status != TableStatus.FREE or _live_order_for_table(db, table.id):
+                skipped.append(str(table.number))
+                continue
+            table.current_waiter_id = None
+            table.is_active = False
+        elif action == "restore":
+            if table.is_active:
+                continue
+            table.is_active = True
+        elif action == "zone":
+            table.zone = zone.strip()
+        elif action == "capacity":
+            table.capacity = capacity
+        done += 1
+
+    db.commit()
+    return RedirectResponse(
+        f"/admin/tables?done={done}&skipped={','.join(skipped)}", status_code=303
+    )
 
 
 @router.post("/tables/layout")

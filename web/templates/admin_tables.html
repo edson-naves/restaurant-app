@@ -78,10 +78,35 @@
     {% for t in tables %}
     <form method="post" action="/admin/tables/{{ t.id }}/edit" id="tf{{ t.id }}"></form>
     {% endfor %}
+
+    {% if done or skipped %}
+    <div class="{{ 'err' if skipped else 'note' }}" style="margin-top:12px">
+      {% if done %}{{ done }} table{{ '' if done == 1 else 's' }} updated.{% endif %}
+      {% if skipped %}
+        Skipped table{{ '' if skipped|length == 1 else 's' }}
+        {{ skipped|join(', ') }} — still in service.
+      {% endif %}
+    </div>
+    {% endif %}
+
+    <form method="post" action="/admin/tables/bulk" id="bulkform" class="bulkbar">
+      <span class="count"><b id="selCount">0</b> selected</span>
+      <button name="action" value="retire" class="btn sm danger bulk-act" disabled>Retire</button>
+      <button name="action" value="restore" class="btn sm good bulk-act" disabled>Restore</button>
+      <span class="sep"></span>
+      <input type="text" name="zone" list="zones" placeholder="Zone" style="width:130px">
+      <button name="action" value="zone" class="btn sm bulk-act" disabled>Set zone</button>
+      <input type="number" name="capacity" min="1" max="20" placeholder="Seats" style="width:90px">
+      <button name="action" value="capacity" class="btn sm bulk-act" disabled>Set seats</button>
+    </form>
+
     <div class="scroll" style="margin-top:12px">
       <table>
         <thead>
           <tr>
+            <th style="width:34px">
+              <input type="checkbox" id="selAll" title="Select all" style="width:auto;min-height:0">
+            </th>
             <th>#</th><th>Zone</th><th class="num">Seats</th>
             <th>Status</th><th>Waiter</th><th></th>
           </tr>
@@ -89,6 +114,10 @@
         <tbody>
         {% for t in tables %}
           <tr class="{{ '' if t.is_active else 'dim' }}">
+            <td>
+              <input form="bulkform" type="checkbox" class="sel" name="table_ids"
+                     value="{{ t.id }}" style="width:auto;min-height:0">
+            </td>
             <td><input form="tf{{ t.id }}" type="number" name="number" value="{{ t.number }}" min="1" style="width:80px"></td>
             <td><input form="tf{{ t.id }}" type="text" name="zone" list="zones" value="{{ t.zone }}" style="width:130px"></td>
             <td class="num"><input form="tf{{ t.id }}" type="number" name="capacity" value="{{ t.capacity }}" min="1" max="20" style="width:74px"></td>
@@ -119,7 +148,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="6" class="empty">No tables yet.</td></tr>
+          <tr><td colspan="7" class="empty">No tables yet.</td></tr>
         {% endfor %}
         </tbody>
       </table>
@@ -130,6 +159,31 @@
 
 {% block scripts %}
 <script>
+// Bulk selection. Buttons stay disabled until something is ticked, so a bulk
+// action can never fire against an empty selection.
+(function () {
+  const all = document.getElementById('selAll');
+  const boxes = Array.from(document.querySelectorAll('input.sel'));
+  const acts = Array.from(document.querySelectorAll('.bulk-act'));
+  const count = document.getElementById('selCount');
+  if (!boxes.length) return;
+
+  function sync() {
+    const n = boxes.filter(function (b) { return b.checked; }).length;
+    count.textContent = n;
+    acts.forEach(function (b) { b.disabled = (n === 0); });
+    all.checked = (n === boxes.length);
+    all.indeterminate = (n > 0 && n < boxes.length);
+  }
+
+  all.addEventListener('change', function () {
+    boxes.forEach(function (b) { b.checked = all.checked; });
+    sync();
+  });
+  boxes.forEach(function (b) { b.addEventListener('change', sync); });
+  sync();
+})();
+
 (function () {
   const plan = document.getElementById('plan');
   const field = document.getElementById('layoutField');

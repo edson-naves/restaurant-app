@@ -174,6 +174,70 @@ r = client.post(f"/admin/tables/{t.id}/active", data={"active": 1})
 r = client.get("/")
 check(f"Table {TEST_TABLE_NO}" in r.text, "restored table is back on the floor plan")
 
+# ------------------------------------------------------------ bulk operations
+print("\n--- bulk table edits ---")
+# Three throwaway tables to batch against.
+bulk_ids = []
+for n in (9101, 9102, 9103):
+    client.post("/admin/tables/create", data={"number": n, "zone": "QA", "capacity": 2})
+    row = fresh(RestaurantTable, number=n)
+    if row is not None:
+        bulk_ids.append(row.id)
+check(len(bulk_ids) == 3, "three bulk fixtures created", f"{len(bulk_ids)}/3")
+
+r = client.post("/admin/tables/bulk", data={
+    "action": "zone", "table_ids": bulk_ids, "zone": "Terrace QA",
+})
+zones = [fresh(RestaurantTable, id=i).zone for i in bulk_ids]
+check(r.status_code == 200 and zones == ["Terrace QA"] * 3,
+      "bulk set zone applies to every selected table", str(set(zones)))
+
+r = client.post("/admin/tables/bulk", data={
+    "action": "capacity", "table_ids": bulk_ids, "capacity": 6,
+})
+caps = [fresh(RestaurantTable, id=i).capacity for i in bulk_ids]
+check(caps == [6, 6, 6], "bulk set seats applies to every selected table", str(set(caps)))
+
+r = client.post("/admin/tables/bulk", data={
+    "action": "capacity", "table_ids": bulk_ids, "capacity": 99,
+})
+caps = [fresh(RestaurantTable, id=i).capacity for i in bulk_ids]
+check(r.status_code == 400, "bulk capacity 99 refused", str(r.status_code))
+check(caps == [6, 6, 6], "refused bulk wrote nothing (all-or-nothing on input errors)")
+
+r = client.post("/admin/tables/bulk", data={"action": "retire", "table_ids": []})
+check(r.status_code == 400, "bulk with nothing selected refused", str(r.status_code))
+r = client.post("/admin/tables/bulk", data={"action": "explode", "table_ids": bulk_ids})
+check(r.status_code == 400, "unknown bulk action refused", str(r.status_code))
+
+# Partial application: mix free tables with one that is mid-service. The free
+# ones must retire and the busy one must be reported, not silently dropped.
+if busy is not None:
+    mixed = bulk_ids + [busy.table_id]
+    r = client.post("/admin/tables/bulk", data={"action": "retire", "table_ids": mixed})
+    states = [fresh(RestaurantTable, id=i).is_active for i in bulk_ids]
+    busy_table = fresh(RestaurantTable, id=busy.table_id)
+    check(states == [False, False, False], "free tables in a mixed batch retire")
+    check(busy_table.is_active, "the in-service table in that batch is untouched")
+    check(str(busy_table.number) in str(r.url),
+          "skipped table is named back in the URL", str(r.url))
+    check("done=3" in str(r.url), "count of applied changes reported", str(r.url))
+    check("still in service" in r.text, "the page explains what was skipped")
+else:
+    r = client.post("/admin/tables/bulk", data={"action": "retire", "table_ids": bulk_ids})
+    check(all(not fresh(RestaurantTable, id=i).is_active for i in bulk_ids),
+          "bulk retire applies")
+    print("SKIP  no live order to test mixed-batch partial application")
+
+r = client.post("/admin/tables/bulk", data={"action": "restore", "table_ids": bulk_ids})
+check(all(fresh(RestaurantTable, id=i).is_active for i in bulk_ids), "bulk restore applies")
+check(all(fresh(RestaurantTable, id=i) is not None for i in bulk_ids),
+      "bulk retire never deleted a row")
+
+r = client.get("/admin/tables")
+check(r.status_code == 200 and 'name="table_ids"' in r.text,
+      "table list renders selection checkboxes")
+
 # -------------------------------------------------------------------- staff
 print("\n--- staff (section 3) ---")
 r = client.post("/admin/staff/create", data={
@@ -277,17 +341,22 @@ check(r.status_code == 400, "duplicate category name refused", str(r.status_code
 # ------------------------------------------------------------------- cleanup
 print("\n--- cleanup ---")
 removed = 0
-for model, where in (
+targets = [
     (RestaurantTable, {"number": TEST_TABLE_NO}),
     (Staff, {"name": TEST_STAFF}),
     (MenuItem, {"name": TEST_ITEM}),
-):
+] + [(RestaurantTable, {"number": n}) for n in (9101, 9102, 9103)]
+for model, where in targets:
     row = fresh(model, **where)
     if row is not None:
         db.delete(row)
         removed += 1
 db.commit()
-check(removed == 3, "test fixtures removed", f"{removed}/3")
+check(removed == len(targets), "test fixtures removed", f"{removed}/{len(targets)}")
+check(
+    all(fresh(RestaurantTable, number=n) is None for n in (9101, 9102, 9103)),
+    "no bulk fixtures left behind",
+)
 
 print("\nRESULT:", "admin module OK" if ok else "ADMIN FAILURES")
 sys.exit(0 if ok else 1)
