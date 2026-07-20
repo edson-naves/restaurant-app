@@ -73,6 +73,33 @@ def _cents(value: str, field: str = "Price") -> int:
     return -cents if negative else cents
 
 
+def _active_tables(db: Session) -> list[RestaurantTable]:
+    return db.execute(
+        select(RestaurantTable).where(RestaurantTable.is_active.is_(True))
+    ).scalars().all()
+
+
+def _free_cells(db: Session, count: int) -> list[tuple[int, int]]:
+    """Pick `count` unoccupied grid squares, scanning row-major.
+
+    A new table's position cannot be derived from how many tables exist: the
+    seeded floor is laid out 8 to a row while the editor grid is GRID_COLS
+    wide, so counting drops the new table straight onto an occupied square.
+    Retired tables are ignored — they are off the floor and their stale
+    coordinates should not reserve space.
+    """
+    taken = {(t.pos_x, t.pos_y) for t in _active_tables(db)}
+    cells: list[tuple[int, int]] = []
+    i = 0
+    while len(cells) < count:
+        cell = (i % GRID_COLS, i // GRID_COLS)
+        if cell not in taken:
+            taken.add(cell)
+            cells.append(cell)
+        i += 1
+    return cells
+
+
 def _live_order_for_table(db: Session, table_id: int) -> Order | None:
     return db.execute(
         select(Order).where(
@@ -94,6 +121,7 @@ def admin_home():
 def tables_page(
     request: Request,
     done: int = 0,
+    created: str = "",
     skipped: str = "",
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
@@ -127,7 +155,8 @@ def tables_page(
         "cols": GRID_COLS, "rows": rows,
         "zones": zones, "waiters": waiters,
         "seats_total": sum(t.capacity for t in active),
-        "done": done, "skipped": [s for s in skipped.split(",") if s],
+        "done": done, "created": created,
+        "skipped": [s for s in skipped.split(",") if s],
         "title": "Manage tables",
     })
 
@@ -156,17 +185,59 @@ def create_table(
             + ("" if clash.is_active else " (retired — reactivate it instead).")
         )
 
-    used = db.execute(
-        select(func.count()).select_from(RestaurantTable)
-        .where(RestaurantTable.is_active.is_(True))
-    ).scalar_one()
+    (pos_x, pos_y), = _free_cells(db, 1)
     db.add(RestaurantTable(
         number=number, zone=zone.strip() or "Main", capacity=capacity,
-        status=TableStatus.FREE, is_active=True,
-        pos_x=used % GRID_COLS, pos_y=used // GRID_COLS,
+        status=TableStatus.FREE, is_active=True, pos_x=pos_x, pos_y=pos_y,
     ))
     db.commit()
     return RedirectResponse("/admin/tables", status_code=303)
+
+
+@router.post("/tables/create-batch")
+def create_tables_batch(
+    count: int = Form(...),
+    capacity: int = Form(4),
+    zone: str = Form("Main"),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Add several identical tables at once — "4 tables with 2 seats".
+
+    Numbers continue from the highest already in use and skip anything taken.
+    Retired tables still hold their number (it is UNIQUE and their history
+    points at it), so the gap they leave is deliberately not reused: a number
+    reappearing on a different table would make two eras of service look like
+    one table in any report read by number.
+    """
+    if not 1 <= count <= 50:
+        raise HTTPException(400, "Choose between 1 and 50 tables to add.")
+    if not 1 <= capacity <= 20:
+        raise HTTPException(400, "Capacity must be between 1 and 20 seats.")
+    zone = zone.strip() or "Main"
+
+    taken_numbers = {
+        t.number for t in db.execute(select(RestaurantTable)).scalars().all()
+    }
+    cells = _free_cells(db, count)
+
+    number = max(taken_numbers, default=0)
+    made: list[int] = []
+    for (pos_x, pos_y) in cells:
+        number += 1
+        while number in taken_numbers:
+            number += 1
+        db.add(RestaurantTable(
+            number=number, zone=zone, capacity=capacity,
+            status=TableStatus.FREE, is_active=True, pos_x=pos_x, pos_y=pos_y,
+        ))
+        made.append(number)
+
+    db.commit()
+    span = f"{made[0]}" if len(made) == 1 else f"{made[0]}–{made[-1]}"
+    return RedirectResponse(
+        f"/admin/tables?done={len(made)}&created={span}", status_code=303
+    )
 
 
 @router.post("/tables/{table_id}/edit")
@@ -315,7 +386,16 @@ def save_layout(
     tables = {
         t.id: t for t in db.execute(select(RestaurantTable)).scalars().all()
     }
-    seen: set[tuple[int, int]] = set()
+    moving = {
+        int(c.split(":")[0]) for c in layout.split(",")
+        if c.strip() and c.split(":")[0].strip().lstrip("-").isdigit()
+    }
+    # Squares held by active tables the payload does not mention. The drag
+    # editor always submits every chip, so this is normally empty — but a
+    # partial payload must not be able to park one table on top of another.
+    seen: set[tuple[int, int]] = {
+        (t.pos_x, t.pos_y) for t in _active_tables(db) if t.id not in moving
+    }
     for chunk in layout.split(","):
         if not chunk.strip():
             continue

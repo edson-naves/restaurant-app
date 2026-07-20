@@ -126,10 +126,31 @@ t = fresh(RestaurantTable, number=TEST_TABLE_NO)
 check(t.zone == "Patio QA" and t.capacity == 6, "edit zone and capacity",
       f"{t.zone} / {t.capacity}")
 
-# Layout: move the test table, confirm it persists and collisions are refused.
-r = client.post("/admin/tables/layout", data={"layout": f"{t.id}:3:4"})
+# A new table must never be dropped onto an occupied square. Positions cannot
+# be derived from the table count: the seeded floor is 8 wide, the editor grid
+# is 10, so counting would collide.
+def occupied_cells(exclude_id=None):
+    db.expire_all()
+    return {
+        (x.pos_x, x.pos_y)
+        for x in db.execute(
+            select(RestaurantTable).where(RestaurantTable.is_active.is_(True))
+        ).scalars().all()
+        if x.id != exclude_id
+    }
+
+
+check((t.pos_x, t.pos_y) not in occupied_cells(exclude_id=t.id),
+      "a newly created table lands on a free square", f"({t.pos_x},{t.pos_y})")
+
+# Layout: move the test table to a square nothing else holds.
+busy_cells = occupied_cells(exclude_id=t.id)
+free_cell = next(
+    (cx, cy) for cy in range(20) for cx in range(10) if (cx, cy) not in busy_cells
+)
+r = client.post("/admin/tables/layout", data={"layout": f"{t.id}:{free_cell[0]}:{free_cell[1]}"})
 t = fresh(RestaurantTable, number=TEST_TABLE_NO)
-check(r.status_code == 200 and (t.pos_x, t.pos_y) == (3, 4),
+check(r.status_code == 200 and (t.pos_x, t.pos_y) == free_cell,
       "layout saves grid position", f"({t.pos_x},{t.pos_y})")
 
 other = db.execute(
@@ -138,7 +159,18 @@ other = db.execute(
 r = client.post("/admin/tables/layout", data={"layout": f"{t.id}:1:1,{other.id}:1:1"})
 check(r.status_code == 400, "two tables on one square refused", str(r.status_code))
 t = fresh(RestaurantTable, number=TEST_TABLE_NO)
-check((t.pos_x, t.pos_y) == (3, 4), "refused layout left positions untouched")
+check((t.pos_x, t.pos_y) == free_cell, "refused layout left positions untouched")
+
+# The payload need not mention every table, so a partial one must not be able
+# to park a table on a square someone else already holds.
+squatted = next(iter(occupied_cells(exclude_id=t.id)))
+r = client.post("/admin/tables/layout", data={
+    "layout": f"{t.id}:{squatted[0]}:{squatted[1]}"
+})
+check(r.status_code == 400, "cannot move onto a table absent from the payload",
+      str(r.status_code))
+t = fresh(RestaurantTable, number=TEST_TABLE_NO)
+check((t.pos_x, t.pos_y) == free_cell, "that refusal left the position untouched")
 
 r = client.post("/admin/tables/layout", data={"layout": f"{t.id}:99:0"})
 check(r.status_code == 400, "off-grid column refused", str(r.status_code))
@@ -173,6 +205,71 @@ check(f"Table {TEST_TABLE_NO}" not in r.text, "retired table is off the floor pl
 r = client.post(f"/admin/tables/{t.id}/active", data={"active": 1})
 r = client.get("/")
 check(f"Table {TEST_TABLE_NO}" in r.text, "restored table is back on the floor plan")
+
+# ----------------------------------------------------------- batch create
+print("\n--- add several tables at once ---")
+before = db.execute(select(RestaurantTable)).scalars().all()
+highest = max(t.number for t in before)
+
+r = client.post("/admin/tables/create-batch", data={
+    "count": 4, "capacity": 2, "zone": "Batch QA",
+})
+batch = db.execute(
+    select(RestaurantTable).where(RestaurantTable.zone == "Batch QA")
+    .order_by(RestaurantTable.number)
+).scalars().all()
+check(r.status_code == 200 and len(batch) == 4, "4 tables with 2 seats created",
+      f"{len(batch)} made")
+check(all(t.capacity == 2 for t in batch), "every one has 2 seats",
+      str({t.capacity for t in batch}))
+check([t.number for t in batch] == [highest + i for i in range(1, 5)],
+      "numbering continues from the highest in use",
+      str([t.number for t in batch]))
+check(all(t.is_active and t.status == "free" for t in batch),
+      "all are active and free")
+
+# Grid cells must not collide, or the layout editor would stack them.
+cells = [(t.pos_x, t.pos_y) for t in batch]
+check(len(set(cells)) == 4, "each lands on its own grid square", str(cells))
+occupied = {
+    (t.pos_x, t.pos_y)
+    for t in db.execute(
+        select(RestaurantTable).where(RestaurantTable.is_active.is_(True))
+    ).scalars().all()
+}
+all_active = db.execute(
+    select(RestaurantTable).where(RestaurantTable.is_active.is_(True))
+).scalars().all()
+check(len(occupied) == len(all_active),
+      "no two active tables share a square after the batch",
+      f"{len(occupied)} cells / {len(all_active)} tables")
+
+# The banner rides on the redirect's query string, so it is only on the
+# response to the POST — a fresh GET of /admin/tables carries no params.
+check(f"{highest + 1}–{highest + 4}" in r.text,
+      "the page reports which numbers it created",
+      f"expected {highest + 1}-{highest + 4}")
+
+for bad in ({"count": 0, "capacity": 2}, {"count": 51, "capacity": 2},
+            {"count": 2, "capacity": 0}, {"count": 2, "capacity": 21}):
+    r = client.post("/admin/tables/create-batch", data=bad)
+    check(r.status_code == 400, f"batch {bad} refused", str(r.status_code))
+after = db.execute(select(RestaurantTable)).scalars().all()
+check(len(after) == len(before) + 4, "refused batches created nothing",
+      f"{len(after)} total")
+
+# A retired table still owns its number; the batch must not hand it out again.
+retired_no = batch[-1].number
+client.post(f"/admin/tables/{batch[-1].id}/active", data={"active": 0})
+r = client.post("/admin/tables/create-batch", data={
+    "count": 2, "capacity": 4, "zone": "Batch QA2",
+})
+reused = db.execute(
+    select(RestaurantTable).where(RestaurantTable.zone == "Batch QA2")
+).scalars().all()
+check(all(t.number != retired_no for t in reused),
+      "a retired table's number is not reused",
+      f"retired {retired_no}, made {[t.number for t in reused]}")
 
 # ------------------------------------------------------------ bulk operations
 print("\n--- bulk table edits ---")
@@ -351,8 +448,17 @@ for model, where in targets:
     if row is not None:
         db.delete(row)
         removed += 1
+
+# The batch-created tables are found by zone, not by a known number.
+db.expire_all()
+batched = db.execute(
+    select(RestaurantTable).where(RestaurantTable.zone.in_(("Batch QA", "Batch QA2")))
+).scalars().all()
+for row in batched:
+    db.delete(row)
 db.commit()
 check(removed == len(targets), "test fixtures removed", f"{removed}/{len(targets)}")
+check(len(batched) == 6, "batch fixtures removed", f"{len(batched)}/6")
 check(
     all(fresh(RestaurantTable, number=n) is None for n in (9101, 9102, 9103)),
     "no bulk fixtures left behind",
