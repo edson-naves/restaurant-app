@@ -203,7 +203,15 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .receipt .b { font-weight: 700; }
 
 /* ---------- admin / setup ---------- */
-.subtabs { display: flex; gap: 6px; margin-bottom: 18px; flex-wrap: wrap; }
+/* Sticky: the tables page is long, and the sub-nav is most wanted precisely
+   when you are deep in it editing zones. */
+.subtabs {
+  display: flex; gap: 6px; margin-bottom: 18px; flex-wrap: wrap;
+  position: sticky; top: 0; z-index: 5;
+  padding: 10px 0; background: var(--bg);
+}
+/* The floor picker inside a card is not the page nav — keep it in place. */
+.card .subtabs { position: static; padding: 0; background: none; }
 .subtabs a {
   padding: 7px 14px; border-radius: 999px; font-size: 13px; font-weight: 600;
   color: var(--muted); border: 1px solid var(--line);
