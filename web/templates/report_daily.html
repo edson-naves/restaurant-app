@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>Daily sales summary</h1>
+    <p class="sub">{{ day.strftime('%A %d %B %Y') }} · <span class="spec">req 4.3.1</span></p>
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <a class="btn" href="/reports/daily?day={{ prev }}">← {{ prev }}</a>
+    <form method="get" action="/reports/daily"><input type="date" name="day" value="{{ day }}" onchange="this.form.submit()" min="{{ lo }}" max="{{ hi }}"></form>
+    <a class="btn" href="/reports/daily?day={{ next }}">{{ next }} →</a>
+  </div>
+</div>
+
+<div class="kpis">
+  <div class="kpi"><div class="k">Total revenue</div><div class="v">${{ s.revenue_cents|money }}</div><div class="d">incl. ${{ s.tips_cents|money }} tips</div></div>
+  <div class="kpi"><div class="k">Orders</div><div class="v">{{ s.orders }}</div><div class="d">{{ s.dine_in_orders }} dine-in · {{ s.delivery_orders }} delivery</div></div>
+  <div class="kpi"><div class="k">Average ticket</div><div class="v">${{ s.avg_ticket_cents|money }}</div><div class="d">{{ s.guests }} guests served</div></div>
+  <div class="kpi"><div class="k">Discounts</div><div class="v">${{ s.discounts_cents|money }}</div><div class="d">manager approved</div></div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <h2>Dine-in vs delivery</h2>
+    <table>
+      <thead><tr><th>Channel</th><th class="num">Orders</th><th class="num">Revenue</th></tr></thead>
+      <tr><td>Dine-in</td><td class="num">{{ s.dine_in_orders }}</td><td class="num">${{ s.dine_in_revenue_cents|money }}</td></tr>
+      <tr><td>Delivery</td><td class="num">{{ s.delivery_orders }}</td><td class="num">${{ s.delivery_revenue_cents|money }}</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h2>At a glance</h2>
+    <div class="bal-row"><span class="lbl">Revenue</span><span>${{ s.revenue_cents|money }}</span></div>
+    <div class="bal-row"><span class="lbl">Tips</span><span>${{ s.tips_cents|money }}</span></div>
+    <div class="bal-row"><span class="lbl">Discounts</span><span>-${{ s.discounts_cents|money }}</span></div>
+    <div class="bal-row"><span class="lbl">Guests</span><span>{{ s.guests }}</span></div>
+    <div class="bal-row big"><span>Avg per guest</span><span>${{ ((s.revenue_cents // s.guests) if s.guests else 0)|money }}</span></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Peak hours — orders by hour</h2>
+  {% if not s.by_hour %}
+    <p class="empty">No orders on this day.</p>
+  {% else %}
+  <div class="hours">
+    {% for h in s.by_hour %}
+    <div class="h {{ 'peak' if h.orders == peak else '' }}" title="{{ h.orders }} orders · ${{ h.revenue_cents|money }}">
+      <b>{{ h.orders }}</b>
+      <i style="height:{{ (h.orders * 100 // peak) if peak else 0 }}%"></i>
+      <span>{{ '%02d'|format(h.hour) }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

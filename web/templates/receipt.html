@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>Receipt</h1>
+    <p class="sub">{{ receipt.kind }} receipt · <span class="spec">req 4.2.7</span></p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a class="btn" href="/orders/{{ receipt.order_id }}/pay">← Payment</a>
+    <button class="btn primary" onclick="window.print()">Print</button>
+  </div>
+</div>
+
+<div class="receipt">
+  <div class="c b">THE RESTAURANT</div>
+  <div class="c" style="font-size:11px">Sit-down &amp; Delivery</div>
+  <hr>
+  <div class="l"><span>Order</span><span>{{ data.order_code }}</span></div>
+  {% if data.seat %}<div class="l"><span>Seat</span><span>{{ data.seat }}</span></div>{% endif %}
+  <div class="l"><span>Served by</span><span>{{ data.served_by }}</span></div>
+  <div class="l"><span>Date</span><span>{{ data.issued_at.replace('T', ' ') }}</span></div>
+  {% if data.partial_close %}
+  <hr>
+  <div class="c b">PARTIAL CLOSE — GUEST DEPARTED EARLY</div>
+  {% endif %}
+  <hr>
+  {% for l in data.lines %}
+  <div class="l">
+    <span>{{ l.qty }}× {{ l.item }}{% if l.shared %} (shared){% endif %}</span>
+    <span>{{ l.amount }}</span>
+  </div>
+  {% endfor %}
+  <hr>
+  <div class="l"><span>Subtotal</span><span>{{ data.subtotal }}</span></div>
+  <div class="l"><span>Discount</span><span>-{{ data.discount }}</span></div>
+  <div class="l"><span>Tip</span><span>{{ data.tip }}</span></div>
+  <div class="l b" style="font-size:15px"><span>TOTAL</span><span>{{ data.total }}</span></div>
+  <hr>
+  <div class="l">
+    <span>Paid by</span>
+    <span>{{ data.instrument }}{% if data.card_last4 %} ••{{ data.card_last4 }}{% endif %}</span>
+  </div>
+  <hr>
+  <div class="c">Thank you!</div>
+</div>
+{% endblock %}

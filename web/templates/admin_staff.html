@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block body %}
+{% include "admin_nav.html" %}
+
+<div class="between">
+  <div>
+    <h1>Staff</h1>
+    <p class="sub">
+      {{ people|length }} active{% if retired %} · {{ retired|length }} inactive{% endif %}
+      · <span class="spec">req 3</span>
+    </p>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <strong>Add staff</strong>
+    <form method="post" action="/admin/staff/create" style="margin-top:12px">
+      <div class="field">
+        <label>Name</label>
+        <input type="text" name="name" required>
+      </div>
+      <div class="field">
+        <label>Role</label>
+        <select name="role">
+          {% for r in roles %}
+          <option value="{{ r }}" {{ 'selected' if r == 'waiter' else '' }}>{{ r.replace('_',' ') }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>PIN (4–8 digits)</label>
+        <input type="text" name="pin_code" inputmode="numeric" pattern="[0-9]{4,8}" required>
+      </div>
+      <button class="btn primary" style="width:100%">Add</button>
+    </form>
+    <p class="sub" style="margin:12px 0 0">
+      Role decides what the person can reach — the access matrix lives in
+      <code>app/deps.py</code>.
+    </p>
+  </div>
+
+  <div class="card" style="flex:3">
+    <strong>Team</strong>
+    {% for p in people + retired %}
+    <form method="post" action="/admin/staff/{{ p.id }}/edit" id="sf{{ p.id }}"></form>
+    {% endfor %}
+    <div class="scroll" style="margin-top:12px">
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th><th>Role</th><th>New PIN</th>
+            <th class="num">Open orders</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for p in people + retired %}
+          <tr class="{{ '' if p.is_active else 'dim' }}">
+            <td>
+              <input form="sf{{ p.id }}" type="text" name="name" value="{{ p.name }}" style="width:170px">
+              {% if not p.is_active %}<span class="pill open">inactive</span>{% endif %}
+            </td>
+            <td>
+              <select form="sf{{ p.id }}" name="role" style="width:170px">
+                {% for r in roles %}
+                <option value="{{ r }}" {{ 'selected' if r == p.role else '' }}>{{ r.replace('_',' ') }}</option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>
+              <input form="sf{{ p.id }}" type="text" name="pin_code" placeholder="unchanged"
+                     inputmode="numeric" pattern="[0-9]{4,8}" style="width:110px">
+            </td>
+            <td class="num">{{ open_counts.get(p.id, 0) or '—' }}</td>
+            <td style="white-space:nowrap">
+              <button form="sf{{ p.id }}" class="btn sm">Save</button>
+              {% if p.is_active %}
+                <form method="post" action="/admin/staff/{{ p.id }}/active" style="display:inline">
+                  <input type="hidden" name="active" value="0">
+                  <button class="btn sm danger" {{ 'disabled' if open_counts.get(p.id, 0) else '' }}
+                          title="{{ 'Reassign their open orders first' if open_counts.get(p.id, 0) else 'Revoke access, keep their sales history' }}">
+                    Deactivate
+                  </button>
+                </form>
+              {% else %}
+                <form method="post" action="/admin/staff/{{ p.id }}/active" style="display:inline">
+                  <input type="hidden" name="active" value="1">
+                  <button class="btn sm good">Reactivate</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="5" class="empty">No staff yet.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="sub" style="margin:12px 0 0">
+      Staff are never deleted — past orders, payments and the staff report all
+      reference them. Deactivating removes them from the floor and the acting-as
+      switcher.
+    </p>
+  </div>
+</div>
+{% endblock %}

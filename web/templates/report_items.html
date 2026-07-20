@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Best selling items</h1>
+<p class="sub">Ranked by volume, filterable by date, category and channel · <span class="spec">req 4.3.2</span></p>
+
+<form class="card filters" method="get" action="/reports/best-sellers">
+  <div class="field"><label>From</label><input type="date" name="start" value="{{ start }}"></div>
+  <div class="field"><label>To</label><input type="date" name="end" value="{{ end }}"></div>
+  <div class="field">
+    <label>Category</label>
+    <select name="category">
+      <option value="">All categories</option>
+      {% for c in categories %}<option value="{{ c.name }}" {{ 'selected' if c.name == category else '' }}>{{ c.name }}</option>{% endfor %}
+    </select>
+  </div>
+  <div class="field">
+    <label>Channel</label>
+    <select name="channel">
+      <option value="">All channels</option>
+      <option value="dine_in" {{ 'selected' if channel == 'dine_in' else '' }}>Dine-in</option>
+      <option value="delivery" {{ 'selected' if channel == 'delivery' else '' }}>Delivery</option>
+    </select>
+  </div>
+  <button class="btn primary">Apply</button>
+</form>
+
+<div class="card">
+  {% if not rows %}
+    <p class="empty">No sales match these filters.</p>
+  {% else %}
+  <div class="scroll">
+  <table>
+    <thead>
+      <tr><th>#</th><th>Item</th><th>Category</th><th style="width:26%">Volume</th><th class="num">Sold</th><th class="num">Revenue</th></tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+    <tr>
+      <td class="sub">{{ loop.index }}</td>
+      <td><b>{{ r.item_name }}</b></td>
+      <td class="sub">{{ r.category }}</td>
+      <td><div class="bar g"><i style="width:{{ (r.quantity * 100 // top) if top else 0 }}%"></i></div></td>
+      <td class="num">{{ r.quantity }}</td>
+      <td class="num">${{ r.revenue_cents|money }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

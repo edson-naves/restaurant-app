@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+{% block body %}
+{% include "admin_nav.html" %}
+
+<div class="between">
+  <div>
+    <h1>Menu</h1>
+    <p class="sub">
+      {{ categories|length }} categories · {{ active_count }} items on sale
+      · <span class="spec">req 4.1.2</span>
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <strong>Categories</strong>
+  {# Forms live outside the table: a <form> inside <tr> is invalid and the
+     parser hoists it out, orphaning the inputs. Rows bind via form="". #}
+  {% for c in categories %}
+  <form method="post" action="/admin/menu/categories/{{ c.id }}/edit" id="cf{{ c.id }}"></form>
+  {% endfor %}
+  <form method="post" action="/admin/menu/categories/create" id="newcat"></form>
+  <div class="scroll" style="margin-top:12px">
+    <table>
+      <thead><tr><th>Name</th><th class="num">Sort</th><th class="num">Items</th><th></th></tr></thead>
+      <tbody>
+      {% for c in categories %}
+        <tr>
+          <td><input form="cf{{ c.id }}" type="text" name="name" value="{{ c.name }}" style="width:220px"></td>
+          <td class="num"><input form="cf{{ c.id }}" type="number" name="sort_order" value="{{ c.sort_order }}" style="width:80px"></td>
+          <td class="num">{{ by_cat.get(c.id, [])|length }}</td>
+          <td><button form="cf{{ c.id }}" class="btn sm">Save</button></td>
+        </tr>
+      {% endfor %}
+        <tr>
+          <td><input form="newcat" type="text" name="name" placeholder="New category" style="width:220px" required></td>
+          <td class="num"><input form="newcat" type="number" name="sort_order" value="{{ categories|length }}" style="width:80px"></td>
+          <td class="num">—</td>
+          <td><button form="newcat" class="btn sm primary">Add</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{% for c in categories %}
+<div class="card">
+  <div class="between">
+    <strong>{{ c.name }}</strong>
+    <span class="meta">{{ by_cat.get(c.id, [])|length }} items</span>
+  </div>
+
+  {% for i in by_cat.get(c.id, []) %}
+  <form method="post" action="/admin/menu/items/{{ i.id }}/edit" id="if{{ i.id }}"></form>
+  {% endfor %}
+
+  <div class="scroll" style="margin-top:12px">
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th><th>Description</th><th class="num">Price</th>
+          <th>Category</th><th>Shareable</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for i in by_cat.get(c.id, []) %}
+        <tr class="{{ '' if i.is_active else 'dim' }}">
+          <td>
+            <input form="if{{ i.id }}" type="text" name="name" value="{{ i.name }}" style="width:180px">
+            {% if not i.is_active %}<span class="pill open">off menu</span>{% endif %}
+          </td>
+          <td><input form="if{{ i.id }}" type="text" name="description" value="{{ i.description }}" style="width:240px"></td>
+          <td class="num">
+            <input form="if{{ i.id }}" type="text" name="price" value="{{ i.price_cents|money }}"
+                   inputmode="decimal" style="width:92px;text-align:right">
+          </td>
+          <td>
+            <select form="if{{ i.id }}" name="category_id" style="width:150px">
+              {% for cat in categories %}
+              <option value="{{ cat.id }}" {{ 'selected' if cat.id == i.category_id else '' }}>{{ cat.name }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td>
+            {# No paired hidden field: duplicate keys make Starlette's form
+               .get() return the first one, which would pin this to 0 forever.
+               An unchecked box simply omits the key and the route defaults. #}
+            <input form="if{{ i.id }}" type="checkbox" name="is_shareable" value="1"
+                   {{ 'checked' if i.is_shareable else '' }} style="width:auto;min-height:0"
+                   title="Can be split proportionally across seats (4.2.4)">
+          </td>
+          <td style="white-space:nowrap">
+            <button form="if{{ i.id }}" class="btn sm">Save</button>
+            {% if i.is_active %}
+              <form method="post" action="/admin/menu/items/{{ i.id }}/active" style="display:inline">
+                <input type="hidden" name="active" value="0">
+                <button class="btn sm danger" title="Remove from the order screen, keep history">Take off</button>
+              </form>
+            {% else %}
+              <form method="post" action="/admin/menu/items/{{ i.id }}/active" style="display:inline">
+                <input type="hidden" name="active" value="1">
+                <button class="btn sm good">Put back</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="empty">Nothing in this category yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <form method="post" action="/admin/menu/items/create" class="filters" style="margin-top:14px">
+    <input type="hidden" name="category_id" value="{{ c.id }}">
+    <div class="field"><label>New item</label><input type="text" name="name" required></div>
+    <div class="field"><label>Description</label><input type="text" name="description"></div>
+    <div class="field" style="max-width:120px"><label>Price</label>
+      <input type="text" name="price" value="0.00" inputmode="decimal" required>
+    </div>
+    <div class="field" style="max-width:110px">
+      <label>Shareable</label>
+      <input type="checkbox" name="is_shareable" value="1" style="width:auto;min-height:0">
+    </div>
+    <button class="btn primary">Add to {{ c.name }}</button>
+  </form>
+</div>
+{% endfor %}
+
+<div class="card">
+  <strong>Modifiers</strong>
+  <p class="sub" style="margin:2px 0 0">
+    Price deltas applied per order line. Editing one never changes an order
+    already taken — each line stores the delta it was rung up with.
+  </p>
+  {% for m in modifiers %}
+  <form method="post" action="/admin/menu/modifiers/{{ m.id }}/edit" id="mf{{ m.id }}"></form>
+  {% endfor %}
+  <form method="post" action="/admin/menu/modifiers/create" id="newmod"></form>
+  <div class="scroll" style="margin-top:12px">
+    <table>
+      <thead><tr><th>Name</th><th class="num">Price delta</th><th>Limited to</th><th></th></tr></thead>
+      <tbody>
+      {% for m in modifiers %}
+        <tr>
+          <td><input form="mf{{ m.id }}" type="text" name="name" value="{{ m.name }}" style="width:200px"></td>
+          <td class="num">
+            <input form="mf{{ m.id }}" type="text" name="price_delta" value="{{ m.price_delta_cents|money }}"
+                   inputmode="decimal" style="width:92px;text-align:right">
+          </td>
+          <td>
+            <select form="mf{{ m.id }}" name="category_id" style="width:160px">
+              <option value="0">Any category</option>
+              {% for cat in categories %}
+              <option value="{{ cat.id }}" {{ 'selected' if cat.id == m.category_id else '' }}>{{ cat.name }}</option>
+              {% endfor %}
+            </select>
+          </td>
+          <td><button form="mf{{ m.id }}" class="btn sm">Save</button></td>
+        </tr>
+      {% endfor %}
+        <tr>
+          <td><input form="newmod" type="text" name="name" placeholder="New modifier" style="width:200px" required></td>
+          <td class="num"><input form="newmod" type="text" name="price_delta" value="0.00" inputmode="decimal" style="width:92px;text-align:right"></td>
+          <td>
+            <select form="newmod" name="category_id" style="width:160px">
+              <option value="0">Any category</option>
+              {% for cat in categories %}<option value="{{ cat.id }}">{{ cat.name }}</option>{% endfor %}
+            </select>
+          </td>
+          <td><button form="newmod" class="btn sm primary">Add</button></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

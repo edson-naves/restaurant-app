@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>Floor plan</h1>
+    <p class="sub">{{ cards|length }} tables · <span class="spec">req 4.1.1</span></p>
+  </div>
+  <div class="legend">
+    <span><i class="dot free"></i>Free {{ counts.free }}</span>
+    <span><i class="dot occupied"></i>Occupied {{ counts.occupied }}</span>
+    <span><i class="dot ready_to_pay"></i>Ready to pay {{ counts.ready }}</span>
+    {% if delivery_pending %}<span>· <a href="/delivery">{{ delivery_pending }} delivery in queue</a></span>{% endif %}
+  </div>
+</div>
+
+<div class="floor">
+  {% for c in cards %}
+    {% if c.order %}
+      <a class="tbl {{ c.table.status }}" href="/orders/{{ c.order.id }}">
+        <span class="n">Table {{ c.table.number }}</span>
+        <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes }}m</span>
+        <span class="meta">{{ c.waiter or '—' }}</span>
+        <span class="pill {{ c.table.status }}">{{ c.table.status.replace('_',' ') }}</span>
+        <span class="tot">${{ c.total_cents|money }}</span>
+      </a>
+    {% else %}
+      <details class="tbl {{ c.table.status }}">
+        <summary style="cursor:pointer;list-style:none">
+          <span class="n">Table {{ c.table.number }}</span><br>
+          <span class="meta">{{ c.table.zone }} · seats {{ c.table.capacity }}</span><br>
+          <span class="pill free">free</span>
+        </summary>
+        {% if can('orders.manage') %}
+        <form method="post" action="/tables/{{ c.table.id }}/open" style="margin-top:10px">
+          <div class="field">
+            <label>Guests</label>
+            <input type="number" name="guests" value="2" min="1" max="{{ c.table.capacity * 2 }}">
+          </div>
+          <div class="field">
+            <label>Waiter</label>
+            <select name="waiter_id">
+              {% for s in all_staff if s.role == 'waiter' %}
+              <option value="{{ s.id }}" {{ 'selected' if s.id == staff.id else '' }}>{{ s.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <button class="btn primary sm" style="width:100%">Seat guests</button>
+        </form>
+        {% else %}
+          <p class="meta" style="margin-top:8px">No permission to open tables.</p>
+        {% endif %}
+      </details>
+    {% endif %}
+  {% endfor %}
+</div>
+{% endblock %}

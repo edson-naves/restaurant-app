@@ -1,0 +1,203 @@
+{% extends "base.html" %}
+{% block body %}
+{% include "admin_nav.html" %}
+
+<div class="between">
+  <div>
+    <h1>Tables</h1>
+    <p class="sub">
+      {{ active_tables|length }} active · {{ seats_total }} seats
+      {% if retired %} · {{ retired|length }} retired{% endif %}
+      · <span class="spec">req 4.1.1</span>
+    </p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="between" style="margin-bottom:12px">
+    <div>
+      <strong>Floor layout</strong>
+      <p class="sub" style="margin:2px 0 0">
+        Drag a table onto any square to move it. Drop it on an occupied square to
+        swap the two. Nothing is saved until you press Save layout.
+      </p>
+    </div>
+    <form method="post" action="/admin/tables/layout" id="layoutForm">
+      <input type="hidden" name="layout" id="layoutField">
+      <button class="btn primary sm" id="saveLayout" disabled>Save layout</button>
+    </form>
+  </div>
+
+  <div class="plan" id="plan" style="--cols: {{ cols }}">
+    {% for y in range(rows) %}{% for x in range(cols) %}
+      <div class="cell" data-x="{{ x }}" data-y="{{ y }}">
+        {% for t in active_tables if t.pos_x == x and t.pos_y == y %}
+        <div class="chip {{ t.status }}" draggable="true" data-id="{{ t.id }}">
+          <span class="n">{{ t.number }}</span>
+          <span class="meta">{{ t.zone }}</span>
+          <span class="meta">{{ t.capacity }} seats</span>
+        </div>
+        {% endfor %}
+      </div>
+    {% endfor %}{% endfor %}
+  </div>
+  <p class="sub" style="margin:12px 0 0">
+    Tables sharing a square appear once here; drag them apart after saving.
+  </p>
+</div>
+
+<div class="row">
+  <div class="card">
+    <strong>Add a table</strong>
+    <form method="post" action="/admin/tables/create" style="margin-top:12px">
+      <div class="field">
+        <label>Number</label>
+        <input type="number" name="number" min="1" required
+               value="{{ (active_tables|map(attribute='number')|max|default(0)) + 1 }}">
+      </div>
+      <div class="field">
+        <label>Zone</label>
+        <input type="text" name="zone" list="zones" value="Main">
+        <datalist id="zones">
+          {% for z in zones %}<option value="{{ z }}">{% endfor %}
+        </datalist>
+      </div>
+      <div class="field">
+        <label>Capacity</label>
+        <input type="number" name="capacity" min="1" max="20" value="4">
+      </div>
+      <button class="btn primary" style="width:100%">Add table</button>
+    </form>
+  </div>
+
+  <div class="card" style="flex:3">
+    <strong>All tables</strong>
+    {# A <form> is not valid inside <tr> — the parser would hoist it out of the
+       table and orphan the inputs. Declare them here and bind each row's
+       fields with the form="" attribute instead. #}
+    {% for t in tables %}
+    <form method="post" action="/admin/tables/{{ t.id }}/edit" id="tf{{ t.id }}"></form>
+    {% endfor %}
+    <div class="scroll" style="margin-top:12px">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Zone</th><th class="num">Seats</th>
+            <th>Status</th><th>Waiter</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for t in tables %}
+          <tr class="{{ '' if t.is_active else 'dim' }}">
+            <td><input form="tf{{ t.id }}" type="number" name="number" value="{{ t.number }}" min="1" style="width:80px"></td>
+            <td><input form="tf{{ t.id }}" type="text" name="zone" list="zones" value="{{ t.zone }}" style="width:130px"></td>
+            <td class="num"><input form="tf{{ t.id }}" type="number" name="capacity" value="{{ t.capacity }}" min="1" max="20" style="width:74px"></td>
+            <td>
+              {% if t.is_active %}
+                <span class="pill {{ t.status }}">{{ t.status.replace('_',' ') }}</span>
+              {% else %}
+                <span class="pill open">retired</span>
+              {% endif %}
+            </td>
+            <td class="meta">{{ t.current_waiter.name if t.current_waiter else '—' }}</td>
+            <td style="white-space:nowrap">
+              <button form="tf{{ t.id }}" class="btn sm">Save</button>
+              {% if t.is_active %}
+                <form method="post" action="/admin/tables/{{ t.id }}/active" style="display:inline">
+                  <input type="hidden" name="active" value="0">
+                  <button class="btn sm danger" {{ 'disabled' if t.id in busy_ids else '' }}
+                          title="{{ 'Table is in service' if t.id in busy_ids else 'Hide from the floor plan, keep history' }}">
+                    Retire
+                  </button>
+                </form>
+              {% else %}
+                <form method="post" action="/admin/tables/{{ t.id }}/active" style="display:inline">
+                  <input type="hidden" name="active" value="1">
+                  <button class="btn sm good">Restore</button>
+                </form>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="6" class="empty">No tables yet.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const plan = document.getElementById('plan');
+  const field = document.getElementById('layoutField');
+  const save = document.getElementById('saveLayout');
+  if (!plan) return;
+
+  let dragged = null;
+
+  // Serialise every chip's current cell as "id:x:y" triples. Read from the DOM
+  // rather than tracked state so a swap or a cancelled drag can't desync it.
+  function serialise() {
+    return Array.from(plan.querySelectorAll('.chip')).map(function (chip) {
+      const cell = chip.parentElement;
+      return chip.dataset.id + ':' + cell.dataset.x + ':' + cell.dataset.y;
+    }).join(',');
+  }
+
+  const initial = serialise();
+
+  function refresh() {
+    const now = serialise();
+    field.value = now;
+    save.disabled = (now === initial);
+  }
+  refresh();
+
+  plan.addEventListener('dragstart', function (e) {
+    const chip = e.target.closest('.chip');
+    if (!chip) return;
+    dragged = chip;
+    chip.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    // Firefox ignores a drag that carries no data.
+    e.dataTransfer.setData('text/plain', chip.dataset.id);
+  });
+
+  plan.addEventListener('dragend', function () {
+    if (dragged) dragged.classList.remove('dragging');
+    plan.querySelectorAll('.cell.over').forEach(function (c) { c.classList.remove('over'); });
+    dragged = null;
+  });
+
+  plan.addEventListener('dragover', function (e) {
+    const cell = e.target.closest('.cell');
+    if (!cell || !dragged) return;
+    e.preventDefault();                       // required to make the cell a drop target
+    e.dataTransfer.dropEffect = 'move';
+    cell.classList.add('over');
+  });
+
+  plan.addEventListener('dragleave', function (e) {
+    const cell = e.target.closest('.cell');
+    if (cell) cell.classList.remove('over');
+  });
+
+  plan.addEventListener('drop', function (e) {
+    const cell = e.target.closest('.cell');
+    if (!cell || !dragged) return;
+    e.preventDefault();
+    cell.classList.remove('over');
+
+    const occupant = cell.querySelector('.chip');
+    const origin = dragged.parentElement;
+    if (occupant === dragged) return;
+    if (occupant) origin.appendChild(occupant);   // swap, never stack
+    cell.appendChild(dragged);
+    refresh();
+  });
+})();
+</script>
+{% endblock %}

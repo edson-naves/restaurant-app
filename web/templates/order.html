@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>{{ order.code }}</h1>
+    <p class="sub">
+      {% if order.table %}Table {{ order.table.number }} · {{ order.guest_count }} guests{% else %}{{ order.channel.name }}{% endif %}
+      · {{ order.waiter.name if order.waiter else 'unassigned' }}
+      · <span class="pill {{ order.status }}">{{ order.status.replace('_',' ') }}</span>
+      <span class="spec">req 4.1.2</span>
+    </p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a class="btn" href="/">← Floor</a>
+    {% if can('orders.manage') %}
+    <form method="post" action="/orders/{{ order.id }}/send">
+      <button class="btn primary" {{ 'disabled' if not order.items|selectattr('kitchen_status','equalto','pending')|list else '' }}>
+        Send to kitchen
+      </button>
+    </form>
+    {% endif %}
+    {% if can('payments.take') %}
+    <a class="btn good" href="/orders/{{ order.id }}/pay">Payment →</a>
+    {% endif %}
+  </div>
+</div>
+
+<div class="split">
+  <!-- menu -->
+  <div class="card">
+    <h2>Menu</h2>
+    <div class="catbar">
+      {% for c in categories %}
+      <a class="btn sm {{ 'primary' if c.id == active_cat else '' }}" href="/orders/{{ order.id }}?category={{ c.id }}">{{ c.name }}</a>
+      {% endfor %}
+    </div>
+
+    <div class="menu-grid">
+      {% for mi in menu_items %}
+      <button class="mi" type="button" onclick="pick({{ mi.id }}, '{{ mi.name|replace("'", "\\'") }}', {{ mi.price_cents }})">
+        <span class="nm">{{ mi.name }}</span>
+        <span class="pr">${{ mi.price_cents|money }}{% if mi.is_shareable %} · shareable{% endif %}</span>
+      </button>
+      {% endfor %}
+    </div>
+
+    {% if can('orders.manage') %}
+    <form method="post" action="/orders/{{ order.id }}/items" id="addf" style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
+      <input type="hidden" name="menu_item_id" id="mid">
+      <p id="picked" class="sub" style="margin:0 0 10px">Select an item above.</p>
+      <div class="row">
+        <div class="field">
+          <label>Seat (0 = table / unassigned)</label>
+          <select name="seat_number">
+            <option value="0">Unassigned</option>
+            {% for s in order.seats %}
+            <option value="{{ s.seat_number }}">Seat {{ s.seat_number }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label>Quantity</label>
+          <input type="number" name="quantity" value="1" min="1" max="20">
+        </div>
+      </div>
+      <div class="field">
+        <label>Modifiers <span class="spec">req 4.1.2</span></label>
+        <div class="tipset">
+          {% for m in modifiers %}
+          <label><input type="checkbox" name="modifier_ids" value="{{ m.id }}"> {{ m.name }}{% if m.price_delta_cents %} +${{ m.price_delta_cents|money }}{% endif %}</label>
+          {% endfor %}
+        </div>
+      </div>
+      <div class="field">
+        <label>Special instructions</label>
+        <input type="text" name="notes" placeholder="e.g. allergy: nuts">
+      </div>
+      <button class="btn primary" id="addb" disabled>Add to order</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <!-- current order -->
+  <div>
+    <div class="card">
+      <h2>Order</h2>
+      {% if not order.items %}
+        <p class="empty">No items yet.</p>
+      {% else %}
+      <div class="scroll">
+      <table>
+        <thead><tr><th>Item</th><th>Seat</th><th class="num">Total</th><th></th></tr></thead>
+        <tbody>
+        {% for i in order.items %}
+        <tr>
+          <td>
+            {{ i.quantity }}× {{ i.menu_item.name }}
+            <span class="pill {{ 'ok' if i.kitchen_status == 'ready' else ('warn' if i.kitchen_status == 'preparing' else 'open') }}">{{ i.kitchen_status }}</span>
+            {% for m in i.modifiers %}<br><span class="sub" style="font-size:11px">+ {{ m.modifier.name }}</span>{% endfor %}
+            {% if i.notes %}<br><span style="color:#f2c46b;font-size:11px">✎ {{ i.notes }}</span>{% endif %}
+          </td>
+          <td>
+            {% if i.is_shared %}<span class="pill open">shared</span>
+            {% elif i.seat %}{{ i.seat.seat_number }}
+            {% else %}<span class="sub">—</span>{% endif %}
+          </td>
+          <td class="num">${{ i.line_total_cents|money }}</td>
+          <td>
+            {% if can('orders.manage') and not i.allocations %}
+            <form method="post" action="/orders/{{ order.id }}/items/{{ i.id }}/remove">
+              <button class="btn sm danger" title="Remove">×</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="card balance">
+      <h2>Running total</h2>
+      <div class="bal-row"><span class="lbl">Items</span><span>${{ subtotal|money }}</span></div>
+      <div class="bal-row"><span class="lbl">Collected</span><span class="collected">${{ panel.collected_cents|money }}</span></div>
+      <div class="bal-row big"><span>Owed</span><span class="owed">${{ panel.owed_cents|money }}</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function pick(id, name, price) {
+  document.getElementById('mid').value = id;
+  document.getElementById('picked').textContent = 'Adding: ' + name + '  ($' + (price/100).toFixed(2) + ')';
+  document.getElementById('addb').disabled = false;
+}
+</script>
+{% endblock %}

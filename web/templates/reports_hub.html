@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% set total_rev = trend|sum(attribute='revenue_cents') %}
+{% set total_ord = trend|sum(attribute='orders') %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>Reports &amp; analytics</h1>
+    <p class="sub">Every figure below is read from the star schema · <span class="spec">req 4.3</span></p>
+  </div>
+  <form method="post" action="/reports/refresh">
+    <button class="btn">↻ Refresh from live orders</button>
+  </form>
+</div>
+
+<form class="card filters" method="get" action="/reports">
+  <div class="field"><label>From</label><input type="date" name="start" value="{{ start }}"></div>
+  <div class="field"><label>To</label><input type="date" name="end" value="{{ end }}"></div>
+  <button class="btn primary">Apply</button>
+  <a class="btn" href="/reports/export.csv?start={{ start }}&end={{ end }}">⤓ Export payment history CSV</a>
+</form>
+
+<div class="kpis">
+  <div class="kpi">
+    <div class="k">Revenue</div>
+    <div class="v">${{ total_rev|money }}</div>
+    <div class="d">{{ start }} → {{ end }}</div>
+  </div>
+  <div class="kpi">
+    <div class="k">Orders</div>
+    <div class="v">{{ total_ord }}</div>
+    <div class="d">{{ trend|length }} trading days</div>
+  </div>
+  <div class="kpi">
+    <div class="k">Average ticket</div>
+    <div class="v">${{ ((total_rev // total_ord) if total_ord else 0)|money }}</div>
+    <div class="d">revenue ÷ orders</div>
+  </div>
+  <div class="kpi">
+    <div class="k">Busiest day</div>
+    <div class="v" style="font-size:18px">{{ busiest.date if busiest else '—' }}</div>
+    <div class="d">${{ (busiest.revenue_cents if busiest else 0)|money }}</div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <h2>Payment breakdown <a class="spec" href="/reports/payments?start={{ start }}&end={{ end }}">req 4.3.3 →</a></h2>
+    <table>
+      {% for m in payments.by_method %}
+      <tr>
+        <td style="width:110px">{{ m.method }}</td>
+        <td><div class="bar"><i style="width:{{ m.share_pct }}%"></i></div></td>
+        <td class="num" style="width:100px">${{ m.revenue_cents|money }}</td>
+        <td class="num" style="width:52px">{{ m.share_pct }}%</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Dine-in vs delivery <a class="spec" href="/reports/channels?start={{ start }}&end={{ end }}">req 4.3.5 →</a></h2>
+    <table>
+      <thead><tr><th>Channel</th><th class="num">Orders</th><th class="num">Revenue</th><th class="num">Avg</th></tr></thead>
+      {% for r in channels.by_platform %}
+      <tr>
+        <td>{{ r.label }}{% if r.is_third_party %} <span class="pill open">3rd party</span>{% endif %}</td>
+        <td class="num">{{ r.orders }}</td>
+        <td class="num">${{ r.revenue_cents|money }}</td>
+        <td class="num">${{ r.avg_ticket_cents|money }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <h2>Top sellers <a class="spec" href="/reports/best-sellers?start={{ start }}&end={{ end }}">req 4.3.2 →</a></h2>
+    <table>
+      <thead><tr><th>Item</th><th class="num">Sold</th><th class="num">Revenue</th></tr></thead>
+      {% for r in top %}
+      <tr>
+        <td>{{ r.item_name }} <span class="sub" style="font-size:11px">{{ r.category }}</span></td>
+        <td class="num">{{ r.quantity }}</td>
+        <td class="num">${{ r.revenue_cents|money }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Staff performance <a class="spec" href="/reports/staff?start={{ start }}&end={{ end }}">req 4.3.4 →</a></h2>
+    <table>
+      <thead><tr><th>Staff</th><th class="num">Orders</th><th class="num">Revenue</th><th class="num">Tips</th></tr></thead>
+      {% for r in staff_rows[:6] %}
+      <tr>
+        <td>{{ r.name }}</td>
+        <td class="num">{{ r.orders }}</td>
+        <td class="num">${{ r.revenue_cents|money }}</td>
+        <td class="num">${{ r.tips_cents|money }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Revenue by day <a class="spec" href="/reports/daily">req 4.3.1 →</a></h2>
+  {% set maxrev = trend|map(attribute='revenue_cents')|max if trend else 1 %}
+  <div class="hours" style="height:150px">
+    {% for d in trend %}
+    <div class="h" title="{{ d.date }} — ${{ d.revenue_cents|money }} ({{ d.orders }} orders)">
+      <i style="height:{{ (d.revenue_cents * 100 // maxrev) if maxrev else 0 }}%"></i>
+      <span>{{ d.date.day }}</span>
+    </div>
+    {% endfor %}
+  </div>
+  <p class="sub" style="margin:10px 0 0;font-size:11px">Hover a bar for the day’s revenue. Click through for the full daily summary.</p>
+</div>
+{% endblock %}

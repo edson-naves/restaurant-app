@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · RMS</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🍽️</text></svg>">
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">🍽️ <span>RMS</span></a>
+  <nav class="tabs">
+    <a href="/" class="{{ 'on' if request.url.path == '/' else '' }}">Floor</a>
+    <a href="/kitchen" class="{{ 'on' if request.url.path.startswith('/kitchen') else '' }}">Kitchen</a>
+    <a href="/delivery" class="{{ 'on' if request.url.path.startswith('/delivery') else '' }}">Delivery</a>
+    {% if can('reports.view') %}
+    <a href="/reports" class="{{ 'on' if request.url.path.startswith('/reports') else '' }}">Reports</a>
+    {% endif %}
+    {% if can('settings') or can('staff.manage') %}
+    <a href="/admin/tables" class="{{ 'on' if request.url.path.startswith('/admin') else '' }}">Manage</a>
+    {% endif %}
+  </nav>
+  <form class="whoami" method="post" action="/staff/switch">
+    <input type="hidden" name="next_url" value="{{ request.url.path }}">
+    <select name="staff_id" onchange="this.form.submit()" title="Acting as">
+      {% for s in all_staff %}
+      <option value="{{ s.id }}" {{ 'selected' if staff and s.id == staff.id else '' }}>
+        {{ s.name }} — {{ s.role.replace('_', ' ') }}
+      </option>
+      {% endfor %}
+    </select>
+  </form>
+</header>
+
+<main class="wrap">
+  {% block body %}{% endblock %}
+</main>
+
+<footer class="foot">
+  Restaurant Management System v1.0 · built to the requirements specification (June 2026)
+</footer>
+{% block scripts %}{% endblock %}
+</body>
+</html>

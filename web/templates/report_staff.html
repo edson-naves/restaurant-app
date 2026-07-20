@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Staff performance</h1>
+<p class="sub">Orders, revenue and tips per staff member · <span class="spec">req 4.3.4</span></p>
+
+<form class="card filters" method="get" action="/reports/staff">
+  <div class="field"><label>From</label><input type="date" name="start" value="{{ start }}"></div>
+  <div class="field"><label>To</label><input type="date" name="end" value="{{ end }}"></div>
+  <div class="field">
+    <label>Shift</label>
+    <select name="shift">
+      <option value="">All shifts</option>
+      {% for s in shifts %}<option value="{{ s }}" {{ 'selected' if s == shift else '' }}>{{ s }}</option>{% endfor %}
+    </select>
+  </div>
+  <button class="btn primary">Apply</button>
+</form>
+
+<div class="card">
+  {% if not rows %}
+    <p class="empty">No staff activity in this period.</p>
+  {% else %}
+  <div class="scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Staff</th><th>Role</th><th style="width:20%">Revenue</th>
+        <th class="num">Orders</th><th class="num">Revenue</th>
+        <th class="num">Avg ticket</th><th class="num">Tips</th><th class="num">Guests</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+    <tr>
+      <td><b>{{ r.name }}</b></td>
+      <td class="sub">{{ r.role.replace('_',' ') }}</td>
+      <td><div class="bar g"><i style="width:{{ (r.revenue_cents * 100 // top) if top else 0 }}%"></i></div></td>
+      <td class="num">{{ r.orders }}</td>
+      <td class="num">${{ r.revenue_cents|money }}</td>
+      <td class="num">${{ r.avg_ticket_cents|money }}</td>
+      <td class="num">${{ r.tips_cents|money }}</td>
+      <td class="num">{{ r.guests }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="sub" style="margin:12px 0 0;font-size:11px">
+    Revenue and order counts come from the order-header fact; tips come from the payment fact, since a tip belongs to whoever took the payment.
+  </p>
+  {% endif %}
+</div>
+{% endblock %}

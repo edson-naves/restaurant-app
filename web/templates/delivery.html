@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Delivery</h1>
+<p class="sub">Own drivers, UberEats and DoorDash in one queue · <span class="spec">req 4.1.4</span></p>
+
+<div class="card">
+  <h2>Active ({{ active|length }})</h2>
+  {% if not active %}
+    <p class="empty">No active delivery orders.</p>
+  {% else %}
+  <div class="scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Order</th><th>Channel</th><th>Platform ref</th><th>Customer</th>
+        <th>Status</th><th>Driver</th><th class="num">Total</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for d in active %}
+      {% set o = d.order %}
+      <tr>
+        <td><a href="/orders/{{ o.id }}">{{ o.code }}</a></td>
+        <td>{{ o.channel.name }}</td>
+        <td>{{ d.platform_ref or '—' }}</td>
+        <td>{{ d.customer_name }}<br><span class="sub" style="font-size:11px">{{ d.address }}</span></td>
+        <td><span class="pill {{ 'ok' if d.status == 'delivered' else 'occupied' }}">{{ d.status.replace('_',' ') }}</span></td>
+        <td>{{ d.driver.name if d.driver else '—' }}</td>
+        <td class="num">${{ (o.items|sum(attribute='line_total_cents'))|money }}</td>
+        <td>
+          {% if can('delivery.update') %}
+          <form method="post" action="/delivery/{{ d.id }}/update" style="display:flex;gap:6px">
+            <select name="status" style="min-width:120px">
+              {% for s in statuses %}
+              <option value="{{ s }}" {{ 'selected' if s == d.status else '' }}>{{ s.replace('_',' ') }}</option>
+              {% endfor %}
+            </select>
+            {% if not o.channel.is_third_party %}
+            <select name="driver_id" style="min-width:120px">
+              <option value="">— driver —</option>
+              {% for dr in drivers %}
+              <option value="{{ dr.id }}" {{ 'selected' if d.driver_id == dr.id else '' }}>{{ dr.name }}</option>
+              {% endfor %}
+            </select>
+            {% endif %}
+            <button class="btn sm primary">Update</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <h2>Recently delivered</h2>
+  {% if not recent %}
+    <p class="empty">Nothing delivered yet.</p>
+  {% else %}
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Order</th><th>Channel</th><th>Ref</th><th>Customer</th><th>Delivered</th></tr></thead>
+    <tbody>
+    {% for d in recent %}
+      <tr>
+        <td><a href="/orders/{{ d.order.id }}">{{ d.order.code }}</a></td>
+        <td>{{ d.order.channel.name }}</td>
+        <td>{{ d.platform_ref or '—' }}</td>
+        <td>{{ d.customer_name }}</td>
+        <td>{{ d.delivered_at.strftime('%d %b %H:%M') if d.delivered_at else '—' }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

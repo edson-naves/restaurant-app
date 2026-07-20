@@ -1,0 +1,11 @@
+<nav class="subtabs">
+  {% if can('settings') %}
+  <a href="/admin/tables" class="{{ 'on' if request.url.path.startswith('/admin/tables') else '' }}">Tables</a>
+  {% endif %}
+  {% if can('staff.manage') %}
+  <a href="/admin/staff" class="{{ 'on' if request.url.path.startswith('/admin/staff') else '' }}">Staff</a>
+  {% endif %}
+  {% if can('settings') %}
+  <a href="/admin/menu" class="{{ 'on' if request.url.path.startswith('/admin/menu') else '' }}">Menu</a>
+  {% endif %}
+</nav>

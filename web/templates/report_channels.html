@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Delivery vs dine-in</h1>
+<p class="sub">Side-by-side revenue, orders and average ticket · <span class="spec">req 4.3.5</span></p>
+
+<form class="card filters" method="get" action="/reports/channels">
+  <div class="field"><label>From</label><input type="date" name="start" value="{{ start }}"></div>
+  <div class="field"><label>To</label><input type="date" name="end" value="{{ end }}"></div>
+  <button class="btn primary">Apply</button>
+</form>
+
+<div class="kpis">
+  {% for r in cc.by_type %}
+  <div class="kpi">
+    <div class="k">{{ r.label.replace('_',' ') }}</div>
+    <div class="v">${{ r.revenue_cents|money }}</div>
+    <div class="d">{{ r.orders }} orders · avg ${{ r.avg_ticket_cents|money }}</div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <h2>Platform breakdown — UberEats vs DoorDash vs own driver</h2>
+  <div class="scroll">
+  <table>
+    <thead>
+      <tr><th>Channel</th><th style="width:26%">Revenue</th><th class="num">Orders</th><th class="num">Revenue</th><th class="num">Avg ticket</th></tr>
+    </thead>
+    <tbody>
+    {% for r in cc.by_platform %}
+    <tr>
+      <td>
+        <b>{{ r.label }}</b>
+        {% if r.is_third_party %}<span class="pill open">3rd party</span>{% endif %}
+      </td>
+      <td><div class="bar"><i style="width:{{ (r.revenue_cents * 100 // top) if top else 0 }}%"></i></div></td>
+      <td class="num">{{ r.orders }}</td>
+      <td class="num">${{ r.revenue_cents|money }}</td>
+      <td class="num">${{ r.avg_ticket_cents|money }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

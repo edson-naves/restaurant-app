@@ -1,0 +1,22 @@
+# Virtual environment — recreate with: python -m venv .venv && pip install -r requirements.txt
+.venv/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Test caches
+.pytest_cache/
+
+# The SQLite database is generated data, not source: it is seeded by
+# `python -m app.seed` and rewritten by every service and ETL run. Committing
+# it would put a multi-megabyte binary into every diff.
+db/*.db
+db/*.db-shm
+db/*.db-wal
+
+# Editor / OS noise
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

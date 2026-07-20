@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>Kitchen display</h1>
+    <p class="sub">{{ tickets|length }} active · auto-refreshes every 15s · <span class="spec">req 4.1.3</span></p>
+  </div>
+  <div class="catbar" style="margin:0">
+    <a class="btn sm {{ 'primary' if view == 'all' else '' }}" href="/kitchen?view=all">All</a>
+    <a class="btn sm {{ 'primary' if view == 'dine_in' else '' }}" href="/kitchen?view=dine_in">Dine-in</a>
+    <a class="btn sm {{ 'primary' if view == 'delivery' else '' }}" href="/kitchen?view=delivery">Delivery</a>
+  </div>
+</div>
+
+{% if not tickets %}
+  <div class="card"><p class="empty">Nothing in the kitchen right now.</p></div>
+{% else %}
+<div class="tickets">
+  {% for t in tickets %}
+  <div class="ticket {{ t.urgency }}">
+    <div class="between">
+      <strong>{{ t.where }}</strong>
+      <span class="elapsed">{{ t.elapsed }}m</span>
+    </div>
+    <div class="sub" style="margin:2px 0 0">
+      {{ t.order.code }}
+      {% if t.is_delivery %}<span class="pill open">delivery</span>{% endif %}
+    </div>
+
+    <ul>
+      {% for i in t.order.items %}
+      <li>
+        {{ i.quantity }}× {{ i.menu_item.name }}
+        {% for m in i.modifiers %}<br><span class="sub">+ {{ m.modifier.name }}</span>{% endfor %}
+        {% if i.notes %}<br><span class="note">✎ {{ i.notes }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+
+    {% if can('kitchen.update') %}
+    <div style="display:flex;gap:6px">
+      {% if t.order.kitchen_status == 'pending' %}
+        <form method="post" action="/kitchen/{{ t.order.id }}/status" style="flex:1">
+          <input type="hidden" name="status" value="preparing">
+          <button class="btn primary sm" style="width:100%">Start preparing</button>
+        </form>
+      {% elif t.order.kitchen_status == 'preparing' %}
+        <form method="post" action="/kitchen/{{ t.order.id }}/status" style="flex:1">
+          <input type="hidden" name="status" value="ready">
+          <button class="btn good sm" style="width:100%">Mark ready</button>
+        </form>
+      {% else %}
+        <span class="pill ok">ready — waiter notified</span>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // "Real-time order feed" (4.1.3) — poll rather than hold a socket open;
+  // a kitchen tablet that drops Wi-Fi recovers on the next tick.
+  setTimeout(() => location.reload(), 15000);
+</script>
+{% endblock %}

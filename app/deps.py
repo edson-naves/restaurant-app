@@ -1,0 +1,91 @@
+"""Shared dependencies: current user, role gating, templates.
+
+Section 3 defines five roles with distinct permissions. Authentication itself
+is out of scope for v1 (the doc assumes staff onboarding and a PIN pad), so the
+active user is held in a cookie and switched from the header. The permission
+model is real; only the identity check is simplified.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import Depends, HTTPException, Request
+from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.models.oltp import Role, Staff
+from app.services.money import money
+
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
+templates.env.filters["money"] = money
+
+# Section 3 — access matrix.
+PERMISSIONS: dict[str, set[str]] = {
+    "orders.view":     {Role.OWNER, Role.MANAGER, Role.WAITER, Role.KITCHEN, Role.DELIVERY_COORDINATOR},
+    "orders.manage":   {Role.OWNER, Role.MANAGER, Role.WAITER},
+    "kitchen.view":    {Role.OWNER, Role.MANAGER, Role.KITCHEN, Role.WAITER},
+    "kitchen.update":  {Role.OWNER, Role.MANAGER, Role.KITCHEN},
+    "delivery.view":   {Role.OWNER, Role.MANAGER, Role.DELIVERY_COORDINATOR, Role.KITCHEN},
+    "delivery.update": {Role.OWNER, Role.MANAGER, Role.DELIVERY_COORDINATOR},
+    "payments.take":   {Role.OWNER, Role.MANAGER, Role.WAITER},
+    "discount.approve": {Role.OWNER, Role.MANAGER},   # 4.2.6
+    "reports.view":    {Role.OWNER, Role.MANAGER},
+    "staff.manage":    {Role.OWNER},
+    "settings":        {Role.OWNER},                  # manager explicitly excluded
+}
+
+
+def current_staff(request: Request, db: Session = Depends(get_db)) -> Staff:
+    staff_id = request.cookies.get("staff_id")
+    staff = None
+    if staff_id and staff_id.isdigit():
+        staff = db.get(Staff, int(staff_id))
+    if staff is None:
+        staff = db.execute(
+            select(Staff).where(Staff.role == Role.OWNER).limit(1)
+        ).scalar_one_or_none()
+    if staff is None:
+        raise HTTPException(500, "No staff configured. Run: python -m app.seed")
+    return staff
+
+
+def can(staff: Staff, permission: str) -> bool:
+    return staff.role in PERMISSIONS.get(permission, set())
+
+
+def require(permission: str):
+    """Route guard for a named permission."""
+    def _guard(staff: Staff = Depends(current_staff)) -> Staff:
+        if not can(staff, permission):
+            raise HTTPException(
+                403,
+                f"{staff.name} ({staff.role.replace('_', ' ')}) does not have "
+                f"permission for this action.",
+            )
+        return staff
+    return _guard
+
+
+def render(request: Request, template: str, ctx: dict):
+    """Render with the globals every page needs.
+
+    Starlette takes (request, name, context) — the legacy (name, context) form
+    silently treats the template name as the request and fails deep inside
+    Jinja, so keep the request first.
+    """
+    db = ctx.get("db")
+    staff = ctx.get("staff")
+    base = {
+        "can": (lambda p: can(staff, p)) if staff else (lambda p: False),
+        "Role": Role,
+    }
+    if db is not None:
+        base["all_staff"] = db.execute(
+            select(Staff).where(Staff.is_active.is_(True)).order_by(Staff.id)
+        ).scalars().all()
+    base.update(ctx)
+    base.pop("db", None)
+    return templates.TemplateResponse(request, template, base)

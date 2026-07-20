@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>Payment breakdown</h1>
+    <p class="sub">Revenue by method with card-level detail · <span class="spec">req 4.3.3</span></p>
+  </div>
+  <a class="btn primary" href="/reports/export.csv?start={{ start }}&end={{ end }}">⤓ Export CSV for accounting</a>
+</div>
+
+<form class="card filters" method="get" action="/reports/payments">
+  <div class="field"><label>From</label><input type="date" name="start" value="{{ start }}"></div>
+  <div class="field"><label>To</label><input type="date" name="end" value="{{ end }}"></div>
+  <button class="btn primary">Apply</button>
+</form>
+
+<div class="kpis">
+  <div class="kpi"><div class="k">Total collected</div><div class="v">${{ pb.total_cents|money }}</div><div class="d">{{ start }} → {{ end }}</div></div>
+  {% for m in pb.by_method[:3] %}
+  <div class="kpi"><div class="k">{{ m.method }}</div><div class="v">${{ m.revenue_cents|money }}</div><div class="d">{{ m.share_pct }}% · {{ m.payments }} payments</div></div>
+  {% endfor %}
+</div>
+
+<div class="row">
+  <div class="card">
+    <h2>By method</h2>
+    <table>
+      <thead><tr><th>Method</th><th style="width:30%"></th><th class="num">Revenue</th><th class="num">Share</th><th class="num">Tips</th></tr></thead>
+      <tbody>
+      {% for m in pb.by_method %}
+      <tr>
+        <td><b>{{ m.method }}</b></td>
+        <td><div class="bar"><i style="width:{{ m.share_pct }}%"></i></div></td>
+        <td class="num">${{ m.revenue_cents|money }}</td>
+        <td class="num">{{ m.share_pct }}%</td>
+        <td class="num">${{ m.tips_cents|money }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Card detail — Visa vs Mastercard vs Amex</h2>
+    <table>
+      <thead><tr><th>Brand</th><th class="num">Revenue</th><th class="num">Payments</th></tr></thead>
+      <tbody>
+      {% for c in pb.by_card_brand %}
+      <tr><td><b>{{ c.brand }}</b></td><td class="num">${{ c.revenue_cents|money }}</td><td class="num">{{ c.payments }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Every instrument</h2>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Instrument</th><th>Type</th><th class="num">Revenue</th><th class="num">Payments</th></tr></thead>
+    <tbody>
+    {% for i in pb.by_instrument %}
+    <tr>
+      <td><b>{{ i.instrument }}</b></td>
+      <td class="sub">{{ i.type }}</td>
+      <td class="num">${{ i.revenue_cents|money }}</td>
+      <td class="num">{{ i.payments }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="sub" style="margin:12px 0 0;font-size:11px">
+    The CSV export is one row per item-to-instrument allocation, so accounting can see exactly which instrument paid for which item (req 4.2.2).
+  </p>
+</div>
+{% endblock %}
