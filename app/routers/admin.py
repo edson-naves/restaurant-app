@@ -341,6 +341,61 @@ def create_table(
 # remains.
 
 
+def _apply_table_edit(
+    db: Session, table: RestaurantTable,
+    number: int, zone_id: int, capacity: int, waiter_id: int,
+) -> bool:
+    """Apply one row's edits. Returns whether anything actually changed.
+
+    Each field is compared before being written so that saving a page of rows
+    only touches the ones that moved — untouched rows must not trip the
+    renumbering guard or rewrite a waiter assignment made elsewhere since the
+    page was rendered.
+    """
+    if not 1 <= capacity <= 20:
+        raise HTTPException(400, "Capacity must be between 1 and 20 seats.")
+    changed = False
+
+    if number != table.number:
+        if number < 1:
+            raise HTTPException(400, "Table number must be 1 or greater.")
+        clash = db.execute(
+            select(RestaurantTable).where(
+                RestaurantTable.number == number, RestaurantTable.id != table.id
+            )
+        ).scalars().first()
+        if clash is not None:
+            raise HTTPException(400, f"Table {number} already exists.")
+        # Renumbering a table mid-service would relabel a live ticket and the
+        # receipt printed from it.
+        if _live_order_for_table(db, table.id):
+            raise HTTPException(
+                400,
+                f"Table {table.number} has a live order — close it before renumbering.",
+            )
+        table.number = number
+        changed = True
+
+    if zone_id != table.zone_id:
+        zone = _zone_or_400(db, zone_id)
+        # Moving to another floor moves the table to a different grid, where
+        # its old coordinates may already be taken.
+        if zone.floor_id != table.floor_id:
+            (table.pos_x, table.pos_y), = _free_cells(db, 1, zone.floor_id)
+        _assign_zone(table, zone)
+        changed = True
+
+    if capacity != table.capacity:
+        table.capacity = capacity
+        changed = True
+
+    if (waiter_id or None) != table.current_waiter_id:
+        _assign_waiter(db, table, waiter_id)
+        changed = True
+
+    return changed
+
+
 @router.post("/tables/{table_id}/edit")
 def edit_table(
     table_id: int,
@@ -354,38 +409,64 @@ def edit_table(
     table = db.get(RestaurantTable, table_id)
     if table is None:
         raise HTTPException(404, "Table not found")
-    if not 1 <= capacity <= 20:
-        raise HTTPException(400, "Capacity must be between 1 and 20 seats.")
-
-    if number != table.number:
-        if number < 1:
-            raise HTTPException(400, "Table number must be 1 or greater.")
-        clash = db.execute(
-            select(RestaurantTable).where(
-                RestaurantTable.number == number, RestaurantTable.id != table_id
-            )
-        ).scalars().first()
-        if clash is not None:
-            raise HTTPException(400, f"Table {number} already exists.")
-        # Renumbering a table mid-service would relabel a live ticket and the
-        # receipt printed from it.
-        if _live_order_for_table(db, table_id):
-            raise HTTPException(
-                400,
-                f"Table {table.number} has a live order — close it before renumbering.",
-            )
-        table.number = number
-
-    zone = _zone_or_400(db, zone_id)
-    # Moving to another floor moves the table to a different grid, where its
-    # old coordinates may already be taken.
-    if zone.floor_id != table.floor_id:
-        (table.pos_x, table.pos_y), = _free_cells(db, 1, zone.floor_id)
-    _assign_zone(table, zone)
-    table.capacity = capacity
-    _assign_waiter(db, table, waiter_id)
+    _apply_table_edit(db, table, number, zone_id, capacity, waiter_id)
     db.commit()
-    return RedirectResponse(f"/admin/tables?floor={zone.floor_id}", status_code=303)
+    return RedirectResponse(f"/admin/tables?floor={table.floor_id}", status_code=303)
+
+
+@router.post("/tables/save-all")
+def save_all_tables(
+    table_id: list[int] = Form([]),
+    number: list[int] = Form([]),
+    zone_id: list[int] = Form([]),
+    capacity: list[int] = Form([]),
+    waiter_id: list[int] = Form([]),
+    floor: int = Form(0),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Save every row on the tables page in one go.
+
+    The fields arrive as parallel lists in row order. A mismatched length means
+    the form was tampered with or a control failed to submit, and applying it
+    would write one row's value onto another — so the whole batch is refused
+    rather than guessed at.
+
+    All-or-nothing: one bad row rolls the lot back, because the operator edited
+    the page as a unit and a partial save would leave them unable to tell which
+    of their changes survived.
+    """
+    lengths = {len(table_id), len(number), len(zone_id), len(capacity), len(waiter_id)}
+    if len(lengths) != 1:
+        raise HTTPException(400, "The form did not submit completely — reload and retry.")
+    if not table_id:
+        return RedirectResponse(f"/admin/tables?floor={floor}", status_code=303)
+
+    dupes = {n for n in number if number.count(n) > 1}
+    if dupes:
+        raise HTTPException(
+            400, f"Table number {sorted(dupes)[0]} appears on more than one row."
+        )
+
+    changed = 0
+    try:
+        for tid, num, zid, cap, wid in zip(
+            table_id, number, zone_id, capacity, waiter_id
+        ):
+            table = db.get(RestaurantTable, tid)
+            if table is None:
+                raise HTTPException(404, f"Table id {tid} not found")
+            if _apply_table_edit(db, table, num, zid, cap, wid):
+                changed += 1
+            db.flush()          # no autoflush: later rows must see earlier ones
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return RedirectResponse(
+        f"/admin/tables?floor={floor}&done={changed}", status_code=303
+    )
 
 
 @router.post("/tables/{table_id}/active")

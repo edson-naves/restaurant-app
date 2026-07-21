@@ -450,6 +450,58 @@ check(offered and offered <= roof_zone_ids,
 check("optgroup" in r.text,
       "cross-floor dropdowns group their zones by floor")
 
+# One Save for the whole page: rows submit as parallel lists.
+print("\n--- save every row at once ---")
+rows = db.execute(
+    select(RestaurantTable).where(
+        RestaurantTable.zone_id.in_([z.id for z in fresh(Floor, name="QA Roof").zones])
+    ).order_by(RestaurantTable.number)
+).scalars().all()
+ids = [x.id for x in rows]
+before_caps = [x.capacity for x in rows]
+
+payload = {
+    "floor": roof.id,
+    "table_id": ids,
+    "number": [x.number for x in rows],
+    "zone_id": [x.zone_id for x in rows],
+    "capacity": [c + 1 for c in before_caps],
+    "waiter_id": [0] * len(rows),
+}
+r = client.post("/admin/tables/save-all", data=payload)
+db.expire_all()
+after = [db.get(RestaurantTable, i).capacity for i in ids]
+check(r.status_code == 200 and after == [c + 1 for c in before_caps],
+      "one save updates every row on the page", f"{before_caps} -> {after}")
+check(f"done={len(rows)}" in str(r.url), "it reports how many rows changed", str(r.url))
+
+# Re-submitting unchanged rows must be a no-op, not a write of everything.
+r = client.post("/admin/tables/save-all", data={**payload, "capacity": after})
+check("done=0" in str(r.url), "unchanged rows report nothing changed", str(r.url))
+
+# A bad row rolls the whole batch back rather than saving half of it.
+bad = {**payload, "capacity": [after[0]] + [999] * (len(rows) - 1)}
+r = client.post("/admin/tables/save-all", data=bad)
+db.expire_all()
+check(r.status_code == 400, "an invalid row refuses the batch", str(r.status_code))
+check([db.get(RestaurantTable, i).capacity for i in ids] == after,
+      "and nothing from that batch was written")
+
+# Two rows claiming one number would violate the unique constraint mid-loop.
+clash = {**payload, "number": [rows[0].number] * len(rows)}
+r = client.post("/admin/tables/save-all", data=clash)
+check(r.status_code == 400, "duplicate numbers in one save are refused",
+      str(r.status_code))
+
+# Mismatched list lengths would pair a row's value with another row's table.
+r = client.post("/admin/tables/save-all", data={**payload, "capacity": after[:-1]})
+check(r.status_code == 400, "a short field list is refused", str(r.status_code))
+
+r = client.get(f"/admin/tables?floor={roof.id}")
+check(r.text.count('action="/admin/tables/save-all"') == 1,
+      "the page carries exactly one save form")
+check('name="table_id"' in r.text, "each row submits its table id")
+
 # Zone colours: every chip carries its zone's dot, defaulted from the palette
 # until one is chosen.
 print("\n--- zone colours ---")

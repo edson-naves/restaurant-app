@@ -114,12 +114,13 @@
 
   <div class="card" style="flex:3">
     <strong>Tables on {{ current_floor.name if current_floor else 'this floor' }}</strong>
-    {# A <form> is not valid inside <tr> — the parser would hoist it out of the
-       table and orphan the inputs. Declare them here and bind each row's
-       fields with the form="" attribute instead. #}
-    {% for t in tables %}
-    <form method="post" action="/admin/tables/{{ t.id }}/edit" id="tf{{ t.id }}"></form>
-    {% endfor %}
+    {# One form for every row. A <form> is not valid inside <table>, so it is
+       declared here and each row's fields bind to it with form="". Rows submit
+       as parallel lists in document order; the hidden table_id keeps each
+       row's values tied to its table. #}
+    <form method="post" action="/admin/tables/save-all" id="saveall">
+      <input type="hidden" name="floor" value="{{ current_floor.id if current_floor else 0 }}">
+    </form>
 
     {% if done or skipped %}
     <div class="{{ 'err' if skipped else 'note' }}" style="margin-top:12px">
@@ -134,6 +135,13 @@
       {% endif %}
     </div>
     {% endif %}
+
+    <div class="bulkbar" style="justify-content:space-between">
+      <span class="sub" style="margin:0">
+        Edit any rows below, then save them all at once.
+      </span>
+      <button form="saveall" class="btn primary">Save all changes</button>
+    </div>
 
     <form method="post" action="/admin/tables/bulk" id="bulkform" class="bulkbar">
       <span class="count"><b id="selCount">0</b> selected</span>
@@ -172,9 +180,12 @@
               <input form="bulkform" type="checkbox" class="sel" name="table_ids"
                      value="{{ t.id }}" style="width:auto;min-height:0">
             </td>
-            <td><input form="tf{{ t.id }}" type="number" name="number" value="{{ t.number }}" min="1" style="width:80px"></td>
             <td>
-              <select form="tf{{ t.id }}" name="zone_id" style="width:190px">
+              <input form="saveall" type="hidden" name="table_id" value="{{ t.id }}">
+              <input form="saveall" type="number" name="number" value="{{ t.number }}" min="1" style="width:80px">
+            </td>
+            <td>
+              <select form="saveall" name="zone_id" style="width:190px">
                 {% for f in floors %}
                 <optgroup label="{{ f.name }}">
                   {% for z in zones if z.floor_id == f.id %}
@@ -184,7 +195,7 @@
                 {% endfor %}
               </select>
             </td>
-            <td class="num"><input form="tf{{ t.id }}" type="number" name="capacity" value="{{ t.capacity }}" min="1" max="20" style="width:74px"></td>
+            <td class="num"><input form="saveall" type="number" name="capacity" value="{{ t.capacity }}" min="1" max="20" style="width:74px"></td>
             <td>
               {% if t.is_active %}
                 <span class="pill {{ t.status }}">{{ t.status.replace('_',' ') }}</span>
@@ -193,7 +204,7 @@
               {% endif %}
             </td>
             <td>
-              <select form="tf{{ t.id }}" name="waiter_id" style="width:160px">
+              <select form="saveall" name="waiter_id" style="width:160px">
                 <option value="0">— unassigned —</option>
                 {% for w in waiters %}
                 <option value="{{ w.id }}" {{ 'selected' if t.current_waiter_id == w.id else '' }}>{{ w.name }}</option>
@@ -207,7 +218,6 @@
               </select>
             </td>
             <td style="white-space:nowrap">
-              <button form="tf{{ t.id }}" class="btn sm">Save</button>
               {% if t.is_active %}
                 <form method="post" action="/admin/tables/{{ t.id }}/active" style="display:inline">
                   <input type="hidden" name="active" value="0">
@@ -234,6 +244,12 @@
         </tbody>
       </table>
     </div>
+
+    {% if tables %}
+    <div style="margin-top:12px;text-align:right">
+      <button form="saveall" class="btn primary">Save all changes</button>
+    </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}
