@@ -340,6 +340,17 @@ check(r.status_code == 200 and rows == len(on_roof),
       f"{rows} rows for {len(on_roof)} tables on QA Roof")
 check(f"Tables on QA Roof" in r.text, "the list is labelled with that floor")
 
+# "Add one table" offers only the zones of the floor on screen; the row and
+# bulk controls still reach every floor, so a table can be moved between them.
+add_form = r.text.split('action="/admin/tables/create"')[1].split("</form>")[0]
+roof_zone_ids = {z.id for z in fresh(Floor, name="QA Roof").zones}
+offered = {int(m) for m in re.findall(r'<option value="(\d+)"', add_form)}
+check(offered and offered <= roof_zone_ids,
+      "the add-table zone list is limited to the current floor",
+      f"offered {sorted(offered)} of roof zones {sorted(roof_zone_ids)}")
+check("optgroup" in r.text,
+      "cross-floor dropdowns group their zones by floor")
+
 first_floor_id = sorted(PRE_FLOOR_IDS)[0]
 r2 = client.get(f"/admin/tables?floor={first_floor_id}")
 rows2 = len(re.findall(r'name="table_ids"', r2.text))

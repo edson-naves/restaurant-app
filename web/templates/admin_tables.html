@@ -77,16 +77,22 @@
         <input type="number" name="number" min="1" required value="{{ next_number }}">
       </div>
       <div class="field">
-        <label>Floor &amp; zone</label>
+        <label>Zone on {{ current_floor.name if current_floor else 'this floor' }}</label>
         <select name="zone_id" required>
-          {% for z in zones %}<option value="{{ z.id }}">{{ z.label }}</option>{% endfor %}
+          {% for z in floor_zones %}<option value="{{ z.id }}">{{ z.name }}</option>{% endfor %}
         </select>
+        {% if not floor_zones %}
+        <p class="sub" style="margin:6px 0 0">
+          This floor has no zones yet —
+          <a href="/admin/floors">add one</a> before adding tables.
+        </p>
+        {% endif %}
       </div>
       <div class="field">
         <label>Capacity</label>
         <input type="number" name="capacity" min="1" max="20" value="4">
       </div>
-      <button class="btn primary" style="width:100%" {{ 'disabled' if not zones else '' }}>
+      <button class="btn primary" style="width:100%" {{ 'disabled' if not floor_zones else '' }}>
         Add table
       </button>
     </form>
@@ -121,7 +127,13 @@
       <button name="action" value="restore" class="btn sm good bulk-act" disabled>Restore</button>
       <span class="sep"></span>
       <select name="zone_id" style="width:auto">
-        {% for z in zones %}<option value="{{ z.id }}">{{ z.label }}</option>{% endfor %}
+        {% for f in floors %}
+        <optgroup label="{{ f.name }}">
+          {% for z in zones if z.floor_id == f.id %}
+          <option value="{{ z.id }}">{{ z.name }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
       </select>
       <button name="action" value="zone" class="btn sm bulk-act" disabled>Move to</button>
       <input type="number" name="capacity" min="1" max="20" placeholder="Seats" style="width:90px">
@@ -149,8 +161,12 @@
             <td><input form="tf{{ t.id }}" type="number" name="number" value="{{ t.number }}" min="1" style="width:80px"></td>
             <td>
               <select form="tf{{ t.id }}" name="zone_id" style="width:190px">
-                {% for z in zones %}
-                <option value="{{ z.id }}" {{ 'selected' if z.id == t.zone_id else '' }}>{{ z.label }}</option>
+                {% for f in floors %}
+                <optgroup label="{{ f.name }}">
+                  {% for z in zones if z.floor_id == f.id %}
+                  <option value="{{ z.id }}" {{ 'selected' if z.id == t.zone_id else '' }}>{{ z.name }}</option>
+                  {% endfor %}
+                </optgroup>
                 {% endfor %}
               </select>
             </td>

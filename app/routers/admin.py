@@ -243,7 +243,13 @@ def tables_page(
         # has to come from every table, not just this floor's.
         "next_number": max([t.number for t in all_tables], default=0) + 1,
         "grand_total": len(all_tables),
+        # Every active zone, for the bulk "move to" control — moving a table
+        # between floors is a legitimate action.
         "zones": [z for z in zones if z.floor.is_active],
+        # Just this floor's, for adding a table to the floor on screen.
+        "floor_zones": [
+            z for z in zones if current and z.floor_id == current.id
+        ],
         "waiters": waiters,
         "seats_total": sum(t.capacity for t in active),
         "done": done, "created": created,
