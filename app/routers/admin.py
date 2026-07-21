@@ -106,10 +106,23 @@ def _free_cells(db: Session, count: int, floor_id: int | None) -> list[tuple[int
     return cells
 
 
-def _ordinal(n: int) -> str:
-    if 11 <= n % 100 <= 13:
-        return f"{n}th"
-    return f"{n}{ {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th') }"
+def _parse_names(raw: str, limit: int = 50) -> list[str]:
+    """Split a typed list of names on commas or newlines.
+
+    Setup reads better as "Ground, First, Second" than as a count, and the
+    names are the operator's own words — a floor called "Mezzanine" should not
+    have to be renamed from "2nd floor" afterwards.
+    """
+    parts = [p.strip() for chunk in raw.split("\n") for p in chunk.split(",")]
+    names: list[str] = []
+    for p in parts:
+        if p and p not in names:            # ignore blanks and repeats in one paste
+            names.append(p)
+    if not names:
+        raise HTTPException(400, "Type at least one name.")
+    if len(names) > limit:
+        raise HTTPException(400, f"That is more than {limit} names at once.")
+    return names
 
 
 def _zone_or_400(db: Session, zone_id: int) -> Zone:
@@ -130,6 +143,34 @@ def _assign_zone(table: RestaurantTable, zone: Zone) -> None:
     """
     table.zone_id = zone.id
     table.zone = zone.name
+
+
+def _add_tables(db: Session, zone: Zone, count: int, capacity: int) -> list[int]:
+    """Create `count` tables of `capacity` seats in one zone. Does not commit.
+
+    Numbers continue from the highest in use and skip anything taken: a retired
+    table keeps its number, and reissuing it would make two eras of service
+    look like one table in any report read by number.
+    """
+    taken_numbers = {
+        t.number for t in db.execute(select(RestaurantTable)).scalars().all()
+    }
+    cells = _free_cells(db, count, zone.floor_id)
+
+    number = max(taken_numbers, default=0)
+    made: list[int] = []
+    for (pos_x, pos_y) in cells:
+        number += 1
+        while number in taken_numbers:
+            number += 1
+        table = RestaurantTable(
+            number=number, capacity=capacity,
+            status=TableStatus.FREE, is_active=True, pos_x=pos_x, pos_y=pos_y,
+        )
+        _assign_zone(table, zone)
+        db.add(table)
+        made.append(number)
+    return made
 
 
 def _live_order_for_table(db: Session, table_id: int) -> Order | None:
@@ -261,25 +302,7 @@ def create_tables_batch(
     if not 1 <= capacity <= 20:
         raise HTTPException(400, "Capacity must be between 1 and 20 seats.")
     zone = _zone_or_400(db, zone_id)
-
-    taken_numbers = {
-        t.number for t in db.execute(select(RestaurantTable)).scalars().all()
-    }
-    cells = _free_cells(db, count, zone.floor_id)
-
-    number = max(taken_numbers, default=0)
-    made: list[int] = []
-    for (pos_x, pos_y) in cells:
-        number += 1
-        while number in taken_numbers:
-            number += 1
-        table = RestaurantTable(
-            number=number, capacity=capacity,
-            status=TableStatus.FREE, is_active=True, pos_x=pos_x, pos_y=pos_y,
-        )
-        _assign_zone(table, zone)
-        db.add(table)
-        made.append(number)
+    made = _add_tables(db, zone, count, capacity)
 
     db.commit()
     span = f"{made[0]}" if len(made) == 1 else f"{made[0]}–{made[-1]}"
@@ -485,6 +508,8 @@ def save_layout(
 @router.get("/floors")
 def floors_page(
     request: Request,
+    done: int = 0,
+    created: str = "",
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
@@ -501,39 +526,32 @@ def floors_page(
     return render(request, "admin_floors.html", {
         "db": db, "staff": staff,
         "floors": floors, "counts": counts,
+        "done": done, "created": created,
+        "seats": {
+            z.id: sum(t.capacity for t in tables if t.zone_id == z.id)
+            for f in floors for z in f.zones
+        },
         "title": "Manage floors & zones",
     })
 
 
-@router.post("/floors/create-batch")
+@router.post("/floors/create")
 def create_floors(
-    count: int = Form(...),
-    zones_each: int = Form(0),
+    names: str = Form(...),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
-    """Create N floors at once, optionally each with M lettered zones."""
-    if not 1 <= count <= 20:
-        raise HTTPException(400, "Choose between 1 and 20 floors.")
-    if not 0 <= zones_each <= 26:
-        raise HTTPException(400, "Zones per floor must be between 0 and 26 (A–Z).")
-
+    """Step 1 — name the floors. Several at once, comma or newline separated."""
+    wanted = _parse_names(names, limit=20)
     existing = {f.name for f in db.execute(select(Floor)).scalars().all()}
+    top = db.execute(select(func.max(Floor.sort_order))).scalar_one() or 0
+
     made = 0
-    n = 0
-    while made < count:
-        n += 1
-        name = f"{_ordinal(n)} floor"
+    for name in wanted:
         if name in existing:
-            continue                           # keep going past floors already there
-        floor = Floor(name=name, sort_order=n, is_active=True)
-        db.add(floor)
-        db.flush()
-        for i in range(zones_each):
-            db.add(Zone(
-                floor_id=floor.id, name=f"Zone {chr(ord('A') + i)}",
-                sort_order=i, is_active=True,
-            ))
+            continue                           # already there; re-adding is a no-op
+        top += 1
+        db.add(Floor(name=name, sort_order=top, is_active=True))
         existing.add(name)
         made += 1
 
@@ -541,35 +559,56 @@ def create_floors(
     return RedirectResponse(f"/admin/floors?done={made}", status_code=303)
 
 
-@router.post("/floors/{floor_id}/zones/create-batch")
+@router.post("/floors/{floor_id}/zones/create")
 def create_zones(
     floor_id: int,
-    count: int = Form(...),
+    names: str = Form(...),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
-    """Add M lettered zones to one floor, continuing past letters in use."""
+    """Step 2 — name the zones on one floor."""
     floor = db.get(Floor, floor_id)
     if floor is None:
         raise HTTPException(404, "Floor not found")
-    if not 1 <= count <= 26:
-        raise HTTPException(400, "Choose between 1 and 26 zones (A–Z).")
 
+    wanted = _parse_names(names, limit=26)
     existing = {z.name for z in floor.zones}
+    top = max([z.sort_order for z in floor.zones], default=-1)
+
     made = 0
-    i = 0
-    while made < count and i < 26:
-        name = f"Zone {chr(ord('A') + i)}"
-        i += 1
+    for name in wanted:
         if name in existing:
             continue
-        db.add(Zone(floor_id=floor.id, name=name, sort_order=i, is_active=True))
+        top += 1
+        db.add(Zone(floor_id=floor.id, name=name, sort_order=top, is_active=True))
+        existing.add(name)
         made += 1
-    if made < count:
-        raise HTTPException(400, "Ran out of letters — a floor holds at most 26 zones.")
 
     db.commit()
     return RedirectResponse(f"/admin/floors?done={made}", status_code=303)
+
+
+@router.post("/zones/{zone_id}/tables")
+def create_zone_tables(
+    zone_id: int,
+    count: int = Form(...),
+    capacity: int = Form(4),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Step 3 — how many tables, and how many seats each, for one zone."""
+    if not 1 <= count <= 50:
+        raise HTTPException(400, "Choose between 1 and 50 tables to add.")
+    if not 1 <= capacity <= 20:
+        raise HTTPException(400, "Seats must be between 1 and 20.")
+
+    zone = _zone_or_400(db, zone_id)
+    made = _add_tables(db, zone, count, capacity)
+    db.commit()
+    span = f"{made[0]}" if len(made) == 1 else f"{made[0]}–{made[-1]}"
+    return RedirectResponse(
+        f"/admin/floors?done={len(made)}&created={span}", status_code=303
+    )
 
 
 @router.post("/floors/{floor_id}/edit")

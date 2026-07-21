@@ -263,47 +263,76 @@ print("\n--- floors & zones ---")
 r = client.get("/admin/floors")
 check(r.status_code == 200, "GET /admin/floors", str(r.status_code))
 
-before_floors = db.execute(select(Floor)).scalars().all()
-r = client.post("/admin/floors/create-batch", data={"count": 3, "zones_each": 4})
+# Step 1 — the operator types the names.
+r = client.post("/admin/floors/create", data={
+    "names": "QA Ground, QA Mezzanine\nQA Roof",
+})
 db.expire_all()
-after_floors = db.execute(select(Floor).order_by(Floor.sort_order)).scalars().all()
-made_floors = [f for f in after_floors if f not in before_floors]
-check(r.status_code == 200 and len(after_floors) >= 3,
-      "3 floors created with 4 zones each", f"{len(after_floors)} floors total")
+made_floors = [
+    f for f in db.execute(select(Floor).order_by(Floor.sort_order)).scalars().all()
+    if f.id not in PRE_FLOOR_IDS and f.name != QA_FLOOR
+]
+check(r.status_code == 200 and len(made_floors) == 3,
+      "three floors created from typed names", str([f.name for f in made_floors]))
+check([f.name for f in made_floors] == ["QA Ground", "QA Mezzanine", "QA Roof"],
+      "names are kept verbatim and split on commas and newlines",
+      str([f.name for f in made_floors]))
 
-ordinals = {f.name for f in after_floors}
-check({"1st floor", "2nd floor", "3rd floor"} <= ordinals,
-      "floors are named by ordinal", str(sorted(ordinals)))
-third = fresh(Floor, name="3rd floor")
-new_zone_names = [z.name for z in third.zones if z.id not in PRE_ZONE_IDS]
-check(len(new_zone_names) == 4, "each new floor got 4 zones", str(new_zone_names))
-check(sorted(new_zone_names)[:4] == ["Zone A", "Zone B", "Zone C", "Zone D"],
-      "zones are lettered A-D", str(sorted(new_zone_names)))
-
-# Re-running must not duplicate: floors already present are skipped.
-r = client.post("/admin/floors/create-batch", data={"count": 3, "zones_each": 4})
+# Re-adding the same names is a no-op, not a duplicate or an error.
+r = client.post("/admin/floors/create", data={"names": "QA Ground, QA Roof"})
 db.expire_all()
 names = [f.name for f in db.execute(select(Floor)).scalars().all()]
-check(len(names) == len(set(names)), "re-running creates no duplicate floors",
+check(len(names) == len(set(names)), "re-adding existing names creates no duplicates",
       str(sorted(names)))
 
-r = client.post(f"/admin/floors/{third.id}/zones/create-batch", data={"count": 2})
+roof = fresh(Floor, name="QA Roof")
+r = client.post("/admin/floors/create", data={"names": "   ,  , "})
+check(r.status_code == 400, "a blank name list is refused", str(r.status_code))
+r = client.post("/admin/floors/create", data={
+    "names": ",".join(f"F{i}" for i in range(30)),
+})
+check(r.status_code == 400, "more than 20 floors at once is refused", str(r.status_code))
+
+# Step 2 — zones are named per floor.
+r = client.post(f"/admin/floors/{roof.id}/zones/create", data={
+    "names": "Terrace, Cabana, Cabana, Bar",
+})
 db.expire_all()
-third = fresh(Floor, name="3rd floor")
-grown = [z.name for z in third.zones if z.id not in PRE_ZONE_IDS]
-check(len(grown) == 6 and "Zone E" in grown and "Zone F" in grown,
-      "adding 2 more zones continues past D", str(sorted(grown)))
+roof = fresh(Floor, name="QA Roof")
+check(r.status_code == 200 and [z.name for z in roof.zones] == ["Terrace", "Cabana", "Bar"],
+      "zones created from typed names, repeats in one paste collapsed",
+      str([z.name for z in roof.zones]))
 
-for bad in ({"count": 0, "zones_each": 1}, {"count": 21, "zones_each": 1},
-            {"count": 1, "zones_each": 27}):
-    r = client.post("/admin/floors/create-batch", data=bad)
-    check(r.status_code == 400, f"floors batch {bad} refused", str(r.status_code))
+# Zones are scoped to their floor, so the same name may exist on another one.
+ground = fresh(Floor, name="QA Ground")
+r = client.post(f"/admin/floors/{ground.id}/zones/create", data={"names": "Terrace"})
+db.expire_all()
+check(r.status_code == 200 and [z.name for z in fresh(Floor, name="QA Ground").zones] == ["Terrace"],
+      "the same zone name can exist on another floor", str(r.status_code))
 
-# Zones are scoped to their floor, so the same name on two floors is fine.
-first = fresh(Floor, name="1st floor")
-r = client.post(f"/admin/floors/{first.id}/zones/create-batch", data={"count": 1})
-check(r.status_code == 200, "'Zone A' can exist on more than one floor",
-      str(r.status_code))
+# Step 3 — tables and seats, straight from the zone row.
+terrace = fresh(Zone, floor_id=roof.id, name="Terrace")
+r = client.post(f"/admin/zones/{terrace.id}/tables", data={"count": 4, "capacity": 2})
+db.expire_all()
+made = db.execute(
+    select(RestaurantTable).where(RestaurantTable.zone_id == terrace.id)
+).scalars().all()
+check(r.status_code == 200 and len(made) == 4,
+      "4 tables added directly to a zone", f"{len(made)} made")
+check(all(x.capacity == 2 for x in made), "each has the seats asked for",
+      str({x.capacity for x in made}))
+check(all(x.zone == "Terrace" for x in made), "they carry the zone's label")
+check(len({(x.pos_x, x.pos_y) for x in made}) == 4,
+      "they land on four distinct squares")
+
+for bad in ({"count": 0, "capacity": 2}, {"count": 51, "capacity": 2},
+            {"count": 2, "capacity": 0}, {"count": 2, "capacity": 21}):
+    r = client.post(f"/admin/zones/{terrace.id}/tables", data=bad)
+    check(r.status_code == 400, f"zone tables {bad} refused", str(r.status_code))
+db.expire_all()
+check(len(db.execute(
+    select(RestaurantTable).where(RestaurantTable.zone_id == terrace.id)
+).scalars().all()) == 4, "refused table batches created nothing")
 
 # A zone holding tables cannot be retired out from under them.
 occupied_zone = db.execute(
@@ -599,15 +628,14 @@ for model, where in targets:
         db.delete(row)
         removed += 1
 
-# Everything else the test made lives on the throwaway QA floor.
+# Every table the run created lives in a zone the run created.
 db.expire_all()
-qa_zone_ids = [
-    z.id for z in db.execute(
-        select(Zone).where(Zone.floor_id == qa_floor.id)
-    ).scalars().all()
+new_zone_ids = [
+    z.id for z in db.execute(select(Zone)).scalars().all()
+    if z.id not in PRE_ZONE_IDS
 ]
 batched = db.execute(
-    select(RestaurantTable).where(RestaurantTable.zone_id.in_(qa_zone_ids))
+    select(RestaurantTable).where(RestaurantTable.zone_id.in_(new_zone_ids))
 ).scalars().all()
 for row in batched:
     db.delete(row)
