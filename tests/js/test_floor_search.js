@@ -32,6 +32,10 @@ const cardMatches = eval(
   '(' + extract('cardMatches', 'hay, number, value')
     .replace('function cardMatches', 'function') + ')'
 );
+const passesStatus = eval(
+  '(' + extract('passesStatus', 'cardStatus, wanted')
+    .replace('function passesStatus', 'function') + ')'
+);
 
 // Card haystacks carry the table number separately, as the page does.
 function matches(card, value) {
@@ -102,6 +106,24 @@ check(matches(t30, 'moon'), 'zone is searchable');
 check(matches(t30, 'blue'), 'floor is searchable');
 check(matches(t12, 'ord-260721-00012'), 'order code is searchable');
 check(matches(t30, 'unassigned'), 'a table with no waiter is findable');
+
+// Clicking a legend entry filters by status, and ANDs with the text search.
+check(passesStatus('free', null), 'no status filter lets everything through');
+check(passesStatus('free', 'free'), 'a matching status passes');
+check(!passesStatus('occupied', 'free'), 'a different status does not');
+check(passesStatus('ready_to_pay', 'ready_to_pay'),
+      'the underscored status matches its own key');
+check(!passesStatus('free', 'ready_to_pay'), 'and nothing else');
+
+// The combination is the useful part: "which Moon tables are free".
+function shown(card, text, status) {
+  return matches(card, text) && passesStatus(card.status, status);
+}
+const moonFree = { number: '60', hay: 'table 60 moon blue unassigned free', status: 'free' };
+const moonBusy = { number: '61', hay: 'table 61 moon blue sofia martins occupied', status: 'occupied' };
+check(shown(moonFree, 'moon', 'free'), 'text and status combine');
+check(!shown(moonBusy, 'moon', 'free'), 'excluding the same zone in another state');
+check(shown(moonBusy, 'moon', null), 'and the status filter alone can be off');
 
 console.log('\nRESULT:', ok ? 'floor search rules hold' : 'FLOOR SEARCH FAILURES');
 process.exit(ok ? 0 : 1);

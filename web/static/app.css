@@ -272,6 +272,16 @@ tr.dim:hover > td { opacity: 1; }
   width: 9px; height: 9px; border-radius: 50%;
   box-shadow: 0 0 0 2px var(--panel);
 }
+/* Legend entries double as status filters. */
+.legend-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: none; border: 1px solid transparent; border-radius: 999px;
+  padding: 4px 10px; font: inherit; font-size: 12px; color: var(--muted);
+  cursor: pointer;
+}
+.legend-btn:hover { color: var(--ink); border-color: var(--line); }
+.legend-btn.on { color: var(--ink); border-color: var(--accent); background: var(--panel-2); }
+
 .findbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
 .findbar input {
   flex: 1; max-width: 460px; min-height: 0; padding: 9px 12px;

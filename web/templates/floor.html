@@ -6,9 +6,16 @@
     <p class="sub">{{ cards|length }} tables · <span class="spec">req 4.1.1</span></p>
   </div>
   <div class="legend">
-    <span><i class="dot free"></i>Free {{ counts.free }}</span>
-    <span><i class="dot occupied"></i>Occupied {{ counts.occupied }}</span>
-    <span><i class="dot ready_to_pay"></i>Ready to pay {{ counts.ready }}</span>
+    {# Buttons, not labels: clicking a status filters the plan to it. #}
+    <button type="button" class="legend-btn" data-status="free">
+      <i class="dot free"></i>Free {{ counts.free }}
+    </button>
+    <button type="button" class="legend-btn" data-status="occupied">
+      <i class="dot occupied"></i>Occupied {{ counts.occupied }}
+    </button>
+    <button type="button" class="legend-btn" data-status="ready_to_pay">
+      <i class="dot ready_to_pay"></i>Ready to pay {{ counts.ready }}
+    </button>
     {% if delivery_pending %}<span>· <a href="/delivery">{{ delivery_pending }} delivery in queue</a></span>{% endif %}
   </div>
 </div>
@@ -55,6 +62,7 @@
        )|lower %}
     {% if c.order %}
       <a class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
+         data-status="{{ c.table.status }}"
          href="/orders/{{ c.order.id }}">
         <span class="n">Table {{ c.table.number }}</span>
         <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes }}m</span>
@@ -63,7 +71,8 @@
         <span class="tot">${{ c.total_cents|money }}</span>
       </a>
     {% else %}
-      <details class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}">
+      <details class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
+         data-status="{{ c.table.status }}">
         <summary style="cursor:pointer;list-style:none">
           <span class="n">Table {{ c.table.number }}</span><br>
           <span class="meta">{{ c.table.zone }} · seats {{ c.table.capacity }}</span><br>
@@ -107,6 +116,7 @@
 
   const cards = Array.from(document.querySelectorAll('.tbl[data-find]'));
   const sections = Array.from(document.querySelectorAll('section'));
+  const statusBtns = Array.from(document.querySelectorAll('.legend-btn'));
 
   // Two levels, so one box covers both questions a waiter asks:
   //   "table 12 in the Sun zone"  -> "12 sun"    words narrow (AND)
@@ -134,35 +144,62 @@
     });
   }
 
+  // Status is its own filter rather than words typed into the box: it ANDs
+  // with the text, so "moon" plus Free answers "which Moon tables are free".
+  function passesStatus(cardStatus, wanted) {
+    return !wanted || cardStatus === wanted;
+  }
+
+  let statusFilter = null;
+
   function apply() {
     const groups = parse(box.value);
     let shown = 0;
 
     cards.forEach(function (card) {
-      const hit = cardMatches(card.dataset.find, card.dataset.number, box.value);
+      const hit =
+        cardMatches(card.dataset.find, card.dataset.number, box.value) &&
+        passesStatus(card.dataset.status, statusFilter);
       card.hidden = !hit;
       if (hit) shown++;
     });
 
-    // A floor with nothing left to show would otherwise leave a stray heading.
-    sections.forEach(function (sec) {
-      const any = sec.querySelector('.tbl[data-find]:not([hidden])');
-      sec.hidden = groups.length > 0 && !any;
+    statusBtns.forEach(function (btn) {
+      btn.classList.toggle('on', btn.dataset.status === statusFilter);
     });
 
-    const searching = groups.length > 0;
+    // A floor with nothing left to show would otherwise leave a stray heading.
+    const searching = groups.length > 0 || statusFilter !== null;
+
+    sections.forEach(function (sec) {
+      const any = sec.querySelector('.tbl[data-find]:not([hidden])');
+      sec.hidden = searching && !any;
+    });
     countEl.textContent = searching ? shown + ' of ' + cards.length : '';
     clearBtn.hidden = !searching;
     noneEl.hidden = !(searching && shown === 0);
   }
 
+  statusBtns.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      // Clicking the active one clears it, so the legend is its own off switch.
+      statusFilter = (statusFilter === btn.dataset.status) ? null : btn.dataset.status;
+      apply();
+    });
+  });
+
+  function reset() {
+    box.value = '';
+    statusFilter = null;
+    apply();
+  }
+
   box.addEventListener('input', apply);
   box.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') { box.value = ''; apply(); }
+    if (e.key === 'Escape') reset();
   });
   clearBtn.addEventListener('click', function () {
-    box.value = '';
-    apply();
+    reset();
     box.focus();
   });
   apply();
