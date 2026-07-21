@@ -12,6 +12,7 @@ It writes to the real database, so every row it creates is removed at the end.
 The fixtures it makes (table 9001, "QA Probe") never touch an order, so they
 are safe to hard-delete; production rows are not.
 """
+import re
 import sys
 from pathlib import Path
 
@@ -397,12 +398,24 @@ check(r.status_code == 200 and len(made) == 4,
 check(all(x.capacity == 2 for x in made), "each has the seats asked for",
       str({x.capacity for x in made}))
 check(all(x.zone == "Terrace" for x in made), "they carry the zone's label")
+
+# The Total columns start from what the zone already holds; the browser adds
+# the pending Tables x Seats on top.
+fl = client.get("/admin/floors")
+tt = re.search(rf'data-total-tables="{terrace.id}"\s+data-current="(\d+)"', fl.text)
+ts = re.search(rf'data-total-seats="{terrace.id}"\s+data-current="(\d+)"', fl.text)
+check(tt and int(tt.group(1)) == 4,
+      "total tables starts from the zone's current count",
+      tt.group(1) if tt else "not rendered")
+check(ts and int(ts.group(1)) == sum(x.capacity for x in made),
+      "total seats starts from the zone's current seats",
+      ts.group(1) if ts else "not rendered")
+check('name="count"' in fl.text and 'name="capacity"' in fl.text,
+      "the zone row carries the tables and seats inputs")
 check(len({(x.pos_x, x.pos_y) for x in made}) == 4,
       "they land on four distinct squares")
 
 # The tables page shows one floor at a time — its own grid and its own list.
-import re  # noqa: E402
-
 r = client.get(f"/admin/tables?floor={roof.id}")
 rows = len(re.findall(r'name="table_ids"', r.text))
 on_roof = db.execute(

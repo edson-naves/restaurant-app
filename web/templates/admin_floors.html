@@ -100,7 +100,8 @@
         <tr>
           <th>Zone</th><th>Colour</th><th>Order</th>
           <th class="num">Tables</th><th class="num">Seats</th>
-          <th>3 · Add tables</th><th></th>
+          <th class="num">Total tables</th><th class="num">Total seats</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
@@ -124,19 +125,25 @@
               <button class="btn sm" title="Move down" {{ 'disabled' if loop.last else '' }}>&darr;</button>
             </form>
           </td>
-          <td class="num">{{ counts.get(z.id, 0) }}</td>
-          <td class="num">{{ seats.get(z.id, 0) }}</td>
-          <td style="white-space:nowrap">
-            <input form="zt{{ z.id }}" type="number" name="count" min="1" max="50" value="4"
-                   title="How many tables" style="width:70px">
-            ×
-            <input form="zt{{ z.id }}" type="number" name="capacity" min="1" max="20" value="2"
-                   title="Seats each" style="width:70px">
-            seats
-            <button form="zt{{ z.id }}" class="btn sm primary"
-                    {{ 'disabled' if not z.is_active or not f.is_active else '' }}>Add</button>
+          {# Tables/Seats are what you are adding; the Total columns preview
+             what the zone will hold once you press Add — current + new. #}
+          <td class="num">
+            <input form="zt{{ z.id }}" type="number" name="count" min="0" max="50" value="0"
+                   class="addcount" data-zone="{{ z.id }}"
+                   title="How many tables to add" style="width:72px;text-align:right">
           </td>
+          <td class="num">
+            <input form="zt{{ z.id }}" type="number" name="capacity" min="1" max="20" value="2"
+                   class="addseats" data-zone="{{ z.id }}"
+                   title="Seats on each new table" style="width:72px;text-align:right">
+          </td>
+          <td class="num" data-total-tables="{{ z.id }}"
+              data-current="{{ counts.get(z.id, 0) }}">{{ counts.get(z.id, 0) }}</td>
+          <td class="num" data-total-seats="{{ z.id }}"
+              data-current="{{ seats.get(z.id, 0) }}">{{ seats.get(z.id, 0) }}</td>
           <td style="white-space:nowrap">
+            <button form="zt{{ z.id }}" class="btn sm primary addbtn" data-zone="{{ z.id }}"
+                    {{ 'disabled' if not z.is_active or not f.is_active else '' }}>Add</button>
             <button form="zf{{ z.id }}" class="btn sm">Save</button>
             {% if z.is_active %}
               <form method="post" action="/admin/zones/{{ z.id }}/active" style="display:inline">
@@ -165,4 +172,47 @@
 {% else %}
 <div class="card"><p class="empty">No floors yet — name your first one above.</p></div>
 {% endfor %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Total = what the zone holds now + what the Tables/Seats boxes would add.
+// Typing 0 tables leaves the totals showing the current state, so the columns
+// always read as the truth rather than a guess.
+(function () {
+  function totalsFor(zoneId) {
+    const count = document.querySelector('.addcount[data-zone="' + zoneId + '"]');
+    const seats = document.querySelector('.addseats[data-zone="' + zoneId + '"]');
+    const tCell = document.querySelector('[data-total-tables="' + zoneId + '"]');
+    const sCell = document.querySelector('[data-total-seats="' + zoneId + '"]');
+    const btn = document.querySelector('.addbtn[data-zone="' + zoneId + '"]');
+    if (!count || !tCell) return;
+
+    const n = Math.max(0, parseInt(count.value, 10) || 0);
+    const each = Math.max(0, parseInt(seats.value, 10) || 0);
+    const baseTables = parseInt(tCell.dataset.current, 10) || 0;
+    const baseSeats = parseInt(sCell.dataset.current, 10) || 0;
+
+    tCell.textContent = baseTables + n;
+    sCell.textContent = baseSeats + n * each;
+    // Highlight only while the preview differs from what is stored.
+    tCell.classList.toggle('pending', n > 0);
+    sCell.classList.toggle('pending', n > 0);
+    // The server rejects a count below 1; do not let the click get that far.
+    if (btn && !btn.hasAttribute('data-locked')) btn.disabled = (n < 1);
+  }
+
+  document.querySelectorAll('.addcount, .addseats').forEach(function (input) {
+    // Buttons already disabled server-side (retired zone or floor) must stay
+    // that way regardless of what is typed.
+    const btn = document.querySelector('.addbtn[data-zone="' + input.dataset.zone + '"]');
+    if (btn && btn.disabled) btn.setAttribute('data-locked', '1');
+    input.addEventListener('input', function () { totalsFor(input.dataset.zone); });
+  });
+
+  document.querySelectorAll('.addcount').forEach(function (input) {
+    totalsFor(input.dataset.zone);
+  });
+})();
+</script>
 {% endblock %}
