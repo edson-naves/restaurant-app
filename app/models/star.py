@@ -233,6 +233,7 @@ class FactPayment(Base):
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     tip_cents: Mapped[int] = mapped_column(Integer, default=0)
     discount_cents: Mapped[int] = mapped_column(Integer, default=0)
+    tax_cents: Mapped[int] = mapped_column(Integer, default=0)
     total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     is_partial_close: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -282,6 +283,7 @@ class FactOrderHeader(Base):
 
     subtotal_cents: Mapped[int] = mapped_column(Integer, default=0)
     discount_cents: Mapped[int] = mapped_column(Integer, default=0)
+    tax_cents: Mapped[int] = mapped_column(Integer, default=0)
     tip_cents: Mapped[int] = mapped_column(Integer, default=0)
     total_cents: Mapped[int] = mapped_column(Integer, default=0)
     duration_minutes: Mapped[int] = mapped_column(Integer, default=0)

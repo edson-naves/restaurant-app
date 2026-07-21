@@ -19,7 +19,7 @@ from app.models.oltp import (
     Seat,
     Staff,
 )
-from app.services.money import pct
+from app.services.money import GST_NUMBER, GST_RATE, money, pct
 from app.services.payments import (
     PaymentError,
     assign_item_to_seat,
@@ -71,7 +71,8 @@ def payment_screen(
         "db": db, "staff": staff, "order": order,
         "ledgers": [ledgers[s.id] for s in order.seats if s.id in ledgers],
         "unassigned": unassigned, "panel": panel, "instruments": usable,
-        "managers": managers, "title": f"Payment · {order.code}",
+        "managers": managers, "gst_rate": GST_RATE,
+        "title": f"Payment · {order.code}",
     })
 
 
@@ -293,7 +294,18 @@ def view_receipt(
     ).scalars().first()
     if receipt is None:
         raise HTTPException(404, "No receipt was issued for that payment.")
+    data = json.loads(receipt.payload_json)
+
+    # Tip guide is figured on the pre-tax subtotal (the convention), parsed back
+    # from the stored display string so the receipt stays a pure render of the
+    # saved payload.
+    subtotal_cents = round(float(data["subtotal"].replace(",", "")) * 100)
+    tip_guide = {
+        "p20": money(pct(subtotal_cents, 20)),
+        "p18": money(pct(subtotal_cents, 18)),
+        "p15": money(pct(subtotal_cents, 15)),
+    }
     return render(request, "receipt.html", {
-        "db": db, "staff": staff, "receipt": receipt,
-        "data": json.loads(receipt.payload_json), "title": "Receipt",
+        "db": db, "staff": staff, "receipt": receipt, "data": data,
+        "tip_guide": tip_guide, "gst_number": GST_NUMBER, "title": "Receipt",
     })

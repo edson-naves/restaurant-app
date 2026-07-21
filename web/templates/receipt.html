@@ -11,19 +11,32 @@
   </div>
 </div>
 
+{# Restaurant identity is config, not data — edit these four lines and the GST
+   number in app/services/money.py to match the business. #}
+{% set biz_name = "THE RESTAURANT" %}
+{% set biz_addr = "53 Water St. · Anytown" %}
+{% set biz_phone = "000-000-0000" %}
+
 <div class="receipt">
-  <div class="c b">THE RESTAURANT</div>
-  <div class="c" style="font-size:11px">Sit-down &amp; Delivery</div>
+  <div class="c b" style="font-size:18px;letter-spacing:1px">{{ biz_name }}</div>
+  <div class="c" style="font-size:11px">{{ biz_addr }}</div>
+  <div class="c" style="font-size:11px">{{ biz_phone }}</div>
   <hr>
-  <div class="l"><span>Order</span><span>{{ data.order_code }}</span></div>
-  {% if data.seat %}<div class="l"><span>Seat</span><span>{{ data.seat }}</span></div>{% endif %}
-  <div class="l"><span>Served by</span><span>{{ data.served_by }}</span></div>
-  <div class="l"><span>Date</span><span>{{ data.issued_at.replace('T', ' ') }}</span></div>
+
+  <div class="l"><span>Server:</span><span>{{ data.served_by or '—' }}</span></div>
+  <div class="l"><span>Printed by:</span><span>{{ staff.name }}</span></div>
+  <div class="l">
+    <span>ID: {{ data.payment_id | default(receipt.payment_id) }}{% if data.seat %} · seat {{ data.seat }}{% endif %}</span>
+    <span>{{ data.issued_at.replace('T', ' ') }}</span>
+  </div>
+  {% if data.table %}<div class="l"><span>Table</span><span>{{ data.table }}</span></div>{% endif %}
+
   {% if data.partial_close %}
   <hr>
   <div class="c b">PARTIAL CLOSE — GUEST DEPARTED EARLY</div>
   {% endif %}
   <hr>
+
   {% for l in data.lines %}
   <div class="l">
     <span>{{ l.qty }}× {{ l.item }}{% if l.shared %} (shared){% endif %}</span>
@@ -31,16 +44,46 @@
   </div>
   {% endfor %}
   <hr>
+
+  {% if data.item_count is defined %}
+  <div class="l"><span>Total number of items:</span><span>{{ data.item_count }}</span></div>
+  <hr>
+  {% endif %}
+
   <div class="l"><span>Subtotal</span><span>{{ data.subtotal }}</span></div>
+  {% if data.discount != '0.00' %}
   <div class="l"><span>Discount</span><span>-{{ data.discount }}</span></div>
+  {% endif %}
+  {% if data.tax is defined %}
+  <div class="l"><span>GST ({{ data.tax_rate }}%)</span><span>{{ data.tax }}</span></div>
+  {% endif %}
+  {% if data.tip != '0.00' %}
   <div class="l"><span>Tip</span><span>{{ data.tip }}</span></div>
+  {% endif %}
   <div class="l b" style="font-size:15px"><span>TOTAL</span><span>{{ data.total }}</span></div>
   <hr>
+
   <div class="l">
     <span>Paid by</span>
     <span>{{ data.instrument }}{% if data.card_last4 %} ••{{ data.card_last4 }}{% endif %}</span>
   </div>
   <hr>
-  <div class="c">Thank you!</div>
+
+  <div class="c" style="margin:6px 0">Please pay your server</div>
+  <div class="c" style="font-size:11px;color:#555">
+    We would love to hear about your experience.
+  </div>
+  <hr>
+
+  {# Tip guide is off the pre-tax subtotal, the amount tips are conventionally
+     figured on. Shown for the guest's convenience; the till does not add it. #}
+  <div class="c b" style="font-size:12px">Tip guide</div>
+  <div class="l" style="font-size:12px"><span>20%</span><span>{{ tip_guide.p20 }}</span></div>
+  <div class="l" style="font-size:12px"><span>18%</span><span>{{ tip_guide.p18 }}</span></div>
+  <div class="l" style="font-size:12px"><span>15%</span><span>{{ tip_guide.p15 }}</span></div>
+  <hr>
+
+  <div class="c" style="font-size:10px;color:#555">GST# {{ gst_number }}</div>
+  <div class="c" style="margin-top:6px">Thank you!</div>
 </div>
 {% endblock %}

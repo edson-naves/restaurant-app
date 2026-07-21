@@ -35,7 +35,7 @@ from app.models.oltp import (
     SharedItemShare,
     TableStatus,
 )
-from app.services.money import distribute, money, pct, split_evenly
+from app.services.money import GST_RATE, distribute, gst, money, pct, split_evenly
 
 
 # --------------------------------------------------------------------------
@@ -314,7 +314,8 @@ def pay_seat(
             raise PaymentError("A discount requires manager approval.")
         discount_cents = min(discount_cents, items_cents)
 
-    total_cents = items_cents - discount_cents + tip_cents
+    tax_cents = gst(items_cents - discount_cents)
+    total_cents = items_cents - discount_cents + tax_cents + tip_cents
     if total_cents < 0:
         raise PaymentError("Payment total cannot be negative.")
 
@@ -326,6 +327,7 @@ def pay_seat(
         items_cents=items_cents,
         tip_cents=tip_cents,
         discount_cents=discount_cents,
+        tax_cents=tax_cents,
         total_cents=total_cents,
         card_brand=instrument.card_brand,
         card_last4=card_last4 if instrument.instrument_type in ("card", "contactless") else None,
@@ -417,7 +419,8 @@ def pay_whole_order(
         items_cents=items_cents,
         tip_cents=tip_cents,
         discount_cents=discount_cents,
-        total_cents=items_cents - discount_cents + tip_cents,
+        tax_cents=gst(items_cents - discount_cents),
+        total_cents=items_cents - discount_cents + gst(items_cents - discount_cents) + tip_cents,
         card_brand=instrument.card_brand,
         card_last4=card_last4 if instrument.instrument_type in ("card", "contactless") else None,
         created_at=datetime.now(),
@@ -503,13 +506,20 @@ def _issue_receipt(
 
     payload = {
         "order_code": order.code,
+        "payment_id": payment.id,
         "seat": seat.seat_number if seat else None,
+        "table": order.table.number if order.table else None,
         "issued_at": datetime.now().isoformat(timespec="seconds"),
         "lines": lines,
+        # Field 5 on the printed chit: the guest counts the tray against it.
+        "item_count": sum(alloc.order_item.quantity for alloc in payment.allocations),
         "subtotal": money(payment.items_cents),
         "discount": money(payment.discount_cents),
+        "tax": money(payment.tax_cents),
+        "tax_rate": GST_RATE,
         "tip": money(payment.tip_cents),
         "total": money(payment.total_cents),
+        "total_cents": payment.total_cents,
         "instrument": payment.instrument.name,
         "card_last4": payment.card_last4,
         "served_by": payment.staff.name if payment.staff else "",

@@ -23,6 +23,12 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # Nullable on purpose: Zone.swatch falls back to the palette, so existing
     # zones are colour-coded without having to backfill a value.
     ("zone", "color", "VARCHAR(7)"),
+    # GST. Defaulting to 0 keeps pre-tax payments' stored total consistent
+    # (items - discount + tip) so reconciliation still ties. The two fact
+    # columns exist because ETL reloads into a table create_all already made.
+    ("payment", "tax_cents", "INTEGER NOT NULL DEFAULT 0"),
+    ("fact_payment", "tax_cents", "INTEGER NOT NULL DEFAULT 0"),
+    ("fact_order_header", "tax_cents", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 DEFAULT_FLOOR = "1st floor"

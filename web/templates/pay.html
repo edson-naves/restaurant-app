@@ -123,6 +123,9 @@
             Guest is leaving early — close their portion only <span class="spec">req 4.2.5</span>
           </label>
 
+          <p class="sub" style="margin:0 0 8px">
+            GST {{ gst_rate }}% is added to the item subtotal at payment.
+          </p>
           <button class="btn good" style="width:100%">Confirm payment</button>
         </form>
       </details>
@@ -180,7 +183,10 @@
             <label><input type="radio" name="tip_mode" value="20"> 20%</label>
           </div>
         </div>
-        <button class="btn primary" style="width:100%">Settle ${{ panel.owed_cents|money }}</button>
+        <p class="sub" style="margin:0 0 8px">
+          Plus GST {{ gst_rate }}% on the items, and any tip.
+        </p>
+        <button class="btn primary" style="width:100%">Settle ${{ panel.owed_cents|money }} + GST</button>
       </form>
     </div>
     {% endif %}

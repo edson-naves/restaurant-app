@@ -108,6 +108,17 @@ through the operational model.
 
 **No raw card numbers are stored** (section 5) — brand and last 4 only.
 
+**GST is charged at payment, on the discounted item subtotal.** `total = items
+− discount + tax + tip`; the tip is not taxed. Tax is a payment-level field
+alongside tip and discount — it never enters a `PaymentAllocation`, which stays
+pure item value, so the "every item traces to an instrument" invariant (4.2.2)
+and the reconciliation are untouched. The ETL distributes it to the allocation
+grain the same way it distributes tips, so `sum(fact_payment.tax_cents)`
+reproduces the payment-level GST exactly. Payments taken before tax existed
+carry `tax_cents = 0`, so their stored total still equals `items − discount +
+tip` and reconciles. The rate and registration number are config in
+`app/services/money.py` (`GST_RATE`, `GST_NUMBER`).
+
 **Setup data is deactivated, never deleted** (`routers/admin.py`). A table,
 staff member or menu item that has ever appeared on an order is referenced by
 that order, its payments, its receipts and the star-schema dimensions built

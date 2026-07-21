@@ -486,6 +486,9 @@ def load_facts_for_order(db: Session, order: Order) -> tuple[int, int]:
         amounts = [a.amount_cents for a in allocs]
         tips = distribute(payment.tip_cents, amounts)
         discounts = distribute(payment.discount_cents, amounts)
+        # Tax rides down to the allocation grain the same way, so summing
+        # fact_payment.tax_cents reproduces the payment-level GST exactly.
+        taxes = distribute(payment.tax_cents, amounts)
 
         p_date = date_key_of(payment.created_at)
         p_time = time_key_of(payment.created_at)
@@ -514,7 +517,8 @@ def load_facts_for_order(db: Session, order: Order) -> tuple[int, int]:
                     amount_cents=alloc.amount_cents,
                     tip_cents=tips[j],
                     discount_cents=discounts[j],
-                    total_cents=alloc.amount_cents - discounts[j] + tips[j],
+                    tax_cents=taxes[j],
+                    total_cents=alloc.amount_cents - discounts[j] + taxes[j] + tips[j],
                     is_partial_close=payment.is_partial_close,
                 )
             )
@@ -523,6 +527,7 @@ def load_facts_for_order(db: Session, order: Order) -> tuple[int, int]:
     # ---- fact_order_header ----------------------------------------------
     subtotal = sum(gross_by_item)
     tip_total = sum(p.tip_cents for p in order.payments)
+    tax_total = sum(p.tax_cents for p in order.payments)
     total = sum(p.total_cents for p in order.payments)
     closed = order.closed_at or opened
     duration = max(0, int((closed - opened).total_seconds() // 60))
@@ -549,6 +554,7 @@ def load_facts_for_order(db: Session, order: Order) -> tuple[int, int]:
             had_partial_close=any(p.is_partial_close for p in order.payments),
             subtotal_cents=subtotal,
             discount_cents=disc_total,
+            tax_cents=tax_total,
             tip_cents=tip_total,
             total_cents=total,
             duration_minutes=duration,

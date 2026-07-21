@@ -455,6 +455,9 @@ class Payment(Base):
     items_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tip_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     discount_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # GST on (items - discount). Zero on payments taken before tax existed, so
+    # their stored total still equals items - discount + tip and reconciles.
+    tax_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     # Security (section 5): never store a raw card number — brand + last 4 only.

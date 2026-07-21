@@ -21,6 +21,7 @@ from app.database import SessionLocal  # noqa: E402
 from app.models.oltp import (  # noqa: E402
     Order,
     PaymentInstrument,
+    Receipt,
     RestaurantTable,
     Role,
     Seat,
@@ -252,6 +253,32 @@ check(p1.card_last4 == "4242" and p1.card_brand == "Visa",
       "card brand + last 4 stored, never a raw number (section 5)")
 check(len(p1.allocations) >= 2,
       "4.2.2: payment allocates to each item it covers", f"{len(p1.allocations)} allocations")
+
+# GST (section 4.2): tax on the item subtotal, and the total is items + tax + tip.
+from app.services.money import GST_RATE, gst  # noqa: E402
+
+check(p1.tax_cents == gst(p1.items_cents - p1.discount_cents),
+      f"GST {GST_RATE}% charged on the item subtotal",
+      f"${money(p1.tax_cents)} on ${money(p1.items_cents)}")
+check(p1.total_cents == p1.items_cents - p1.discount_cents + p1.tax_cents + p1.tip_cents,
+      "total = items - discount + tax + tip",
+      f"${money(p1.total_cents)}")
+check(p1.tax_cents > 0, "the tax line is non-zero for a real charge")
+
+# Allocations still cover only item value — tax rides on the payment, not the
+# allocation, so the reconciliation invariant is untouched.
+check(sum(a.amount_cents for a in p1.allocations) == p1.items_cents,
+      "allocations sum to item value, with no tax mixed in")
+
+# The receipt shows GST, the item count, and the tip guide (ref: printed chit).
+receipt_row = db.execute(
+    select(Receipt).where(Receipt.payment_id == p1.id)
+).scalars().first()
+rr = client.get(f"/payments/{p1.id}/receipt")
+check(rr.status_code == 200, "receipt renders for the payment")
+for label in (f"GST ({GST_RATE}%)", "Total number of items:", "Please pay your server",
+              "Tip guide", "GST#"):
+    check(label in rr.text, f"receipt shows '{label}'")
 
 # Seat 2 pays cash — different instrument, same order (4.2.2).
 seat2 = db.execute(select(Seat).where(Seat.order_id == order_id, Seat.seat_number == 2)).scalar_one()

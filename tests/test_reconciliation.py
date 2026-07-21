@@ -93,6 +93,27 @@ fact_disc = db.execute(select(func.coalesce(func.sum(FactPayment.discount_cents)
 check(src_disc == fact_disc, "discounts survive allocation to allocation grain",
       f"{money(src_disc)} vs {money(fact_disc)}")
 
+src_tax = db.execute(
+    select(func.coalesce(func.sum(Payment.tax_cents), 0)).where(Payment.order_id.in_(closed_ids))
+).scalar_one()
+fact_tax = db.execute(select(func.coalesce(func.sum(FactPayment.tax_cents), 0))).scalar_one()
+check(src_tax == fact_tax, "GST survives proportional allocation to allocation grain",
+      f"{money(src_tax)} vs {money(fact_tax)}")
+hdr_tax = db.execute(select(func.coalesce(func.sum(FactOrderHeader.tax_cents), 0))).scalar_one()
+check(src_tax == hdr_tax, "GST: OLTP payments == fact_order_header",
+      f"{money(src_tax)} vs {money(hdr_tax)}")
+
+# The whole equation must hold at payment level: total = items - disc + tax + tip.
+bad_total = db.execute(
+    select(func.count()).select_from(Payment).where(
+        Payment.order_id.in_(closed_ids),
+        Payment.total_cents
+        != Payment.items_cents - Payment.discount_cents + Payment.tax_cents + Payment.tip_cents,
+    )
+).scalar_one()
+check(bad_total == 0, "every payment total equals items - discount + tax + tip",
+      f"{bad_total} rows break the identity")
+
 # Item gross in facts must equal the source line totals.
 src_gross = 0
 for item in db.execute(select(OrderItem).where(OrderItem.order_id.in_(closed_ids))).scalars():
