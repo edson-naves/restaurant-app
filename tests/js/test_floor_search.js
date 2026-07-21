@@ -70,9 +70,20 @@ check(!matches({ number: '44', hay: 'table 44 sun blue unassigned free' }, '12, 
 // A number means the table number, never digits found elsewhere on the card.
 check(!matches(t12, '21'),
       'a number does not match digits inside an order code');
-check(matches(t12, '1'), 'a partial number matches as a prefix while typing');
-check(matches(t120, '12'), 'prefix matching reaches longer numbers');
-check(!matches(t21, '1'), 'but not numbers that merely contain the digits');
+check(!matches(t12, '1'), 'a partial number does not match a longer one');
+check(!matches(t120, '12'), 'searching 12 does not pull in 120');
+check(matches(t120, '120'), 'the full number does match');
+check(!matches(t21, '1'), 'nor do numbers that merely contain the digits');
+
+// The case that started this: 6 must not drag in the sixties.
+const t6 = { number: '6', hay: 'table 6 main 1st floor sofia martins occupied' };
+const t60 = { number: '60', hay: 'table 60 moon blue unassigned free' };
+const t69 = { number: '69', hay: 'table 69 moon blue unassigned free' };
+check(matches(t6, '6'), 'searching 6 finds table 6');
+check(!matches(t60, '6'), 'and not table 60');
+check(!matches(t69, '6'), 'and not table 69');
+check(matches(t6, '13, 21, 6'), 'a comma list still finds it exactly');
+check(!matches(t60, '13, 21, 6'), 'without dragging in the sixties');
 
 // The two levels combine.
 check(matches(t21, '12 sofia, 21 emma'), 'groups can each have several words');

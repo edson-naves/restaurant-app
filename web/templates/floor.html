@@ -124,11 +124,11 @@
     if (groups.length === 0) return true;
     return groups.some(function (words) {
       return words.every(function (w) {
-        // A run of digits means a table number. Matching it as plain text
-        // would hit any number on the card — searching 21 would turn up
-        // table 12 because its order code reads ord-260721-00012.
-        // Prefix, not equality, so the list narrows as digits are typed.
-        if (/^\d+$/.test(w)) return number.indexOf(w) === 0;
+        // A run of digits means that exact table number. Matching it as plain
+        // text would hit any number on the card — searching 21 would turn up
+        // table 12, whose order code reads ord-260721-00012. Matching it as a
+        // prefix was no better: 6 pulled in 60 through 69.
+        if (/^\d+$/.test(w)) return number === w;
         return hay.indexOf(w) !== -1;
       });
     });
