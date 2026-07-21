@@ -541,12 +541,16 @@ def floors_page(
     request: Request,
     done: int = 0,
     created: str = "",
+    floor: int = 0,
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
     floors = db.execute(
         select(Floor).order_by(Floor.sort_order, Floor.name)
     ).scalars().all()
+    # One floor's zones at a time, picked from the selector. Retired floors stay
+    # in the list so they can be restored.
+    current = next((f for f in floors if f.id == floor), floors[0] if floors else None)
     tables = db.execute(select(RestaurantTable)).scalars().all()
 
     counts: dict[int, int] = {}
@@ -556,7 +560,7 @@ def floors_page(
 
     return render(request, "admin_floors.html", {
         "db": db, "staff": staff,
-        "floors": floors, "counts": counts,
+        "floors": floors, "current_floor": current, "counts": counts,
         "done": done, "created": created,
         "seats": {
             z.id: sum(t.capacity for t in tables if t.zone_id == z.id)
@@ -604,6 +608,7 @@ def create_zones(
 
     wanted = _parse_names(names, limit=26)
     existing = {z.name for z in floor.zones}
+    back = f"/admin/floors?floor={floor_id}"
     top = max([z.sort_order for z in floor.zones], default=-1)
 
     made = 0
@@ -616,7 +621,7 @@ def create_zones(
         made += 1
 
     db.commit()
-    return RedirectResponse(f"/admin/floors?done={made}", status_code=303)
+    return RedirectResponse(f"{back}&done={made}", status_code=303)
 
 
 @router.post("/zones/{zone_id}/tables")
@@ -638,7 +643,8 @@ def create_zone_tables(
     db.commit()
     span = f"{made[0]}" if len(made) == 1 else f"{made[0]}–{made[-1]}"
     return RedirectResponse(
-        f"/admin/floors?done={len(made)}&created={span}", status_code=303
+        f"/admin/floors?floor={zone.floor_id}&done={len(made)}&created={span}",
+        status_code=303,
     )
 
 
@@ -676,7 +682,7 @@ def move_floor(
     ).scalars().all()
     _reorder(list(siblings), floor, direction)
     db.commit()
-    return RedirectResponse("/admin/floors", status_code=303)
+    return RedirectResponse(f"/admin/floors?floor={floor_id}", status_code=303)
 
 
 @router.post("/zones/{zone_id}/move")
@@ -695,7 +701,7 @@ def move_zone(
     ).scalars().all()
     _reorder(list(siblings), zone, direction)
     db.commit()
-    return RedirectResponse("/admin/floors", status_code=303)
+    return RedirectResponse(f"/admin/floors?floor={zone.floor_id}", status_code=303)
 
 
 @router.post("/floors/{floor_id}/edit")
@@ -718,7 +724,7 @@ def edit_floor(
         raise HTTPException(400, f"A floor called '{name}' already exists.")
     floor.name = name
     db.commit()
-    return RedirectResponse("/admin/floors", status_code=303)
+    return RedirectResponse(f"/admin/floors?floor={floor_id}", status_code=303)
 
 
 @router.post("/floors/{floor_id}/active")
@@ -743,7 +749,7 @@ def toggle_floor(
             )
     floor.is_active = bool(active)
     db.commit()
-    return RedirectResponse("/admin/floors", status_code=303)
+    return RedirectResponse(f"/admin/floors?floor={floor_id}", status_code=303)
 
 
 @router.post("/zones/{zone_id}/edit")
@@ -777,7 +783,7 @@ def edit_zone(
     ).scalars().all():
         t.zone = name
     db.commit()
-    return RedirectResponse("/admin/floors", status_code=303)
+    return RedirectResponse(f"/admin/floors?floor={zone.floor_id}", status_code=303)
 
 
 @router.post("/zones/{zone_id}/active")
@@ -800,7 +806,7 @@ def toggle_zone(
             )
     zone.is_active = bool(active)
     db.commit()
-    return RedirectResponse("/admin/floors", status_code=303)
+    return RedirectResponse(f"/admin/floors?floor={zone.floor_id}", status_code=303)
 
 
 # --------------------------------------------------------------------------

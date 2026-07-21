@@ -401,7 +401,8 @@ check(all(x.zone == "Terrace" for x in made), "they carry the zone's label")
 
 # The Total columns start from what the zone already holds; the browser adds
 # the pending Tables x Seats on top.
-fl = client.get("/admin/floors")
+# The page shows one floor at a time, so ask for the one Terrace is on.
+fl = client.get(f"/admin/floors?floor={roof.id}")
 tt = re.search(rf'data-total-tables="{terrace.id}"\s+data-current="(\d+)"', fl.text)
 ts = re.search(rf'data-total-seats="{terrace.id}"\s+data-current="(\d+)"', fl.text)
 check(tt and int(tt.group(1)) == 4,
@@ -412,6 +413,16 @@ check(ts and int(ts.group(1)) == sum(x.capacity for x in made),
       ts.group(1) if ts else "not rendered")
 check('name="count"' in fl.text and 'name="capacity"' in fl.text,
       "the zone row carries the tables and seats inputs")
+
+# The floor selector lists every floor but renders only the chosen one.
+check(fl.text.count('href="/admin/floors?floor=') >= 2,
+      "the page offers a selector for every floor")
+other_floor = fresh(Floor, name="QA Ground")
+check(f'data-total-tables="{terrace.id}"' in fl.text,
+      "the selected floor's zones are shown")
+fl2 = client.get(f"/admin/floors?floor={other_floor.id}")
+check(f'data-total-tables="{terrace.id}"' not in fl2.text,
+      "another floor's zones are not")
 check(len({(x.pos_x, x.pos_y) for x in made}) == 4,
       "they land on four distinct squares")
 

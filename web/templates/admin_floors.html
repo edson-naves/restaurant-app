@@ -42,7 +42,18 @@
   </form>
 </div>
 
-{% for f in floors %}
+{% if floors|length > 1 %}
+<nav class="subtabs" style="position:static;padding:0;background:none;margin-bottom:16px">
+  {% for f in floors %}
+  <a href="/admin/floors?floor={{ f.id }}"
+     class="{{ 'on' if current_floor and f.id == current_floor.id else '' }}">
+    {{ f.name }}{% if not f.is_active %} (retired){% endif %}
+  </a>
+  {% endfor %}
+</nav>
+{% endif %}
+
+{% for f in floors if current_floor and f.id == current_floor.id %}
 <div class="card">
   <form method="post" action="/admin/floors/{{ f.id }}/edit" id="ff{{ f.id }}"></form>
   {% for z in f.zones %}
@@ -57,15 +68,17 @@
         <input form="ff{{ f.id }}" type="text" name="name" value="{{ f.name }}">
       </div>
       <button form="ff{{ f.id }}" class="btn sm">Save</button>
+      {# Position within every floor, not within this one-item loop. #}
+      {% set fpos = floors.index(f) %}
       <form method="post" action="/admin/floors/{{ f.id }}/move" style="display:inline">
         <input type="hidden" name="direction" value="up">
         <button class="btn sm" title="Move this floor up the list"
-                {{ 'disabled' if loop.first else '' }}>&uarr;</button>
+                {{ 'disabled' if fpos == 0 else '' }}>&uarr;</button>
       </form>
       <form method="post" action="/admin/floors/{{ f.id }}/move" style="display:inline">
         <input type="hidden" name="direction" value="down">
         <button class="btn sm" title="Move this floor down the list"
-                {{ 'disabled' if loop.last else '' }}>&darr;</button>
+                {{ 'disabled' if fpos == floors|length - 1 else '' }}>&darr;</button>
       </form>
       {% if not f.is_active %}<span class="pill open">retired</span>{% endif %}
     </div>
