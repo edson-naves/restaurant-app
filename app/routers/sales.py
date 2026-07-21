@@ -80,11 +80,30 @@ def floor_plan(request: Request, db: Session = Depends(get_db), staff: Staff = D
             }
         )
 
-    counts = {
-        "free": sum(1 for c in cards if c["table"].status == TableStatus.FREE),
-        "occupied": sum(1 for c in cards if c["table"].status == TableStatus.OCCUPIED),
-        "ready": sum(1 for c in cards if c["table"].status == TableStatus.READY_TO_PAY),
-    }
+    def tally(group):
+        return {
+            "free": sum(1 for c in group if c["table"].status == TableStatus.FREE),
+            "occupied": sum(1 for c in group if c["table"].status == TableStatus.OCCUPIED),
+            "ready": sum(1 for c in group if c["table"].status == TableStatus.READY_TO_PAY),
+        }
+
+    counts = tally(cards)
+
+    # One section per floor rather than one grid of everything: a waiter works a
+    # floor, and 50+ cards from three storeys interleaved cannot be scanned.
+    # Sections, not tabs — nothing is hidden behind a click mid-service.
+    sections = []
+    for floor in sorted(
+        {c["table"].floor for c in cards if c["table"].floor},
+        key=lambda f: (f.sort_order, f.name),
+    ):
+        group = [c for c in cards if c["table"].floor_id == floor.id]
+        sections.append({"floor": floor, "cards": group, "counts": tally(group)})
+
+    # A table whose zone was removed would otherwise vanish from the floor.
+    homeless = [c for c in cards if not c["table"].floor]
+    if homeless:
+        sections.append({"floor": None, "cards": homeless, "counts": tally(homeless)})
 
     delivery_pending = db.execute(
         select(func.count()).select_from(DeliveryOrder).where(
@@ -94,6 +113,7 @@ def floor_plan(request: Request, db: Session = Depends(get_db), staff: Staff = D
 
     return render(request, "floor.html", {
         "db": db, "staff": staff, "cards": cards, "counts": counts,
+        "sections": sections,
         "delivery_pending": delivery_pending, "title": "Floor plan",
     })
 

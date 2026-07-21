@@ -13,8 +13,23 @@
   </div>
 </div>
 
+{# 'sec', not 's' — the seat-guests form below already loops `s` over staff. #}
+{% for sec in sections %}
+<section style="margin-bottom:26px">
+  {% if sections|length > 1 %}
+  <div class="between" style="margin-bottom:10px">
+    <h2 style="margin:0;font-size:16px">{{ sec.floor.name if sec.floor else 'No floor assigned' }}</h2>
+    <div class="legend">
+      <span><i class="dot free"></i>{{ sec.counts.free }}</span>
+      <span><i class="dot occupied"></i>{{ sec.counts.occupied }}</span>
+      <span><i class="dot ready_to_pay"></i>{{ sec.counts.ready }}</span>
+      <span class="meta">{{ sec.cards|length }} tables</span>
+    </div>
+  </div>
+  {% endif %}
+
 <div class="floor">
-  {% for c in cards %}
+  {% for c in sec.cards %}
     {% if c.order %}
       <a class="tbl {{ c.table.status }}" href="/orders/{{ c.order.id }}">
         <span class="n">Table {{ c.table.number }}</span>
@@ -53,4 +68,6 @@
     {% endif %}
   {% endfor %}
 </div>
+</section>
+{% endfor %}
 {% endblock %}
