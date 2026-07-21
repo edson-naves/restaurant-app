@@ -65,42 +65,13 @@
 
 <div class="row">
   <div class="card">
-    <strong>Add several</strong>
+    <strong>Add one table</strong>
     <p class="sub" style="margin:2px 0 10px">
-      e.g. 4 tables with 2 seats. Numbering continues from {{ next_number }}
-      — table numbers are unique across the whole restaurant.
+      Numbering continues from {{ next_number }} — table numbers are unique
+      across the whole restaurant. To add several at once, use
+      <a href="/admin/floors">Floors &amp; zones</a>.
     </p>
-    <form method="post" action="/admin/tables/create-batch">
-      <div class="row" style="gap:10px">
-        <div class="field" style="min-width:0">
-          <label>How many</label>
-          <input type="number" name="count" min="1" max="50" value="4" required>
-        </div>
-        <div class="field" style="min-width:0">
-          <label>Seats each</label>
-          <input type="number" name="capacity" min="1" max="20" value="2" required>
-        </div>
-      </div>
-      <div class="field">
-        <label>Floor &amp; zone <a href="/admin/floors" class="meta">(add more)</a></label>
-        <select name="zone_id" required>
-          {% for z in zones %}
-          <option value="{{ z.id }}"
-            {{ 'selected' if current_floor and z.floor_id == current_floor.id and loop.first else '' }}>
-            {{ z.label }}
-          </option>
-          {% endfor %}
-        </select>
-      </div>
-      <button class="btn primary" style="width:100%" {{ 'disabled' if not zones else '' }}>
-        Add tables
-      </button>
-    </form>
-
-    <hr style="border:none;border-top:1px solid var(--line);margin:18px 0">
-
-    <strong>Add one</strong>
-    <form method="post" action="/admin/tables/create" style="margin-top:12px">
+    <form method="post" action="/admin/tables/create">
       <div class="field">
         <label>Number</label>
         <input type="number" name="number" min="1" required value="{{ next_number }}">

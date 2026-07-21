@@ -56,11 +56,17 @@
         <label>Floor name</label>
         <input form="ff{{ f.id }}" type="text" name="name" value="{{ f.name }}">
       </div>
-      <div class="field" style="max-width:90px">
-        <label>Order</label>
-        <input form="ff{{ f.id }}" type="number" name="sort_order" value="{{ f.sort_order }}">
-      </div>
       <button form="ff{{ f.id }}" class="btn sm">Save</button>
+      <form method="post" action="/admin/floors/{{ f.id }}/move" style="display:inline">
+        <input type="hidden" name="direction" value="up">
+        <button class="btn sm" title="Move this floor up the list"
+                {{ 'disabled' if loop.first else '' }}>&uarr;</button>
+      </form>
+      <form method="post" action="/admin/floors/{{ f.id }}/move" style="display:inline">
+        <input type="hidden" name="direction" value="down">
+        <button class="btn sm" title="Move this floor down the list"
+                {{ 'disabled' if loop.last else '' }}>&darr;</button>
+      </form>
       {% if not f.is_active %}<span class="pill open">retired</span>{% endif %}
     </div>
     <div>
@@ -92,7 +98,7 @@
     <table>
       <thead>
         <tr>
-          <th>Zone</th><th class="num">Order</th>
+          <th>Zone</th><th>Order</th>
           <th class="num">Tables</th><th class="num">Seats</th>
           <th>3 · Add tables</th><th></th>
         </tr>
@@ -104,8 +110,15 @@
             <input form="zf{{ z.id }}" type="text" name="name" value="{{ z.name }}" style="width:170px">
             {% if not z.is_active %}<span class="pill open">retired</span>{% endif %}
           </td>
-          <td class="num">
-            <input form="zf{{ z.id }}" type="number" name="sort_order" value="{{ z.sort_order }}" style="width:74px">
+          <td style="white-space:nowrap">
+            <form method="post" action="/admin/zones/{{ z.id }}/move" style="display:inline">
+              <input type="hidden" name="direction" value="up">
+              <button class="btn sm" title="Move up" {{ 'disabled' if loop.first else '' }}>&uarr;</button>
+            </form>
+            <form method="post" action="/admin/zones/{{ z.id }}/move" style="display:inline">
+              <input type="hidden" name="direction" value="down">
+              <button class="btn sm" title="Move down" {{ 'disabled' if loop.last else '' }}>&darr;</button>
+            </form>
           </td>
           <td class="num">{{ counts.get(z.id, 0) }}</td>
           <td class="num">{{ seats.get(z.id, 0) }}</td>

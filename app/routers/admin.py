@@ -288,35 +288,10 @@ def create_table(
     return RedirectResponse(f"/admin/tables?floor={zone.floor_id}", status_code=303)
 
 
-@router.post("/tables/create-batch")
-def create_tables_batch(
-    count: int = Form(...),
-    capacity: int = Form(4),
-    zone_id: int = Form(...),
-    db: Session = Depends(get_db),
-    staff: Staff = Depends(require("settings")),
-):
-    """Add several identical tables at once — "4 tables with 2 seats".
-
-    Numbers continue from the highest already in use and skip anything taken.
-    Retired tables still hold their number (it is UNIQUE and their history
-    points at it), so the gap they leave is deliberately not reused: a number
-    reappearing on a different table would make two eras of service look like
-    one table in any report read by number.
-    """
-    if not 1 <= count <= 50:
-        raise HTTPException(400, "Choose between 1 and 50 tables to add.")
-    if not 1 <= capacity <= 20:
-        raise HTTPException(400, "Capacity must be between 1 and 20 seats.")
-    zone = _zone_or_400(db, zone_id)
-    made = _add_tables(db, zone, count, capacity)
-
-    db.commit()
-    span = f"{made[0]}" if len(made) == 1 else f"{made[0]}–{made[-1]}"
-    return RedirectResponse(
-        f"/admin/tables?done={len(made)}&created={span}&floor={zone.floor_id}",
-        status_code=303,
-    )
+# Adding several tables at once lives on the Floors & zones page (step 3),
+# where the zone is the row you are already looking at rather than something
+# to re-pick from a dropdown. Both paths shared _add_tables(); only that one
+# remains.
 
 
 @router.post("/tables/{table_id}/edit")
@@ -618,11 +593,66 @@ def create_zone_tables(
     )
 
 
+def _reorder(siblings: list, target, direction: str) -> None:
+    """Move one item up or down among its siblings.
+
+    sort_order is renumbered 0..n-1 across the whole group on every move, so a
+    list that arrived with duplicate or sparse values (hand-edited, or migrated)
+    ends up consistent rather than compounding the mess. Raw numbers are never
+    shown — the operator only ever presses up or down.
+    """
+    if direction not in ("up", "down"):
+        raise HTTPException(400, "Direction must be up or down.")
+    ids = [s.id for s in siblings]
+    i = ids.index(target.id)
+    j = i - 1 if direction == "up" else i + 1
+    if 0 <= j < len(siblings):
+        siblings[i], siblings[j] = siblings[j], siblings[i]
+    for position, s in enumerate(siblings):
+        s.sort_order = position
+
+
+@router.post("/floors/{floor_id}/move")
+def move_floor(
+    floor_id: int,
+    direction: str = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    floor = db.get(Floor, floor_id)
+    if floor is None:
+        raise HTTPException(404, "Floor not found")
+    siblings = db.execute(
+        select(Floor).order_by(Floor.sort_order, Floor.name)
+    ).scalars().all()
+    _reorder(list(siblings), floor, direction)
+    db.commit()
+    return RedirectResponse("/admin/floors", status_code=303)
+
+
+@router.post("/zones/{zone_id}/move")
+def move_zone(
+    zone_id: int,
+    direction: str = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    zone = db.get(Zone, zone_id)
+    if zone is None:
+        raise HTTPException(404, "Zone not found")
+    siblings = db.execute(
+        select(Zone).where(Zone.floor_id == zone.floor_id)
+        .order_by(Zone.sort_order, Zone.name)
+    ).scalars().all()
+    _reorder(list(siblings), zone, direction)
+    db.commit()
+    return RedirectResponse("/admin/floors", status_code=303)
+
+
 @router.post("/floors/{floor_id}/edit")
 def edit_floor(
     floor_id: int,
     name: str = Form(...),
-    sort_order: int = Form(0),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
@@ -638,7 +668,6 @@ def edit_floor(
     if clash is not None:
         raise HTTPException(400, f"A floor called '{name}' already exists.")
     floor.name = name
-    floor.sort_order = sort_order
     db.commit()
     return RedirectResponse("/admin/floors", status_code=303)
 
@@ -672,7 +701,6 @@ def toggle_floor(
 def edit_zone(
     zone_id: int,
     name: str = Form(...),
-    sort_order: int = Form(0),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
@@ -691,7 +719,6 @@ def edit_zone(
         raise HTTPException(400, f"{zone.floor.name} already has a '{name}'.")
 
     zone.name = name
-    zone.sort_order = sort_order
     # Keep every table's denormalized label in step with the rename.
     for t in db.execute(
         select(RestaurantTable).where(RestaurantTable.zone_id == zone_id)

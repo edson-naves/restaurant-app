@@ -377,7 +377,7 @@ db.commit()
 
 # Renaming a zone must carry through to the label the ETL copies.
 r = client.post(f"/admin/zones/{zone_b.id}/edit", data={
-    "name": "QA Zone B2", "sort_order": 1,
+    "name": "QA Zone B2",
 })
 db.expire_all()
 tagged = db.execute(
@@ -388,11 +388,70 @@ check(r.status_code == 200 and fresh(Zone, id=zone_b.id).name == "QA Zone B2",
 check(all(x.zone == "QA Zone B2" for x in tagged),
       "rename updates every table's denormalized label",
       str({x.zone for x in tagged}) or "no tables in zone")
-client.post(f"/admin/zones/{zone_b.id}/edit", data={"name": "QA Zone B", "sort_order": 1})
+client.post(f"/admin/zones/{zone_b.id}/edit", data={"name": "QA Zone B"})
 
 r = client.post(f"/admin/zones/{zone_b.id}/edit", data={"name": "QA Zone A"})
 check(r.status_code == 400, "duplicate zone name on the same floor refused",
       str(r.status_code))
+
+
+def zone_order(floor_name):
+    db.expire_all()
+    f = fresh(Floor, name=floor_name)
+    return [
+        z.name for z in sorted(f.zones, key=lambda z: (z.sort_order, z.name))
+    ]
+
+
+def floor_order():
+    db.expire_all()
+    return [
+        f.name for f in db.execute(
+            select(Floor).order_by(Floor.sort_order, Floor.name)
+        ).scalars().all()
+    ]
+
+
+print("\n--- reordering (up / down) ---")
+roof = fresh(Floor, name="QA Roof")
+start = zone_order("QA Roof")
+cabana = fresh(Zone, floor_id=roof.id, name="Cabana")
+
+r = client.post(f"/admin/zones/{cabana.id}/move", data={"direction": "up"})
+moved = zone_order("QA Roof")
+check(r.status_code == 200 and moved.index("Cabana") == start.index("Cabana") - 1,
+      "a zone moves up one place", f"{start} -> {moved}")
+check(sorted(moved) == sorted(start), "moving up loses nothing", str(moved))
+
+r = client.post(f"/admin/zones/{cabana.id}/move", data={"direction": "down"})
+check(zone_order("QA Roof") == start, "moving back down restores the order",
+      str(zone_order("QA Roof")))
+
+# The first item cannot go up, and the request is a harmless no-op.
+first_zone = fresh(Zone, floor_id=roof.id, name=zone_order("QA Roof")[0])
+r = client.post(f"/admin/zones/{first_zone.id}/move", data={"direction": "up"})
+check(r.status_code == 200 and zone_order("QA Roof") == start,
+      "moving the first zone up changes nothing", str(zone_order("QA Roof")))
+
+r = client.post(f"/admin/zones/{cabana.id}/move", data={"direction": "sideways"})
+check(r.status_code == 400, "an unknown direction is refused", str(r.status_code))
+
+# Reordering renumbers the whole group, so hand-edited or duplicate sort_order
+# values settle into 0..n-1 instead of compounding.
+db.expire_all()
+positions = sorted(z.sort_order for z in fresh(Floor, name="QA Roof").zones)
+check(positions == list(range(len(positions))),
+      "sort_order is renumbered 0..n-1 after a move", str(positions))
+
+floors_before = floor_order()
+last_floor = fresh(Floor, name=floors_before[-1])
+r = client.post(f"/admin/floors/{last_floor.id}/move", data={"direction": "up"})
+after_move = floor_order()
+check(r.status_code == 200
+      and after_move.index(last_floor.name) == len(floors_before) - 2,
+      "a floor moves up one place", f"{floors_before} -> {after_move}")
+r = client.post(f"/admin/floors/{last_floor.id}/move", data={"direction": "down"})
+check(floor_order() == floors_before, "and back down again", str(floor_order()))
 
 
 # ----------------------------------------------------------- batch create
@@ -401,8 +460,8 @@ before = db.execute(select(RestaurantTable)).scalars().all()
 highest = max(t.number for t in before)
 before_numbers = {t.number for t in before}
 
-r = client.post("/admin/tables/create-batch", data={
-    "count": 4, "capacity": 2, "zone_id": zone_a.id,
+r = client.post(f"/admin/zones/{zone_a.id}/tables", data={
+    "count": 4, "capacity": 2,
 })
 db.expire_all()
 batch = db.execute(
@@ -441,7 +500,7 @@ check(f"{highest + 1}–{highest + 4}" in r.text,
 
 for bad in ({"count": 0, "capacity": 2}, {"count": 51, "capacity": 2},
             {"count": 2, "capacity": 0}, {"count": 2, "capacity": 21}):
-    r = client.post("/admin/tables/create-batch", data={**bad, "zone_id": zone_a.id})
+    r = client.post(f"/admin/zones/{zone_a.id}/tables", data=bad)
     check(r.status_code == 400, f"batch {bad} refused", str(r.status_code))
 after = db.execute(select(RestaurantTable)).scalars().all()
 check(len(after) == len(before) + 4, "refused batches created nothing",
@@ -450,8 +509,8 @@ check(len(after) == len(before) + 4, "refused batches created nothing",
 # A retired table still owns its number; the batch must not hand it out again.
 retired_no = batch[-1].number
 client.post(f"/admin/tables/{batch[-1].id}/active", data={"active": 0})
-r = client.post("/admin/tables/create-batch", data={
-    "count": 2, "capacity": 4, "zone_id": zone_b.id,
+r = client.post(f"/admin/zones/{zone_b.id}/tables", data={
+    "count": 2, "capacity": 4,
 })
 db.expire_all()
 reused = [
