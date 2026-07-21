@@ -272,6 +272,14 @@ tr.dim:hover > td { opacity: 1; }
   width: 9px; height: 9px; border-radius: 50%;
   box-shadow: 0 0 0 2px var(--panel);
 }
+.findbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+.findbar input {
+  flex: 1; max-width: 460px; min-height: 0; padding: 9px 12px;
+  border-radius: 10px;
+}
+/* A hidden card must not keep its grid slot, or filtering leaves gaps. */
+.tbl[hidden], section[hidden] { display: none !important; }
+
 /* A total showing a value that is previewed, not yet saved. */
 td.pending { color: var(--accent); font-weight: 700; }
 

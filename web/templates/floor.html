@@ -13,6 +13,16 @@
   </div>
 </div>
 
+{# Filters in the page rather than round-tripping the server: mid-service the
+   answer has to be instant, and reloading would collapse any open seat form. #}
+<div class="findbar">
+  <input type="search" id="tableFind" autocomplete="off"
+         placeholder="Find a table — number, zone, floor, waiter or status">
+  <span class="meta" id="findCount"></span>
+  <button type="button" class="btn sm" id="findClear" hidden>Clear</button>
+</div>
+<p class="empty" id="findNone" hidden>No table matches that.</p>
+
 {# 'sec', not 's' — the seat-guests form below already loops `s` over staff. #}
 {% for sec in sections %}
 <section style="margin-bottom:26px">
@@ -30,8 +40,18 @@
 
 <div class="floor">
   {% for c in sec.cards %}
+    {# Everything worth searching on, lowercased once here so the filter is a
+       plain substring test rather than a walk of the DOM. #}
+    {% set haystack = (
+         'table ' ~ c.table.number ~ ' ' ~ c.table.zone ~ ' ' ~
+         (sec.floor.name if sec.floor else '') ~ ' ' ~
+         (c.waiter or 'unassigned') ~ ' ' ~
+         c.table.status.replace('_', ' ') ~ ' ' ~
+         (c.order.code if c.order else '')
+       )|lower %}
     {% if c.order %}
-      <a class="tbl {{ c.table.status }}" href="/orders/{{ c.order.id }}">
+      <a class="tbl {{ c.table.status }}" data-find="{{ haystack }}"
+         href="/orders/{{ c.order.id }}">
         <span class="n">Table {{ c.table.number }}</span>
         <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes }}m</span>
         <span class="meta">{{ c.waiter or '—' }}</span>
@@ -39,7 +59,7 @@
         <span class="tot">${{ c.total_cents|money }}</span>
       </a>
     {% else %}
-      <details class="tbl {{ c.table.status }}">
+      <details class="tbl {{ c.table.status }}" data-find="{{ haystack }}">
         <summary style="cursor:pointer;list-style:none">
           <span class="n">Table {{ c.table.number }}</span><br>
           <span class="meta">{{ c.table.zone }} · seats {{ c.table.capacity }}</span><br>
@@ -70,4 +90,55 @@
 </div>
 </section>
 {% endfor %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  const box = document.getElementById('tableFind');
+  const countEl = document.getElementById('findCount');
+  const clearBtn = document.getElementById('findClear');
+  const noneEl = document.getElementById('findNone');
+  if (!box) return;
+
+  const cards = Array.from(document.querySelectorAll('.tbl[data-find]'));
+  const sections = Array.from(document.querySelectorAll('section'));
+
+  function apply() {
+    // Every space-separated word must match, so "12 sofia" narrows rather
+    // than widening the way a single substring test would.
+    const terms = box.value.toLowerCase().split(/\s+/).filter(Boolean);
+    let shown = 0;
+
+    cards.forEach(function (card) {
+      const hay = card.dataset.find;
+      const hit = terms.every(function (t) { return hay.indexOf(t) !== -1; });
+      card.hidden = !hit;
+      if (hit) shown++;
+    });
+
+    // A floor with nothing left to show would otherwise leave a stray heading.
+    sections.forEach(function (sec) {
+      const any = sec.querySelector('.tbl[data-find]:not([hidden])');
+      sec.hidden = terms.length > 0 && !any;
+    });
+
+    const searching = terms.length > 0;
+    countEl.textContent = searching ? shown + ' of ' + cards.length : '';
+    clearBtn.hidden = !searching;
+    noneEl.hidden = !(searching && shown === 0);
+  }
+
+  box.addEventListener('input', apply);
+  box.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { box.value = ''; apply(); }
+  });
+  clearBtn.addEventListener('click', function () {
+    box.value = '';
+    apply();
+    box.focus();
+  });
+  apply();
+})();
+</script>
 {% endblock %}
