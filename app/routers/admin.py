@@ -200,18 +200,21 @@ def tables_page(
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
-    tables = db.execute(
+    all_tables = db.execute(
         select(RestaurantTable).order_by(RestaurantTable.number)
     ).scalars().all()
-    active = [t for t in tables if t.is_active]
 
     floors = db.execute(
         select(Floor).where(Floor.is_active.is_(True))
         .order_by(Floor.sort_order, Floor.name)
     ).scalars().all()
-    # The grid shows one floor at a time; coordinates are per floor.
+    # One floor at a time, for the grid and the list alike — a 3-floor
+    # restaurant otherwise scrolls past 120 rows to reach the one being edited.
     current = next((f for f in floors if f.id == floor), floors[0] if floors else None)
-    on_floor = [t for t in active if current and t.floor_id == current.id]
+
+    tables = [t for t in all_tables if current and t.floor_id == current.id]
+    active = [t for t in tables if t.is_active]
+    on_floor = active
 
     # Enough rows to hold this floor's tables plus a spare row to drag into.
     rows = max([t.pos_y for t in on_floor] + [len(on_floor) // GRID_COLS]) + 2
@@ -236,6 +239,10 @@ def tables_page(
         },
         "cols": GRID_COLS, "rows": rows,
         "floors": floors, "current_floor": current,
+        # Table numbers are unique across the whole restaurant, so the next one
+        # has to come from every table, not just this floor's.
+        "next_number": max([t.number for t in all_tables], default=0) + 1,
+        "grand_total": len(all_tables),
         "zones": [z for z in zones if z.floor.is_active],
         "waiters": waiters,
         "seats_total": sum(t.capacity for t in active),

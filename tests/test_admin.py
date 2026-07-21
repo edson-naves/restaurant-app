@@ -325,6 +325,28 @@ check(all(x.zone == "Terrace" for x in made), "they carry the zone's label")
 check(len({(x.pos_x, x.pos_y) for x in made}) == 4,
       "they land on four distinct squares")
 
+# The tables page shows one floor at a time — its own grid and its own list.
+import re  # noqa: E402
+
+r = client.get(f"/admin/tables?floor={roof.id}")
+rows = len(re.findall(r'name="table_ids"', r.text))
+on_roof = db.execute(
+    select(RestaurantTable).where(
+        RestaurantTable.zone_id.in_([z.id for z in fresh(Floor, name="QA Roof").zones])
+    )
+).scalars().all()
+check(r.status_code == 200 and rows == len(on_roof),
+      "the table list is scoped to the selected floor",
+      f"{rows} rows for {len(on_roof)} tables on QA Roof")
+check(f"Tables on QA Roof" in r.text, "the list is labelled with that floor")
+
+first_floor_id = sorted(PRE_FLOOR_IDS)[0]
+r2 = client.get(f"/admin/tables?floor={first_floor_id}")
+rows2 = len(re.findall(r'name="table_ids"', r2.text))
+check(rows2 != rows and rows2 > 0,
+      "switching floors shows a different set of tables",
+      f"{rows2} rows on the original floor vs {rows} on QA Roof")
+
 for bad in ({"count": 0, "capacity": 2}, {"count": 51, "capacity": 2},
             {"count": 2, "capacity": 0}, {"count": 2, "capacity": 21}):
     r = client.post(f"/admin/zones/{terrace.id}/tables", data=bad)

@@ -4,10 +4,11 @@
 
 <div class="between">
   <div>
-    <h1>Tables</h1>
+    <h1>Tables{% if current_floor %} — {{ current_floor.name }}{% endif %}</h1>
     <p class="sub">
       {{ active_tables|length }} active · {{ seats_total }} seats
       {% if retired %} · {{ retired|length }} retired{% endif %}
+      {% if floors|length > 1 %} · {{ grand_total }} across all floors{% endif %}
       · <span class="spec">req 4.1.1</span>
     </p>
   </div>
@@ -66,8 +67,8 @@
   <div class="card">
     <strong>Add several</strong>
     <p class="sub" style="margin:2px 0 10px">
-      e.g. 4 tables with 2 seats. Numbering continues from
-      {{ (tables|map(attribute='number')|max|default(0)) + 1 }}.
+      e.g. 4 tables with 2 seats. Numbering continues from {{ next_number }}
+      — table numbers are unique across the whole restaurant.
     </p>
     <form method="post" action="/admin/tables/create-batch">
       <div class="row" style="gap:10px">
@@ -102,8 +103,7 @@
     <form method="post" action="/admin/tables/create" style="margin-top:12px">
       <div class="field">
         <label>Number</label>
-        <input type="number" name="number" min="1" required
-               value="{{ (active_tables|map(attribute='number')|max|default(0)) + 1 }}">
+        <input type="number" name="number" min="1" required value="{{ next_number }}">
       </div>
       <div class="field">
         <label>Floor &amp; zone</label>
@@ -122,7 +122,7 @@
   </div>
 
   <div class="card" style="flex:3">
-    <strong>All tables</strong>
+    <strong>Tables on {{ current_floor.name if current_floor else 'this floor' }}</strong>
     {# A <form> is not valid inside <tr> — the parser would hoist it out of the
        table and orphan the inputs. Declare them here and bind each row's
        fields with the form="" attribute instead. #}
@@ -211,7 +211,11 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="7" class="empty">No tables yet.</td></tr>
+          <tr>
+            <td colspan="7" class="empty">
+              No tables on {{ current_floor.name if current_floor else 'this floor' }} yet.
+            </td>
+          </tr>
         {% endfor %}
         </tbody>
       </table>
