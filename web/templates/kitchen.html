@@ -39,7 +39,7 @@
   <div class="ticket {{ t.urgency }}">
     <div class="between">
       <strong>{{ t.where }}</strong>
-      <span class="elapsed">{{ t.elapsed }}m</span>
+      <span class="elapsed">{{ t.elapsed|duration }}</span>
     </div>
     {# Header modelled on the kitchen chit: order code, server, time in. #}
     <div class="sub" style="margin:2px 0 0">

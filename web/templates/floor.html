@@ -65,7 +65,7 @@
          data-status="{{ c.table.status }}"
          href="/orders/{{ c.order.id }}">
         <span class="n">Table {{ c.table.number }}</span>
-        <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes }}m</span>
+        <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes|duration }}</span>
         <span class="meta">{{ c.waiter or '—' }}</span>
         <span class="pill {{ c.table.status }}">{{ c.table.status.replace('_',' ') }}</span>
         <span class="tot">${{ c.total_cents|money }}</span>

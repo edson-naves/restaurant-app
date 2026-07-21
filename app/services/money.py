@@ -66,3 +66,26 @@ def pct(amount_cents: int, percent: float) -> int:
 
 def money(cents: int) -> str:
     return f"{cents / 100:,.2f}"
+
+
+def duration(minutes: int) -> str:
+    """Elapsed minutes as a readable span: 8m, 1h 05m, 2d 3h.
+
+    A table open five days reads "5d 2h", not "7042m" — the unit scales to the
+    size so the number is legible at a glance on the floor and kitchen screens.
+    Below an hour it stays in whole minutes; from an hour up it drops the
+    minutes once days appear, since minute precision is noise at that range.
+    """
+    try:
+        minutes = int(minutes)
+    except (TypeError, ValueError):
+        return "0m"
+    if minutes < 0:
+        minutes = 0
+    days, rem = divmod(minutes, 1440)
+    hours, mins = divmod(rem, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {mins:02d}m"
+    return f"{mins}m"

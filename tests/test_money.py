@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from app.services.money import distribute, pct, split_evenly
+from app.services.money import distribute, duration, pct, split_evenly
 
 
 def check(cond, label):
@@ -62,6 +62,15 @@ for _ in range(20000):
     if sum(split_evenly(total, parts)) != total:
         bad += 1
 ok &= check(bad == 0, f"20,000 random equal splits all sum exactly ({bad} failures)")
+
+# Elapsed-time formatting: unit scales to size, minutes stay stable.
+for mins, want in [
+    (0, "0m"), (8, "8m"), (59, "59m"),
+    (60, "1h 00m"), (65, "1h 05m"), (135, "2h 15m"),
+    (1440, "1d 0h"), (7042, "4d 21h"),
+    (-5, "0m"),
+]:
+    ok &= check(duration(mins) == want, f"duration({mins}) == {want!r} (got {duration(mins)!r})")
 
 print("\nRESULT:", "all money invariants hold" if ok else "FAILURES PRESENT")
 sys.exit(0 if ok else 1)

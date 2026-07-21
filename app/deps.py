@@ -16,11 +16,12 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.oltp import Role, Staff
-from app.services.money import money
+from app.services.money import duration, money
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 templates.env.filters["money"] = money
+templates.env.filters["duration"] = duration
 
 
 def asset_v(name: str = "app.css") -> str:
