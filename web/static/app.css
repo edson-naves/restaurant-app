@@ -268,8 +268,8 @@ tr.dim:hover > td { opacity: 1; }
    zone gets its own channel rather than competing for the same one. */
 .chip { position: relative; }
 .chip .zdot {
-  position: absolute; top: 8px; right: 8px;
-  width: 15px; height: 15px; border-radius: 50%;
+  position: absolute; top: 7px; right: 7px;
+  width: 9px; height: 9px; border-radius: 50%;
   box-shadow: 0 0 0 2px var(--panel);
 }
 .swatch {

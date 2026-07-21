@@ -187,6 +187,33 @@ def _add_tables(db: Session, zone: Zone, count: int, capacity: int) -> list[int]
     return made
 
 
+def _assign_waiter(db: Session, table: RestaurantTable, waiter_id: int) -> None:
+    """Set or clear the waiter covering a table. 0 means nobody.
+
+    A live order carries its own waiter_id — that is who the sales report
+    credits — so reassigning the table moves the open order with it. Leaving
+    them apart would show one name on the floor plan and bill the sale to
+    another. This mirrors reassign_waiter in routers/sales.py.
+    """
+    if waiter_id:
+        waiter = db.get(Staff, waiter_id)
+        if waiter is None:
+            raise HTTPException(404, "Waiter not found")
+        if not waiter.is_active:
+            raise HTTPException(400, f"{waiter.name} is not an active staff member.")
+        if waiter.role != Role.WAITER:
+            raise HTTPException(
+                400, f"{waiter.name} is a {waiter.role.replace('_', ' ')}, not a waiter."
+            )
+        table.current_waiter_id = waiter.id
+    else:
+        table.current_waiter_id = None
+
+    order = _live_order_for_table(db, table.id)
+    if order is not None:
+        order.waiter_id = table.current_waiter_id
+
+
 def _live_order_for_table(db: Session, table_id: int) -> Order | None:
     return db.execute(
         select(Order).where(
@@ -320,6 +347,7 @@ def edit_table(
     number: int = Form(...),
     zone_id: int = Form(...),
     capacity: int = Form(4),
+    waiter_id: int = Form(0),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
@@ -355,6 +383,7 @@ def edit_table(
         (table.pos_x, table.pos_y), = _free_cells(db, 1, zone.floor_id)
     _assign_zone(table, zone)
     table.capacity = capacity
+    _assign_waiter(db, table, waiter_id)
     db.commit()
     return RedirectResponse(f"/admin/tables?floor={zone.floor_id}", status_code=303)
 

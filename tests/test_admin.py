@@ -154,6 +154,81 @@ check(t.zone_id == zone_b.id and t.capacity == 6, "edit zone and capacity",
 check(t.zone == "QA Zone B",
       "the denormalized label the ETL reads follows zone_id", t.zone)
 
+# Waiters are assigned from the table row.
+r = client.post(f"/admin/tables/{t.id}/edit", data={
+    "number": TEST_TABLE_NO, "zone_id": zone_b.id, "capacity": 6,
+    "waiter_id": waiter.id,
+})
+t = fresh(RestaurantTable, number=TEST_TABLE_NO)
+check(r.status_code == 200 and t.current_waiter_id == waiter.id,
+      "a waiter is assigned from the table row", str(t.current_waiter_id))
+
+r = client.post(f"/admin/tables/{t.id}/edit", data={
+    "number": TEST_TABLE_NO, "zone_id": zone_b.id, "capacity": 6, "waiter_id": 0,
+})
+check(fresh(RestaurantTable, number=TEST_TABLE_NO).current_waiter_id is None,
+      "0 clears the assignment")
+
+kitchen_staff = db.execute(
+    select(Staff).where(Staff.role == Role.KITCHEN, Staff.is_active.is_(True))
+).scalars().first()
+if kitchen_staff is not None:
+    r = client.post(f"/admin/tables/{t.id}/edit", data={
+        "number": TEST_TABLE_NO, "zone_id": zone_b.id, "capacity": 6,
+        "waiter_id": kitchen_staff.id,
+    })
+    check(r.status_code == 400, "non-waiter staff cannot be assigned to a table",
+          str(r.status_code))
+r = client.post(f"/admin/tables/{t.id}/edit", data={
+    "number": TEST_TABLE_NO, "zone_id": zone_b.id, "capacity": 6, "waiter_id": 999999,
+})
+check(r.status_code == 404, "an unknown waiter is refused", str(r.status_code))
+check(fresh(RestaurantTable, number=TEST_TABLE_NO).current_waiter_id is None,
+      "refused assignments left the table unassigned")
+
+# Reassigning a table that has an open order must move the order too, or the
+# floor plan and the sales report would credit different people.
+LIVE_STATES = (
+    OrderStatus.OPEN, OrderStatus.PREPARING,
+    OrderStatus.READY, OrderStatus.PARTIALLY_PAID,
+)
+live_pair = db.execute(
+    select(Order).where(
+        Order.status.in_(LIVE_STATES), Order.table_id.is_not(None)
+    )
+).scalars().first()
+if live_pair is not None:
+    # Plain ints: db.expire_all() below would refresh the ORM object and hand
+    # back the new waiter, making the restore check compare a value to itself.
+    live_order_id = live_pair.id
+    original_waiter_id = live_pair.waiter_id
+    other_waiter = db.execute(
+        select(Staff).where(
+            Staff.role == Role.WAITER, Staff.is_active.is_(True),
+            Staff.id != original_waiter_id,
+        )
+    ).scalars().first()
+    busy_t = db.get(RestaurantTable, live_pair.table_id)
+    r = client.post(f"/admin/tables/{busy_t.id}/edit", data={
+        "number": busy_t.number, "zone_id": busy_t.zone_id,
+        "capacity": busy_t.capacity, "waiter_id": other_waiter.id,
+    })
+    db.expire_all()
+    check(r.status_code == 200
+          and db.get(RestaurantTable, busy_t.id).current_waiter_id == other_waiter.id
+          and db.get(Order, live_order_id).waiter_id == other_waiter.id,
+          "reassigning a table moves its open order to the new waiter")
+    # Put it back so the run leaves service as it found it.
+    client.post(f"/admin/tables/{busy_t.id}/edit", data={
+        "number": busy_t.number, "zone_id": busy_t.zone_id,
+        "capacity": busy_t.capacity, "waiter_id": original_waiter_id,
+    })
+    db.expire_all()
+    check(db.get(Order, live_order_id).waiter_id == original_waiter_id,
+          "and the original assignment is restored")
+else:
+    print("SKIP  no live order on a table to test waiter reassignment")
+
 # A new table must never be dropped onto an occupied square. Positions cannot
 # be derived from the table count: the seeded floor is 8 wide, the editor grid
 # is 10, so counting would collide.

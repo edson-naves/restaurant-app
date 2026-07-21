@@ -61,7 +61,9 @@
              title="{{ t.zone_ref.name }}"></i>
           {% endif %}
           <span class="n">{{ t.number }}</span>
-          <span class="meta">{{ t.zone }}</span>
+          {# The zone is carried by the dot's colour, so this line shows who is
+             on the table. Blank rather than a dash when nobody is assigned. #}
+          <span class="meta">{% if t.current_waiter %}{{ t.current_waiter.name }}{% else %}&nbsp;{% endif %}</span>
           <span class="meta">{{ t.capacity }} seats</span>
         </div>
         {% endfor %}
@@ -190,7 +192,20 @@
                 <span class="pill open">retired</span>
               {% endif %}
             </td>
-            <td class="meta">{{ t.current_waiter.name if t.current_waiter else '—' }}</td>
+            <td>
+              <select form="tf{{ t.id }}" name="waiter_id" style="width:160px">
+                <option value="0">— unassigned —</option>
+                {% for w in waiters %}
+                <option value="{{ w.id }}" {{ 'selected' if t.current_waiter_id == w.id else '' }}>{{ w.name }}</option>
+                {% endfor %}
+                {# A waiter who has since been deactivated still covers this
+                   table; keep them selectable so saving does not silently
+                   reassign the table to nobody. #}
+                {% if t.current_waiter and t.current_waiter_id not in waiters|map(attribute='id')|list %}
+                <option value="{{ t.current_waiter_id }}" selected>{{ t.current_waiter.name }} (inactive)</option>
+                {% endif %}
+              </select>
+            </td>
             <td style="white-space:nowrap">
               <button form="tf{{ t.id }}" class="btn sm">Save</button>
               {% if t.is_active %}
