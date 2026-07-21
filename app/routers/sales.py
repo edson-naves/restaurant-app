@@ -313,23 +313,35 @@ def send_to_kitchen(
 def kitchen_display(
     request: Request,
     view: str = "all",
+    kstatus: str = "all",
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("kitchen.view")),
 ):
     """Real-time feed with colour-coded urgency by elapsed time."""
+    KITCHEN_STATES = (KitchenStatus.PENDING, KitchenStatus.PREPARING, KitchenStatus.READY)
+    if kstatus != "all" and kstatus not in KITCHEN_STATES:
+        kstatus = "all"
+
     q = select(Order).where(
-        Order.kitchen_status.in_((KitchenStatus.PENDING, KitchenStatus.PREPARING, KitchenStatus.READY)),
+        Order.kitchen_status.in_(KITCHEN_STATES),
         Order.status.not_in((OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED)),
     )
     orders = db.execute(q).scalars().all()
 
+    # Counts reflect the channel view but not the status filter, so each status
+    # button can show how many it would reveal — the number must not drop to
+    # zero just because a different status is currently selected.
     now = datetime.now()
     tickets = []
+    status_counts = {KitchenStatus.PENDING: 0, KitchenStatus.PREPARING: 0, KitchenStatus.READY: 0}
     for o in orders:
         is_delivery = o.channel.channel_type == "delivery"
         if view == "dine_in" and is_delivery:
             continue
         if view == "delivery" and not is_delivery:
+            continue
+        status_counts[o.kitchen_status] = status_counts.get(o.kitchen_status, 0) + 1
+        if kstatus != "all" and o.kitchen_status != kstatus:
             continue
         elapsed = int((now - (o.sent_to_kitchen_at or o.opened_at)).total_seconds() // 60)
         # Colour-coded urgency (4.1.3).
@@ -349,6 +361,7 @@ def kitchen_display(
 
     return render(request, "kitchen.html", {
         "db": db, "staff": staff, "tickets": tickets, "view": view,
+        "kstatus": kstatus, "status_counts": status_counts,
         "title": "Kitchen display",
     })
 

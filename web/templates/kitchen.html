@@ -6,14 +6,33 @@
     <p class="sub">{{ tickets|length }} active · auto-refreshes every 15s · <span class="spec">req 4.1.3</span></p>
   </div>
   <div class="catbar" style="margin:0">
-    <a class="btn sm {{ 'primary' if view == 'all' else '' }}" href="/kitchen?view=all">All</a>
-    <a class="btn sm {{ 'primary' if view == 'dine_in' else '' }}" href="/kitchen?view=dine_in">Dine-in</a>
-    <a class="btn sm {{ 'primary' if view == 'delivery' else '' }}" href="/kitchen?view=delivery">Delivery</a>
+    <a class="btn sm {{ 'primary' if view == 'all' else '' }}" href="/kitchen?view=all&kstatus={{ kstatus }}">All</a>
+    <a class="btn sm {{ 'primary' if view == 'dine_in' else '' }}" href="/kitchen?view=dine_in&kstatus={{ kstatus }}">Dine-in</a>
+    <a class="btn sm {{ 'primary' if view == 'delivery' else '' }}" href="/kitchen?view=delivery&kstatus={{ kstatus }}">Delivery</a>
   </div>
 </div>
 
+{# Status filter — the channel view is kept, so All/Dine-in/Delivery and the
+   status choice combine. Server-side, not JS, so it survives the 15s reload. #}
+<div class="catbar" style="margin:0 0 18px">
+  <a class="btn sm {{ 'primary' if kstatus == 'all' else '' }}"
+     href="/kitchen?view={{ view }}&kstatus=all">All statuses</a>
+  <a class="btn sm {{ 'primary' if kstatus == 'pending' else '' }}"
+     href="/kitchen?view={{ view }}&kstatus=pending">Pending {{ status_counts.pending }}</a>
+  <a class="btn sm {{ 'primary' if kstatus == 'preparing' else '' }}"
+     href="/kitchen?view={{ view }}&kstatus=preparing">Preparing {{ status_counts.preparing }}</a>
+  <a class="btn sm {{ 'primary' if kstatus == 'ready' else '' }}"
+     href="/kitchen?view={{ view }}&kstatus=ready">Ready {{ status_counts.ready }}</a>
+</div>
+
 {% if not tickets %}
-  <div class="card"><p class="empty">Nothing in the kitchen right now.</p></div>
+  <div class="card"><p class="empty">
+    {% if kstatus != 'all' or view != 'all' %}
+      Nothing matches this filter — <a href="/kitchen?view=all&kstatus=all">show everything</a>.
+    {% else %}
+      Nothing in the kitchen right now.
+    {% endif %}
+  </p></div>
 {% else %}
 <div class="tickets">
   {% for t in tickets %}

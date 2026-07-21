@@ -78,6 +78,31 @@ check(r.status_code == 403, "kitchen staff blocked from reports", f"{r.status_co
 r = client.get("/kitchen")
 check(r.status_code == 200, "kitchen staff can see the kitchen display")
 
+# Kitchen status filter (4.1.3): each status shows only its own tickets, and
+# the channel view is preserved alongside it.
+client.cookies.set("staff_id", str(owner.id))
+all_k = client.get("/kitchen?view=all&kstatus=all")
+n_all = all_k.text.count('class="ticket ')
+for st in ("pending", "preparing", "ready"):
+    rk = client.get(f"/kitchen?view=all&kstatus={st}")
+    n = rk.text.count('class="ticket ')
+    check(rk.status_code == 200 and n <= n_all,
+          f"kitchen status filter '{st}' shows a subset", f"{n} of {n_all}")
+    # Every visible ticket's action button matches the selected status.
+    if st == "pending":
+        wrong = "Mark ready" in rk.text and n > 0 and "Start preparing" not in rk.text
+        check(not wrong, "pending view shows 'Start preparing' tickets")
+sub = sum(
+    client.get(f"/kitchen?view=all&kstatus={s}").text.count('class="ticket ')
+    for s in ("pending", "preparing", "ready")
+)
+check(sub == n_all, "the three statuses partition the full list", f"{sub} vs {n_all}")
+
+rk = client.get("/kitchen?view=all&kstatus=bogus")
+check(rk.status_code == 200 and rk.text.count('class="ticket ') == n_all,
+      "an unknown status falls back to all")
+client.cookies.set("staff_id", str(kitchen.id))
+
 free_table = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
 ).scalars().first()
