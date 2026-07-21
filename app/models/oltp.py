@@ -112,6 +112,20 @@ class Floor(Base):
     )
 
 
+# Distinct on the dark floor plan and distinguishable from the free/occupied/
+# ready status colours, which the chip's border already uses.
+ZONE_PALETTE = (
+    "#e2a03f",  # amber
+    "#4f8cff",  # blue
+    "#2f9e5e",  # green
+    "#9b6dff",  # purple
+    "#28b3b3",  # teal
+    "#e06c9f",  # pink
+    "#d4834b",  # clay
+    "#8a9bb0",  # slate
+)
+
+
 class Zone(Base):
     """A named area within one floor — Zone A, Patio, Bar.
 
@@ -125,6 +139,9 @@ class Zone(Base):
     name: Mapped[str] = mapped_column(String(60), nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Null means "not chosen yet" and falls back to the palette, so zones are
+    # colour-coded from the moment they exist without a backfill.
+    color: Mapped[str | None] = mapped_column(String(7), nullable=True)
 
     floor: Mapped["Floor"] = relationship(back_populates="zones", lazy="joined")
 
@@ -135,6 +152,13 @@ class Zone(Base):
     @property
     def label(self) -> str:
         return f"{self.floor.name} · {self.name}"
+
+    @property
+    def swatch(self) -> str:
+        """The colour to draw for this zone, chosen or defaulted."""
+        if self.color:
+            return self.color
+        return ZONE_PALETTE[(self.sort_order or 0) % len(ZONE_PALETTE)]
 
 
 class RestaurantTable(Base):

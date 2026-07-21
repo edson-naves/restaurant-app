@@ -20,6 +20,9 @@ from sqlalchemy.engine import Engine
 ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("restaurant_table", "is_active", "BOOLEAN NOT NULL DEFAULT 1"),
     ("restaurant_table", "zone_id", "INTEGER REFERENCES zone(id)"),
+    # Nullable on purpose: Zone.swatch falls back to the palette, so existing
+    # zones are colour-coded without having to backfill a value.
+    ("zone", "color", "VARCHAR(7)"),
 )
 
 DEFAULT_FLOOR = "1st floor"

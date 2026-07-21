@@ -351,6 +351,47 @@ check(offered and offered <= roof_zone_ids,
 check("optgroup" in r.text,
       "cross-floor dropdowns group their zones by floor")
 
+# Zone colours: every chip carries its zone's dot, defaulted from the palette
+# until one is chosen.
+print("\n--- zone colours ---")
+db.expire_all()
+roof_zones = fresh(Floor, name="QA Roof").zones
+check(all(z.swatch.startswith("#") and len(z.swatch) == 7 for z in roof_zones),
+      "every zone has a colour before one is picked",
+      str([z.swatch for z in roof_zones]))
+check(len({z.swatch for z in roof_zones}) == len(roof_zones),
+      "palette defaults differ between zones on a floor",
+      str([(z.name, z.swatch) for z in roof_zones]))
+
+dots = len(re.findall(r'class="zdot"', r.text))
+grid_chips = len(re.findall(r'class="chip ', r.text))
+check(dots == grid_chips and dots > 0,
+      "every table chip carries a zone dot", f"{dots} dots / {grid_chips} chips")
+
+terrace_zone = fresh(Zone, floor_id=roof.id, name="Terrace")
+r2 = client.post(f"/admin/zones/{terrace_zone.id}/edit", data={
+    "name": "Terrace", "color": "#FF8800",
+})
+check(r2.status_code == 200 and fresh(Zone, id=terrace_zone.id).color == "#ff8800",
+      "a chosen colour is saved, normalised to lowercase",
+      str(fresh(Zone, id=terrace_zone.id).color))
+
+r2 = client.get(f"/admin/tables?floor={roof.id}")
+check("#ff8800" in r2.text, "the chosen colour reaches the floor plan")
+
+for bad in ("red", "#fff", "#12345g", "javascript:alert(1)"):
+    r2 = client.post(f"/admin/zones/{terrace_zone.id}/edit", data={
+        "name": "Terrace", "color": bad,
+    })
+    check(r2.status_code == 400, f"colour {bad!r} refused", str(r2.status_code))
+check(fresh(Zone, id=terrace_zone.id).color == "#ff8800",
+      "refused colours left the saved one untouched")
+
+# A blank colour means "unchanged", so renaming does not reset it.
+r2 = client.post(f"/admin/zones/{terrace_zone.id}/edit", data={"name": "Terrace"})
+check(fresh(Zone, id=terrace_zone.id).color == "#ff8800",
+      "editing the name alone keeps the colour")
+
 first_floor_id = sorted(PRE_FLOOR_IDS)[0]
 r2 = client.get(f"/admin/tables?floor={first_floor_id}")
 rows2 = len(re.findall(r'name="table_ids"', r2.text))

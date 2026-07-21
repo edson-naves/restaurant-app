@@ -98,7 +98,7 @@
     <table>
       <thead>
         <tr>
-          <th>Zone</th><th>Order</th>
+          <th>Zone</th><th>Colour</th><th>Order</th>
           <th class="num">Tables</th><th class="num">Seats</th>
           <th>3 · Add tables</th><th></th>
         </tr>
@@ -109,6 +109,10 @@
           <td>
             <input form="zf{{ z.id }}" type="text" name="name" value="{{ z.name }}" style="width:170px">
             {% if not z.is_active %}<span class="pill open">retired</span>{% endif %}
+          </td>
+          <td>
+            <input form="zf{{ z.id }}" type="color" name="color" value="{{ z.swatch }}"
+                   class="swatch" title="Colour marking this zone's tables on the floor plan">
           </td>
           <td style="white-space:nowrap">
             <form method="post" action="/admin/zones/{{ z.id }}/move" style="display:inline">

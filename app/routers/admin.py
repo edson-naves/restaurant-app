@@ -18,6 +18,8 @@ managers from settings explicitly).
 """
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
@@ -123,6 +125,18 @@ def _parse_names(raw: str, limit: int = 50) -> list[str]:
     if len(names) > limit:
         raise HTTPException(400, f"That is more than {limit} names at once.")
     return names
+
+
+def _check_color(value: str) -> str:
+    """Accept a #rrggbb colour, the only form <input type=color> submits.
+
+    Validated rather than trusted because the value lands straight in a style
+    attribute on the floor plan.
+    """
+    value = value.strip().lower()
+    if not re.fullmatch(r"#[0-9a-f]{6}", value):
+        raise HTTPException(400, f"'{value}' is not a #rrggbb colour.")
+    return value
 
 
 def _zone_or_400(db: Session, zone_id: int) -> Zone:
@@ -707,6 +721,7 @@ def toggle_floor(
 def edit_zone(
     zone_id: int,
     name: str = Form(...),
+    color: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
@@ -725,6 +740,8 @@ def edit_zone(
         raise HTTPException(400, f"{zone.floor.name} already has a '{name}'.")
 
     zone.name = name
+    if color.strip():
+        zone.color = _check_color(color)
     # Keep every table's denormalized label in step with the rename.
     for t in db.execute(
         select(RestaurantTable).where(RestaurantTable.zone_id == zone_id)

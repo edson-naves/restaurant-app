@@ -38,6 +38,14 @@
   </nav>
   {% endif %}
 
+  {% if floor_zones %}
+  <div class="legend" style="margin-bottom:10px">
+    {% for z in floor_zones %}
+    <span><i class="dot" style="background: {{ z.swatch }}"></i>{{ z.name }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {% if not current_floor %}
   <p class="empty">
     No floors defined yet — <a href="/admin/floors">create one</a> before adding tables.
@@ -48,6 +56,10 @@
       <div class="cell" data-x="{{ x }}" data-y="{{ y }}">
         {% for t in floor_tables if t.pos_x == x and t.pos_y == y %}
         <div class="chip {{ t.status }}" draggable="true" data-id="{{ t.id }}">
+          {% if t.zone_ref %}
+          <i class="zdot" style="background: {{ t.zone_ref.swatch }}"
+             title="{{ t.zone_ref.name }}"></i>
+          {% endif %}
           <span class="n">{{ t.number }}</span>
           <span class="meta">{{ t.zone }}</span>
           <span class="meta">{{ t.capacity }} seats</span>
