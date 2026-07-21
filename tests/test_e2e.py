@@ -101,6 +101,23 @@ check(sub == n_all, "the three statuses partition the full list", f"{sub} vs {n_
 rk = client.get("/kitchen?view=all&kstatus=bogus")
 check(rk.status_code == 200 and rk.text.count('class="ticket ') == n_all,
       "an unknown status falls back to all")
+
+# Kitchen chit fields (ref: printed ticket) — server, time in, total items.
+kd = client.get("/kitchen?view=all&kstatus=all")
+check("Server:" in kd.text, "ticket shows the server who fired the order")
+check("Sent " in kd.text, "ticket shows the clock time it went to the kitchen")
+check("Total items:" in kd.text, "ticket shows the total item count")
+# The total is a sum of quantities. Cross-check one order against its items.
+sample = db.execute(
+    select(Order).where(
+        Order.kitchen_status.in_(("pending", "preparing", "ready")),
+        Order.status.not_in(("paid", "closed", "cancelled")),
+    )
+).scalars().first()
+if sample is not None:
+    want = sum(i.quantity for i in sample.items)
+    check(f"Total items: {want}" in kd.text or want == 0,
+          "the item total matches the order's line quantities", f"expected {want}")
 client.cookies.set("staff_id", str(kitchen.id))
 
 free_table = db.execute(

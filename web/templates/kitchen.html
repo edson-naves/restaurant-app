@@ -41,9 +41,14 @@
       <strong>{{ t.where }}</strong>
       <span class="elapsed">{{ t.elapsed }}m</span>
     </div>
+    {# Header modelled on the kitchen chit: order code, server, time in. #}
     <div class="sub" style="margin:2px 0 0">
       {{ t.order.code }}
       {% if t.is_delivery %}<span class="pill open">delivery</span>{% endif %}
+    </div>
+    <div class="chit-meta">
+      <span>Server: {{ t.server or '—' }}</span>
+      <span>Sent {{ t.sent_at.strftime('%H:%M') }}</span>
     </div>
 
     <ul>
@@ -55,6 +60,8 @@
       </li>
       {% endfor %}
     </ul>
+
+    <div class="chit-total">Total items: {{ t.total_items }}</div>
 
     {% if can('kitchen.update') %}
     <div style="display:flex;gap:6px">

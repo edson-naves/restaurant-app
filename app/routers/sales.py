@@ -343,14 +343,21 @@ def kitchen_display(
         status_counts[o.kitchen_status] = status_counts.get(o.kitchen_status, 0) + 1
         if kstatus != "all" and o.kitchen_status != kstatus:
             continue
-        elapsed = int((now - (o.sent_to_kitchen_at or o.opened_at)).total_seconds() // 60)
+        sent_at = o.sent_to_kitchen_at or o.opened_at
+        elapsed = int((now - sent_at).total_seconds() // 60)
         # Colour-coded urgency (4.1.3).
         urgency = "ok" if elapsed < 10 else ("warn" if elapsed < 20 else "late")
         tickets.append({
             "order": o,
             "elapsed": elapsed,
+            # Clock time the ticket reached the kitchen — the receipt's field 3.
+            "sent_at": sent_at,
             "urgency": urgency,
             "is_delivery": is_delivery,
+            # Field 2: who fired the order. Delivery tickets have no waiter.
+            "server": o.waiter.name if o.waiter else None,
+            # Field 5: the line count the expo checks the plated tray against.
+            "total_items": sum(i.quantity for i in o.items),
             "where": (
                 f"Table {o.table.number}" if o.table
                 else f"{o.channel.name}"
