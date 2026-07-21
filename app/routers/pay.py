@@ -208,7 +208,7 @@ def take_seat_payment(
         raise HTTPException(403, "A discount requires manager approval.")
 
     try:
-        pay_seat(
+        payment = pay_seat(
             db, order, seat,
             instrument_id=instrument_id,
             staff_id=staff.id,
@@ -226,7 +226,9 @@ def take_seat_payment(
         raise HTTPException(400, str(e))
 
     db.commit()
-    return RedirectResponse(f"/orders/{order_id}/pay", status_code=303)
+    # Straight to the receipt: it is what the guest is handed, and it carries
+    # the Print button. A back link returns to the pay screen for the next seat.
+    return RedirectResponse(f"/payments/{payment.id}/receipt", status_code=303)
 
 
 @router.post("/orders/{order_id}/pay-all")
@@ -259,7 +261,7 @@ def take_full_payment(
 
     discount_cents = pct(outstanding, discount_pct) if discount_pct else 0
     try:
-        pay_whole_order(
+        payment = pay_whole_order(
             db, order,
             instrument_id=instrument_id,
             staff_id=staff.id,
@@ -274,7 +276,7 @@ def take_full_payment(
         raise HTTPException(400, str(e))
 
     db.commit()
-    return RedirectResponse(f"/orders/{order_id}/pay", status_code=303)
+    return RedirectResponse(f"/payments/{payment.id}/receipt", status_code=303)
 
 
 @router.get("/payments/{payment_id}/receipt", response_class=HTMLResponse)
