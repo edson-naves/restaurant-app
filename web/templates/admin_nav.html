@@ -8,5 +8,6 @@
   {% endif %}
   {% if can('settings') %}
   <a href="/admin/menu" class="{{ 'on' if request.url.path.startswith('/admin/menu') else '' }}">Menu</a>
+  <a href="/admin/settings" class="{{ 'on' if request.url.path.startswith('/admin/settings') else '' }}">Settings</a>
   {% endif %}
 </nav>

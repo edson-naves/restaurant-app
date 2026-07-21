@@ -22,6 +22,15 @@
     {% if can('payments.take') %}
     <a class="btn good" href="/orders/{{ order.id }}/pay">Payment →</a>
     {% endif %}
+    {% if can('discount.approve') and order.status not in ('paid','closed','cancelled') %}
+    <details>
+      <summary class="btn danger" style="display:inline-block">Cancel order</summary>
+      <form method="post" action="/orders/{{ order.id }}/cancel" style="margin-top:8px;text-align:right">
+        <input type="text" name="reason" placeholder="Reason (optional)" style="width:180px">
+        <button class="btn danger sm">Confirm cancel — frees the table</button>
+      </form>
+    </details>
+    {% endif %}
   </div>
 </div>
 

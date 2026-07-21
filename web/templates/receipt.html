@@ -11,16 +11,10 @@
   </div>
 </div>
 
-{# Restaurant identity is config, not data — edit these four lines and the GST
-   number in app/services/money.py to match the business. #}
-{% set biz_name = "THE RESTAURANT" %}
-{% set biz_addr = "53 Water St. · Anytown" %}
-{% set biz_phone = "000-000-0000" %}
-
 <div class="receipt">
-  <div class="c b" style="font-size:18px;letter-spacing:1px">{{ biz_name }}</div>
-  <div class="c" style="font-size:11px">{{ biz_addr }}</div>
-  <div class="c" style="font-size:11px">{{ biz_phone }}</div>
+  <div class="c b" style="font-size:18px;letter-spacing:1px">{{ biz.name }}</div>
+  <div class="c" style="font-size:11px">{{ biz.addr }}</div>
+  <div class="c" style="font-size:11px">{{ biz.phone }}</div>
   <hr>
 
   <div class="l"><span>Server:</span><span>{{ data.served_by or '—' }}</span></div>
@@ -54,7 +48,12 @@
   {% if data.discount != '0.00' %}
   <div class="l"><span>Discount</span><span>-{{ data.discount }}</span></div>
   {% endif %}
-  {% if data.tax is defined %}
+  {% if data.gst is defined %}
+  <div class="l"><span>GST ({{ data.gst_rate }}%)</span><span>{{ data.gst }}</span></div>
+  {% if data.has_pst %}
+  <div class="l"><span>PST ({{ data.pst_rate }}%)</span><span>{{ data.pst }}</span></div>
+  {% endif %}
+  {% elif data.tax is defined %}
   <div class="l"><span>GST ({{ data.tax_rate }}%)</span><span>{{ data.tax }}</span></div>
   {% endif %}
   {% if data.tip != '0.00' %}
@@ -83,7 +82,8 @@
   <div class="l" style="font-size:12px"><span>15%</span><span>{{ tip_guide.p15 }}</span></div>
   <hr>
 
-  <div class="c" style="font-size:10px;color:#555">GST# {{ gst_number }}</div>
+  {% if data.gst_number %}<div class="c" style="font-size:10px;color:#555">GST# {{ data.gst_number }}</div>{% endif %}
+  {% if data.pst_number %}<div class="c" style="font-size:10px;color:#555">PST# {{ data.pst_number }}</div>{% endif %}
   <div class="c" style="margin-top:6px">Thank you!</div>
 </div>
 {% endblock %}

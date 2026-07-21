@@ -124,7 +124,9 @@
           </label>
 
           <p class="sub" style="margin:0 0 8px">
-            GST {{ gst_rate }}% is added to the item subtotal at payment.
+            {{ tax_cfg.total_rate }}% tax
+            ({% if tax_cfg.pst_rate %}GST {{ tax_cfg.gst_rate }}% + PST {{ tax_cfg.pst_rate }}%{% else %}GST {{ tax_cfg.gst_rate }}%{% endif %})
+            is added to the item subtotal at payment.
           </p>
           <button class="btn good" style="width:100%">Confirm payment</button>
         </form>
@@ -184,9 +186,9 @@
           </div>
         </div>
         <p class="sub" style="margin:0 0 8px">
-          Plus GST {{ gst_rate }}% on the items, and any tip.
+          Plus {{ tax_cfg.total_rate }}% tax on the items, and any tip.
         </p>
-        <button class="btn primary" style="width:100%">Settle ${{ panel.owed_cents|money }} + GST</button>
+        <button class="btn primary" style="width:100%">Settle ${{ panel.owed_cents|money }} + tax</button>
       </form>
     </div>
     {% endif %}
@@ -199,20 +201,35 @@
         <thead><tr><th>Seat</th><th>Instrument</th><th class="num">Total</th><th></th></tr></thead>
         <tbody>
         {% for p in order.payments %}
-        <tr>
+        <tr class="{{ 'dim' if p.voided else '' }}">
           <td>
             {{ p.seat.seat_number if p.seat else 'all' }}
             {% if p.is_partial_close %}<br><span class="pill paid_partial">partial close</span>{% endif %}
+            {% if p.voided %}<br><span class="pill open">voided</span>{% endif %}
           </td>
           <td>
             {{ p.instrument.name }}{% if p.card_last4 %} ••{{ p.card_last4 }}{% endif %}
             <br><span class="sub" style="font-size:11px">{{ p.allocations|length }} item(s) · {{ p.created_at.strftime('%H:%M') }}</span>
+            {% if p.voided %}<br><span class="sub" style="font-size:11px">voided by {{ p.voided_by.name if p.voided_by else '—' }}{% if p.void_reason %} · {{ p.void_reason }}{% endif %}</span>{% endif %}
           </td>
           <td class="num">
-            ${{ p.total_cents|money }}
-            {% if p.tip_cents %}<br><span class="sub" style="font-size:11px">tip ${{ p.tip_cents|money }}</span>{% endif %}
+            <span {% if p.voided %}style="text-decoration:line-through;color:var(--muted)"{% endif %}>${{ p.total_cents|money }}</span>
+            {% if p.tip_cents and not p.voided %}<br><span class="sub" style="font-size:11px">tip ${{ p.tip_cents|money }}</span>{% endif %}
           </td>
-          <td><a class="btn sm" href="/payments/{{ p.id }}/receipt">Receipt</a></td>
+          <td style="white-space:nowrap">
+            {% if not p.voided %}
+            <a class="btn sm" href="/payments/{{ p.id }}/receipt">Receipt</a>
+            {% if can('discount.approve') and order.status not in ('paid','closed','cancelled') %}
+            <details style="display:inline-block">
+              <summary class="btn sm danger" style="display:inline-block">Void</summary>
+              <form method="post" action="/payments/{{ p.id }}/void" style="margin-top:6px">
+                <input type="text" name="reason" placeholder="Reason (optional)" style="width:160px">
+                <button class="btn sm danger">Confirm void</button>
+              </form>
+            </details>
+            {% endif %}
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
         </tbody>

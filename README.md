@@ -108,16 +108,29 @@ through the operational model.
 
 **No raw card numbers are stored** (section 5) — brand and last 4 only.
 
-**GST is charged at payment, on the discounted item subtotal.** `total = items
-− discount + tax + tip`; the tip is not taxed. Tax is a payment-level field
-alongside tip and discount — it never enters a `PaymentAllocation`, which stays
-pure item value, so the "every item traces to an instrument" invariant (4.2.2)
-and the reconciliation are untouched. The ETL distributes it to the allocation
-grain the same way it distributes tips, so `sum(fact_payment.tax_cents)`
-reproduces the payment-level GST exactly. Payments taken before tax existed
-carry `tax_cents = 0`, so their stored total still equals `items − discount +
-tip` and reconciles. The rate and registration number are config in
-`app/services/money.py` (`GST_RATE`, `GST_NUMBER`).
+**Sales tax (GST + PST) is charged at payment, on the discounted item
+subtotal.** `total = items − discount + tax + tip`; the tip is not taxed. The
+rates and registration numbers are set up on the owner-only **Settings** page
+(`/admin/settings`) and stored in the `setting` key/value table — set a rate to
+0 to switch that tax off. `Payment.tax_cents` stores the *combined* tax; the
+GST/PST split is a receipt concern and is reconstructed from the rates into the
+receipt payload, so no per-tax column is needed. Tax never enters a
+`PaymentAllocation`, which stays pure item value, so the "every item traces to
+an instrument" invariant (4.2.2) and the reconciliation are untouched. The ETL
+distributes tax to the allocation grain the way it distributes tips, so
+`sum(fact_payment.tax_cents)` reproduces the payment-level tax. Payments taken
+before tax existed carry `tax_cents = 0`, so their stored total still equals
+`items − discount + tip` and reconciles.
+
+**Voiding a payment keeps it, it does not delete it** (`payments.void_payment`,
+manager-gated). The allocations are removed — which reopens the items and drops
+the payment out of every allocation-based total — and the payment is flagged
+`voided` with who/when. Revenue roll-ups (`balance_panel`, the ETL header, and
+the reconciliation source queries) additionally skip voided rows, so a reversed
+tender never double-counts. Void is blocked once the order is settled and the
+table freed — that is a refund, not a void. **Cancelling an order** is blocked
+while any live payment stands: void each first, then cancel the now-unpaid
+order, which frees the table.
 
 **Setup data is deactivated, never deleted** (`routers/admin.py`). A table,
 staff member or menu item that has ever appeared on an order is referenced by
@@ -171,6 +184,8 @@ Recorded because each one is a class of error worth guarding against:
 | 4.3.3 CSV export | `routers/analytics.py::export_csv` |
 | Section 3 roles | `app/deps.py::PERMISSIONS` |
 | Setup: tables, staff, menu (owner only) | `routers/admin.py`, `admin_tables.html`, `admin_staff.html`, `admin_menu.html` |
+| Setup: tax rates & receipt identity | `routers/admin.py::settings_page`, `services/settings.py`, `admin_settings.html` |
+| Void a payment / cancel an order (manager) | `services/payments.py::void_payment`, `routers/pay.py`, `routers/sales.py::cancel_order` |
 | 6.1 / 6.2 / 6.3 workflows | `tests/test_e2e.py` walks 6.1 and 4.2.5 |
 
 ## Not built (deliberate)

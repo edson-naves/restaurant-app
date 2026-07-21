@@ -254,11 +254,14 @@ check(p1.card_last4 == "4242" and p1.card_brand == "Visa",
 check(len(p1.allocations) >= 2,
       "4.2.2: payment allocates to each item it covers", f"{len(p1.allocations)} allocations")
 
-# GST (section 4.2): tax on the item subtotal, and the total is items + tax + tip.
-from app.services.money import GST_RATE, gst  # noqa: E402
+# Sales tax (section 4.2): GST + PST on the item subtotal; total is items + tax + tip.
+from app.services import settings as settings_svc  # noqa: E402
+from app.services.money import pct  # noqa: E402
 
-check(p1.tax_cents == gst(p1.items_cents - p1.discount_cents),
-      f"GST {GST_RATE}% charged on the item subtotal",
+_cfg = settings_svc.tax_config(db)
+_base = p1.items_cents - p1.discount_cents
+check(p1.tax_cents == pct(_base, _cfg.gst_rate) + pct(_base, _cfg.pst_rate),
+      f"GST {_cfg.gst_rate}% + PST {_cfg.pst_rate}% charged on the item subtotal",
       f"${money(p1.tax_cents)} on ${money(p1.items_cents)}")
 check(p1.total_cents == p1.items_cents - p1.discount_cents + p1.tax_cents + p1.tip_cents,
       "total = items - discount + tax + tip",
@@ -276,7 +279,7 @@ receipt_row = db.execute(
 ).scalars().first()
 rr = client.get(f"/payments/{p1.id}/receipt")
 check(rr.status_code == 200, "receipt renders for the payment")
-for label in (f"GST ({GST_RATE}%)", "Total number of items:", "Please pay your server",
+for label in (f"GST ({_cfg.gst_rate}%)", "Total number of items:", "Please pay your server",
               "Tip guide", "GST#"):
     check(label in rr.text, f"receipt shows '{label}'")
 
@@ -295,6 +298,41 @@ check(panel.owed_cents > 0, "4.2.4: balance still shows an amount owed", f"${mon
 check(order.status == "partially_paid", "order stays open while a seat is unpaid", order.status)
 check(db.get(RestaurantTable, table_id).status == TableStatus.READY_TO_PAY,
       "table is NOT freed while money is outstanding")
+
+# --- void a payment (manager action, kept as a record) --------------------
+print("\n--- void a payment ---")
+db.expire_all()
+order = db.get(Order, order_id)
+p2 = next(p for p in order.payments if p.seat and p.seat.seat_number == 2 and not p.voided)
+
+# A waiter cannot void.
+client.cookies.set("staff_id", str(waiter.id))
+r = client.post(f"/payments/{p2.id}/void", data={"reason": "test"})
+check(r.status_code == 403, "a waiter cannot void a payment", str(r.status_code))
+
+# A manager can. Voiding reopens seat 2's items.
+client.cookies.set("staff_id", str(owner.id))
+before_collected = balance_panel(db, order).collected_cents
+r = client.post(f"/payments/{p2.id}/void", data={"reason": "charged the wrong seat"})
+check(r.status_code == 200, "a manager voids the payment")
+db.expire_all()
+order = db.get(Order, order_id)
+p2 = db.get(type(p2), p2.id)
+check(p2.voided and p2.voided_by_id == owner.id, "the payment is flagged voided, not deleted")
+check(len(p2.allocations) == 0, "its allocations are removed so the items reopen")
+panel = balance_panel(db, order)
+check(panel.collected_cents == before_collected - p2.total_cents,
+      "collected drops by exactly the voided amount",
+      f"{money(before_collected)} -> {money(panel.collected_cents)}")
+check(panel.seats_paid == 1, "seat 2 is no longer counted as paid")
+check(db.get(RestaurantTable, table_id).status == TableStatus.READY_TO_PAY,
+      "the table is not freed by a void that leaves money owing")
+
+# Re-pay seat 2 so the flow can complete.
+seat2b = db.execute(select(Seat).where(Seat.order_id == order_id, Seat.seat_number == 2)).scalar_one()
+r = client.post(f"/orders/{order_id}/seats/{seat2b.id}/pay", data={"instrument_id": cash.id, "tip_mode": "none"})
+check(r.status_code == 200, "seat 2 can be re-paid after the void")
+client.cookies.set("staff_id", str(waiter.id))
 
 # Seat 3 settles by e-transfer -> order closes, table frees (step 10).
 seat3 = db.execute(select(Seat).where(Seat.order_id == order_id, Seat.seat_number == 3)).scalar_one()
@@ -324,6 +362,35 @@ for item in order.items:
 check(all(t[2] for t in traced), "4.2.2: every item fully traced to its instrument(s)")
 for name, names, _ in traced:
     print(f"        {name:22} paid by {', '.join(names)}")
+
+# --- cancel an order ------------------------------------------------------
+print("\n--- cancel an order ---")
+client.cookies.set("staff_id", str(owner.id))
+# The just-settled order has payments -> cancel is blocked.
+r = client.post(f"/orders/{order_id}/cancel", data={"reason": "test"})
+check(r.status_code == 400, "a settled order cannot be cancelled", str(r.status_code))
+
+# Open a fresh order on a free table and cancel it (no payments).
+free_t = db.execute(
+    select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
+).scalars().first()
+client.cookies.set("staff_id", str(waiter.id))
+r = client.post(f"/tables/{free_t.id}/open", data={"guests": 2, "waiter_id": waiter.id})
+db.expire_all()
+fresh_order = db.execute(
+    select(Order).where(Order.table_id == free_t.id, Order.status.notin_(("paid", "closed", "cancelled")))
+).scalars().first()
+# A waiter cannot cancel.
+r = client.post(f"/orders/{fresh_order.id}/cancel", data={"reason": "mistake"})
+check(r.status_code == 403, "a waiter cannot cancel an order", str(r.status_code))
+# A manager can, and the table frees.
+client.cookies.set("staff_id", str(owner.id))
+r = client.post(f"/orders/{fresh_order.id}/cancel", data={"reason": "guest left"})
+check(r.status_code == 200, "a manager cancels the unpaid order")
+db.expire_all()
+check(db.get(Order, fresh_order.id).status == "cancelled", "order is marked cancelled")
+check(db.get(RestaurantTable, free_t.id).status == TableStatus.FREE,
+      "cancelling frees the table")
 
 # Receipts (4.2.7).
 r = client.get(f"/payments/{order.payments[0].id}/receipt")

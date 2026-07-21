@@ -525,10 +525,14 @@ def load_facts_for_order(db: Session, order: Order) -> tuple[int, int]:
             pay_rows += 1
 
     # ---- fact_order_header ----------------------------------------------
+    # Voided payments are kept for audit but contribute no money: they have no
+    # allocations (so fact_payment already skips them) and must be excluded from
+    # the header roll-ups too, or revenue would double-count a reversed tender.
+    live_payments = [p for p in order.payments if not p.voided]
     subtotal = sum(gross_by_item)
-    tip_total = sum(p.tip_cents for p in order.payments)
-    tax_total = sum(p.tax_cents for p in order.payments)
-    total = sum(p.total_cents for p in order.payments)
+    tip_total = sum(p.tip_cents for p in live_payments)
+    tax_total = sum(p.tax_cents for p in live_payments)
+    total = sum(p.total_cents for p in live_payments)
     closed = order.closed_at or opened
     duration = max(0, int((closed - opened).total_seconds() // 60))
 
@@ -549,9 +553,9 @@ def load_facts_for_order(db: Session, order: Order) -> tuple[int, int]:
                 1 for s in order.seats
                 if s.status in (SeatStatus.PAID, SeatStatus.PAID_PARTIAL)
             ),
-            payment_count=len(order.payments),
-            distinct_instruments=len({p.instrument_id for p in order.payments}),
-            had_partial_close=any(p.is_partial_close for p in order.payments),
+            payment_count=len(live_payments),
+            distinct_instruments=len({p.instrument_id for p in live_payments}),
+            had_partial_close=any(p.is_partial_close for p in live_payments),
             subtotal_cents=subtotal,
             discount_cents=disc_total,
             tax_cents=tax_total,

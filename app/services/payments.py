@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.models.oltp import (
     Discount,
+    KitchenStatus,
     Order,
     OrderItem,
     OrderStatus,
@@ -35,7 +36,8 @@ from app.models.oltp import (
     SharedItemShare,
     TableStatus,
 )
-from app.services.money import GST_RATE, distribute, gst, money, pct, split_evenly
+from app.services import settings as settings_svc
+from app.services.money import distribute, money, pct, split_evenly
 
 
 # --------------------------------------------------------------------------
@@ -157,9 +159,10 @@ def balance_panel(db: Session, order: Order) -> BalancePanel:
     ledgers, unassigned = build_ledgers(db, order)
 
     table_total = sum(i.line_total_cents for i in order.items)
-    collected = sum(p.total_cents for p in order.payments)
-    tips = sum(p.tip_cents for p in order.payments)
-    discounts = sum(p.discount_cents for p in order.payments)
+    live = active_payments(order)
+    collected = sum(p.total_cents for p in live)
+    tips = sum(p.tip_cents for p in live)
+    discounts = sum(p.discount_cents for p in live)
     # Owed is item value still outstanding; tips/discounts are not part of the
     # item debt, so they are excluded from the owed figure.
     owed = sum(led.outstanding_cents for led in ledgers.values())
@@ -255,6 +258,24 @@ class PaymentError(Exception):
     pass
 
 
+def _taxes(db: Session, taxable_cents: int) -> tuple[int, int]:
+    """(gst_cents, pst_cents) on a taxable amount at the configured rates.
+
+    Both taxes apply to the same base — the item subtotal after discount, tip
+    excluded — and are rounded to the cent independently, which is how a
+    two-tax jurisdiction (e.g. GST + PST) prints them: separate lines, not a
+    blended rate on a rounded intermediate.
+    """
+    cfg = settings_svc.tax_config(db)
+    base = max(taxable_cents, 0)
+    return pct(base, cfg.gst_rate), pct(base, cfg.pst_rate)
+
+
+def active_payments(order: Order) -> list[Payment]:
+    """Payments that still count — voided ones are kept for the record only."""
+    return [p for p in order.payments if not p.voided]
+
+
 def _validate_instrument(order: Order, instrument: PaymentInstrument) -> None:
     """Section 4.2.1 — UberEats/DoorDash are delivery orders only."""
     if instrument.delivery_only and order.channel.channel_type != "delivery":
@@ -314,7 +335,8 @@ def pay_seat(
             raise PaymentError("A discount requires manager approval.")
         discount_cents = min(discount_cents, items_cents)
 
-    tax_cents = gst(items_cents - discount_cents)
+    gst_cents, pst_cents = _taxes(db, items_cents - discount_cents)
+    tax_cents = gst_cents + pst_cents
     total_cents = items_cents - discount_cents + tax_cents + tip_cents
     if total_cents < 0:
         raise PaymentError("Payment total cannot be negative.")
@@ -419,8 +441,9 @@ def pay_whole_order(
         items_cents=items_cents,
         tip_cents=tip_cents,
         discount_cents=discount_cents,
-        tax_cents=gst(items_cents - discount_cents),
-        total_cents=items_cents - discount_cents + gst(items_cents - discount_cents) + tip_cents,
+        tax_cents=sum(_taxes(db, items_cents - discount_cents)),
+        total_cents=items_cents - discount_cents
+        + sum(_taxes(db, items_cents - discount_cents)) + tip_cents,
         card_brand=instrument.card_brand,
         card_last4=card_last4 if instrument.instrument_type in ("card", "contactless") else None,
         created_at=datetime.now(),
@@ -481,12 +504,89 @@ def recompute_order_status(db: Session, order: Order) -> None:
             order.table.current_waiter_id = None
     elif total_paid > 0:
         order.status = OrderStatus.PARTIALLY_PAID
+    else:
+        # Nothing paid — reached when a void removes the last payment. Fall back
+        # to the order's kitchen progress so a reopened order is not stuck in a
+        # payment state, and drop any close stamp.
+        order.status = {
+            KitchenStatus.PREPARING: OrderStatus.PREPARING,
+            KitchenStatus.READY: OrderStatus.READY,
+        }.get(order.kitchen_status, OrderStatus.OPEN)
+        order.closed_at = None
     db.flush()
 
 
 # --------------------------------------------------------------------------
 # Receipts (4.2.7)
 # --------------------------------------------------------------------------
+
+def _tax_breakdown(db: Session, payment: Payment) -> dict:
+    """GST/PST lines for the receipt, reconstructed from the payment's base.
+
+    Recomputed rather than stored so the payment table keeps a single tax
+    figure. Any rounding remainder between (gst+pst) and the stored tax_cents
+    is folded into GST so the two lines always sum to what was charged.
+    """
+    cfg = settings_svc.tax_config(db)
+    base = payment.items_cents - payment.discount_cents
+    pst = pct(max(base, 0), cfg.pst_rate)
+    gst = payment.tax_cents - pst           # keeps gst + pst == tax_cents exactly
+    return {
+        "tax": money(payment.tax_cents),
+        "gst": money(gst),
+        "gst_rate": cfg.gst_rate,
+        "gst_number": cfg.gst_number,
+        "pst": money(pst),
+        "pst_rate": cfg.pst_rate,
+        "pst_number": cfg.pst_number,
+        "has_pst": cfg.pst_rate > 0,
+    }
+
+
+def void_payment(db: Session, payment: Payment, staff_id: int, reason: str) -> None:
+    """Reverse a payment (section 4.2, manager action). Kept, not deleted.
+
+    The allocations are removed — which returns the items to outstanding and
+    drops the payment out of every allocation-based total — and the payment is
+    flagged voided with who and when. Its receipt is withdrawn. Seat statuses
+    and the order/table are then re-derived from what remains.
+    """
+    if payment.voided:
+        raise PaymentError("This payment is already voided.")
+
+    order = payment.order
+    for alloc in list(payment.allocations):
+        db.delete(alloc)
+    receipt = db.execute(
+        select(Receipt).where(Receipt.payment_id == payment.id)
+    ).scalars().first()
+    if receipt is not None:
+        db.delete(receipt)
+
+    payment.voided = True
+    payment.voided_at = datetime.now()
+    payment.voided_by_id = staff_id
+    payment.void_reason = reason.strip()
+    db.flush()
+    db.refresh(order)
+
+    # Re-derive seat statuses from what is now outstanding.
+    ledgers_after, _ = build_ledgers(db, order)
+    for seat in order.seats:
+        led = ledgers_after.get(seat.id)
+        if led is None:
+            continue
+        paid = led.subtotal_cents - led.outstanding_cents
+        if led.outstanding_cents == 0 and led.subtotal_cents > 0:
+            seat.status = SeatStatus.PAID
+        elif paid > 0:
+            seat.status = SeatStatus.PAID_PARTIAL
+        else:
+            seat.status = SeatStatus.OPEN
+
+    recompute_order_status(db, order)
+    db.flush()
+
 
 def _issue_receipt(
     db: Session, order: Order, seat: Seat | None, payment: Payment, partial: bool
@@ -515,8 +615,10 @@ def _issue_receipt(
         "item_count": sum(alloc.order_item.quantity for alloc in payment.allocations),
         "subtotal": money(payment.items_cents),
         "discount": money(payment.discount_cents),
-        "tax": money(payment.tax_cents),
-        "tax_rate": GST_RATE,
+        # GST/PST split for display, recomputed from the same base and rates.
+        # The stored payment carries only the combined tax_cents; the breakdown
+        # is a receipt concern, so it lives here.
+        **_tax_breakdown(db, payment),
         "tip": money(payment.tip_cents),
         "total": money(payment.total_cents),
         "total_cents": payment.total_cents,

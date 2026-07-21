@@ -64,23 +64,5 @@ def pct(amount_cents: int, percent: float) -> int:
     return int(amount_cents * percent / 100 + 0.5)
 
 
-# --------------------------------------------------------------------------
-# Sales tax (GST)
-# --------------------------------------------------------------------------
-# Set for the jurisdiction. GST_RATE is a percentage; the registration number
-# is the printed line the receipt must carry. Both are display/charge config,
-# not data — change them here.
-GST_RATE = 5.0                       # percent, e.g. Canadian GST
-GST_NUMBER = "R000000000 RT0001"     # placeholder — replace with the real one
-
-
-def gst(taxable_cents: int) -> int:
-    """GST on a taxable amount, rounded half-up to the cent (section 4.2).
-
-    Tax applies to the item subtotal after any discount; the tip is not taxed.
-    """
-    return pct(max(taxable_cents, 0), GST_RATE)
-
-
 def money(cents: int) -> str:
     return f"{cents / 100:,.2f}"

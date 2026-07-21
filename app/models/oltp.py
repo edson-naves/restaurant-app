@@ -76,6 +76,18 @@ class SeatStatus:
     PAID = "paid"
 
 
+class Setting(Base):
+    """Key/value system configuration set up by the owner (tax, identity).
+
+    A flat store rather than a column per setting so a new one is a row, not a
+    migration. Values are strings; the settings service parses and defaults.
+    """
+    __tablename__ = "setting"
+
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+
+
 class Staff(Base):
     __tablename__ = "staff"
 
@@ -455,8 +467,10 @@ class Payment(Base):
     items_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tip_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     discount_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # GST on (items - discount). Zero on payments taken before tax existed, so
-    # their stored total still equals items - discount + tip and reconciles.
+    # Combined sales tax (GST + PST) on (items - discount). Zero on payments
+    # taken before tax existed, so their stored total still equals
+    # items - discount + tip and reconciles. The GST/PST split for the receipt
+    # lives in the receipt payload, not here — reporting needs only the total.
     tax_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
@@ -469,10 +483,24 @@ class Payment(Base):
     is_partial_close: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
+    # A voided payment is kept, not deleted, so the money history stays
+    # auditable. Its allocations are removed on void, which reopens the items
+    # and drops it out of every "sum of allocations" calculation; the sums over
+    # order.payments (revenue, ETL) must additionally skip voided rows.
+    voided: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    voided_by_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
+    void_reason: Mapped[str] = mapped_column(String(200), default="")
+
     order: Mapped["Order"] = relationship(back_populates="payments")
     seat: Mapped["Seat | None"] = relationship(lazy="joined")
     instrument: Mapped["PaymentInstrument"] = relationship(lazy="joined")
-    staff: Mapped["Staff"] = relationship(lazy="joined")
+    # Two FKs point at staff (who took it, who voided it), so each relationship
+    # must name its column explicitly.
+    staff: Mapped["Staff"] = relationship(lazy="joined", foreign_keys=[staff_id])
+    voided_by: Mapped["Staff | None"] = relationship(
+        lazy="joined", foreign_keys=[voided_by_id]
+    )
     allocations: Mapped[list["PaymentAllocation"]] = relationship(
         back_populates="payment", cascade="all, delete-orphan", lazy="selectin"
     )

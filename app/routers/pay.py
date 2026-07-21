@@ -13,13 +13,16 @@ from app.deps import can, current_staff, render, require
 from app.models.oltp import (
     Order,
     OrderItem,
+    OrderStatus,
+    Payment,
     PaymentInstrument,
     Receipt,
     Role,
     Seat,
     Staff,
 )
-from app.services.money import GST_NUMBER, GST_RATE, money, pct
+from app.services import settings as settings_svc
+from app.services.money import money, pct
 from app.services.payments import (
     PaymentError,
     assign_item_to_seat,
@@ -30,6 +33,7 @@ from app.services.payments import (
     pay_whole_order,
     set_shared_item_shares,
     split_equally,
+    void_payment,
 )
 
 router = APIRouter()
@@ -71,7 +75,8 @@ def payment_screen(
         "db": db, "staff": staff, "order": order,
         "ledgers": [ledgers[s.id] for s in order.seats if s.id in ledgers],
         "unassigned": unassigned, "panel": panel, "instruments": usable,
-        "managers": managers, "gst_rate": GST_RATE,
+        "managers": managers,
+        "tax_cfg": settings_svc.tax_config(db),
         "title": f"Payment · {order.code}",
     })
 
@@ -279,6 +284,39 @@ def take_full_payment(
     return RedirectResponse(f"/payments/{payment.id}/receipt", status_code=303)
 
 
+@router.post("/payments/{payment_id}/void")
+def void_a_payment(
+    payment_id: int,
+    reason: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("discount.approve")),
+):
+    """Reverse a payment (manager action). Kept as a record, not deleted.
+
+    Guarded on the order not being settled: voiding after the table has been
+    freed and possibly re-seated cannot cleanly reopen it, so that path is a
+    refund question rather than a void.
+    """
+    payment = db.get(Payment, payment_id)
+    if payment is None:
+        raise HTTPException(404, "Payment not found")
+    if payment.voided:
+        raise HTTPException(400, "This payment is already voided.")
+    order = payment.order
+    if order.status in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
+        raise HTTPException(
+            400,
+            "This order is already settled — a paid-out payment cannot be voided "
+            "from here.",
+        )
+    try:
+        void_payment(db, payment, staff_id=staff.id, reason=reason)
+    except PaymentError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    return RedirectResponse(f"/orders/{order.id}/pay", status_code=303)
+
+
 @router.get("/payments/{payment_id}/receipt", response_class=HTMLResponse)
 def view_receipt(
     payment_id: int,
@@ -307,7 +345,10 @@ def view_receipt(
         "p18": money(pct(subtotal_cents, 18)),
         "p15": money(pct(subtotal_cents, 15)),
     }
+    cfg = settings_svc.all_settings(db)
     return render(request, "receipt.html", {
         "db": db, "staff": staff, "receipt": receipt, "data": data,
-        "tip_guide": tip_guide, "gst_number": GST_NUMBER, "title": "Receipt",
+        "tip_guide": tip_guide,
+        "biz": {"name": cfg["biz_name"], "addr": cfg["biz_address"], "phone": cfg["biz_phone"]},
+        "title": "Receipt",
     })

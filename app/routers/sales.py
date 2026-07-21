@@ -281,6 +281,40 @@ def remove_item(
     return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
+@router.post("/orders/{order_id}/cancel")
+def cancel_order(
+    order_id: int,
+    reason: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("discount.approve")),
+):
+    """Cancel an order (manager action). Blocked while any payment stands.
+
+    A paid order must have each payment voided first, so the money reversal is
+    explicit rather than swept up in one click. On cancel the table is freed.
+    """
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(404, "Order not found")
+    if order.status in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
+        raise HTTPException(400, f"Order {order.code} is already closed.")
+    live = [p for p in order.payments if not p.voided]
+    if live:
+        raise HTTPException(
+            400,
+            f"Order {order.code} has {len(live)} payment(s) on it. "
+            "Void them before cancelling the order.",
+        )
+
+    order.status = OrderStatus.CANCELLED
+    order.closed_at = datetime.now()
+    if order.table:
+        order.table.status = TableStatus.FREE
+        order.table.current_waiter_id = None
+    db.commit()
+    return RedirectResponse("/", status_code=303)
+
+
 @router.post("/orders/{order_id}/send")
 def send_to_kitchen(
     order_id: int,

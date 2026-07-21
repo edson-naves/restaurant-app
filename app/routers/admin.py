@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import render, require
+from app.services import settings as settings_svc
 from app.models.oltp import (
     Floor,
     MenuCategory,
@@ -1039,6 +1040,49 @@ def toggle_staff(
 # --------------------------------------------------------------------------
 # Menu — 4.1.2
 # --------------------------------------------------------------------------
+
+@router.get("/settings")
+def settings_page(
+    request: Request,
+    saved: int = 0,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    return render(request, "admin_settings.html", {
+        "db": db, "staff": staff,
+        "settings": settings_svc.all_settings(db),
+        "saved": saved,
+        "title": "Settings",
+    })
+
+
+@router.post("/settings")
+def save_settings(
+    request: Request,
+    gst_rate: str = Form("0"),
+    gst_number: str = Form(""),
+    pst_rate: str = Form("0"),
+    pst_number: str = Form(""),
+    biz_name: str = Form(""),
+    biz_address: str = Form(""),
+    biz_phone: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    for label, raw in (("GST", gst_rate), ("PST", pst_rate)):
+        try:
+            if float(raw) < 0:
+                raise ValueError
+        except ValueError:
+            raise HTTPException(400, f"{label} rate must be a number, 0 or greater.")
+
+    settings_svc.save(db, {
+        "gst_rate": gst_rate, "gst_number": gst_number,
+        "pst_rate": pst_rate, "pst_number": pst_number,
+        "biz_name": biz_name, "biz_address": biz_address, "biz_phone": biz_phone,
+    })
+    return RedirectResponse("/admin/settings?saved=1", status_code=303)
+
 
 @router.get("/menu")
 def menu_page(

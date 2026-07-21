@@ -23,12 +23,18 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # Nullable on purpose: Zone.swatch falls back to the palette, so existing
     # zones are colour-coded without having to backfill a value.
     ("zone", "color", "VARCHAR(7)"),
-    # GST. Defaulting to 0 keeps pre-tax payments' stored total consistent
-    # (items - discount + tip) so reconciliation still ties. The two fact
-    # columns exist because ETL reloads into a table create_all already made.
+    # Sales tax (GST + PST combined). Defaulting to 0 keeps pre-tax payments'
+    # stored total consistent (items - discount + tip) so reconciliation still
+    # ties. The two fact columns exist because ETL reloads into a table
+    # create_all already made.
     ("payment", "tax_cents", "INTEGER NOT NULL DEFAULT 0"),
     ("fact_payment", "tax_cents", "INTEGER NOT NULL DEFAULT 0"),
     ("fact_order_header", "tax_cents", "INTEGER NOT NULL DEFAULT 0"),
+    # Void trail. Defaulting voided to 0 leaves every existing payment live.
+    ("payment", "voided", "BOOLEAN NOT NULL DEFAULT 0"),
+    ("payment", "voided_at", "DATETIME"),
+    ("payment", "voided_by_id", "INTEGER REFERENCES staff(id)"),
+    ("payment", "void_reason", "VARCHAR(200) DEFAULT ''"),
 )
 
 DEFAULT_FLOOR = "1st floor"

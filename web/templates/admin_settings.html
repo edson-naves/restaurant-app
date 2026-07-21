@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block body %}
+{% include "admin_nav.html" %}
+
+<div class="between">
+  <div>
+    <h1>Settings</h1>
+    <p class="sub">Tax and receipt identity · <span class="spec">req 3 (owner)</span></p>
+  </div>
+</div>
+
+{% if saved %}
+<div class="note" style="margin-bottom:16px">Settings saved.</div>
+{% endif %}
+
+<form method="post" action="/admin/settings">
+  <div class="card">
+    <strong>Sales tax</strong>
+    <p class="sub" style="margin:2px 0 12px">
+      Rates apply to the item subtotal at payment (the tip is not taxed). Set a
+      rate to 0 to switch that tax off. The numbers print on the receipt.
+    </p>
+    <div class="row" style="gap:16px">
+      <div class="field" style="max-width:140px">
+        <label>GST rate (%)</label>
+        <input type="number" name="gst_rate" step="0.01" min="0"
+               value="{{ settings.gst_rate }}">
+      </div>
+      <div class="field">
+        <label>GST registration number</label>
+        <input type="text" name="gst_number" value="{{ settings.gst_number }}">
+      </div>
+    </div>
+    <div class="row" style="gap:16px">
+      <div class="field" style="max-width:140px">
+        <label>PST rate (%)</label>
+        <input type="number" name="pst_rate" step="0.01" min="0"
+               value="{{ settings.pst_rate }}">
+      </div>
+      <div class="field">
+        <label>PST registration number</label>
+        <input type="text" name="pst_number" value="{{ settings.pst_number }}">
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <strong>Receipt identity</strong>
+    <p class="sub" style="margin:2px 0 12px">The heading printed on every receipt.</p>
+    <div class="field">
+      <label>Business name</label>
+      <input type="text" name="biz_name" value="{{ settings.biz_name }}">
+    </div>
+    <div class="field">
+      <label>Address</label>
+      <input type="text" name="biz_address" value="{{ settings.biz_address }}">
+    </div>
+    <div class="field" style="max-width:220px">
+      <label>Phone</label>
+      <input type="text" name="biz_phone" value="{{ settings.biz_phone }}">
+    </div>
+  </div>
+
+  <button class="btn primary">Save settings</button>
+</form>
+{% endblock %}

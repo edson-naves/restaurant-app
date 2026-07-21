@@ -41,6 +41,12 @@ def check(cond, label, detail=""):
 CLOSED = (OrderStatus.PAID, OrderStatus.CLOSED)
 closed_ids = [i for (i,) in db.execute(select(Order.id).where(Order.status.in_(CLOSED))).all()]
 
+# Voided payments are kept for audit but carry no money into the facts, so the
+# source money totals must exclude them to match. A closed order can legitimately
+# hold a voided payment (voided, re-paid, then settled).
+def live(*extra):
+    return (Payment.order_id.in_(closed_ids), Payment.voided.is_(False), *extra)
+
 # --- row counts -----------------------------------------------------------
 n_orders = len(closed_ids)
 n_header = db.execute(select(func.count()).select_from(FactOrderHeader)).scalar_one()
@@ -65,7 +71,7 @@ check(n_alloc_src == n_alloc_fact, "fact_payment grain matches allocation count"
 
 # --- money ----------------------------------------------------------------
 src_total = db.execute(
-    select(func.coalesce(func.sum(Payment.total_cents), 0)).where(Payment.order_id.in_(closed_ids))
+    select(func.coalesce(func.sum(Payment.total_cents), 0)).where(*live())
 ).scalar_one()
 fact_pay_total = db.execute(
     select(func.coalesce(func.sum(FactPayment.total_cents), 0))
@@ -80,21 +86,21 @@ check(src_total == hdr_total, "revenue: OLTP payments == fact_order_header",
       f"{money(src_total)} vs {money(hdr_total)}")
 
 src_tips = db.execute(
-    select(func.coalesce(func.sum(Payment.tip_cents), 0)).where(Payment.order_id.in_(closed_ids))
+    select(func.coalesce(func.sum(Payment.tip_cents), 0)).where(*live())
 ).scalar_one()
 fact_tips = db.execute(select(func.coalesce(func.sum(FactPayment.tip_cents), 0))).scalar_one()
 check(src_tips == fact_tips, "tips survive proportional allocation to allocation grain",
       f"{money(src_tips)} vs {money(fact_tips)}")
 
 src_disc = db.execute(
-    select(func.coalesce(func.sum(Payment.discount_cents), 0)).where(Payment.order_id.in_(closed_ids))
+    select(func.coalesce(func.sum(Payment.discount_cents), 0)).where(*live())
 ).scalar_one()
 fact_disc = db.execute(select(func.coalesce(func.sum(FactPayment.discount_cents), 0))).scalar_one()
 check(src_disc == fact_disc, "discounts survive allocation to allocation grain",
       f"{money(src_disc)} vs {money(fact_disc)}")
 
 src_tax = db.execute(
-    select(func.coalesce(func.sum(Payment.tax_cents), 0)).where(Payment.order_id.in_(closed_ids))
+    select(func.coalesce(func.sum(Payment.tax_cents), 0)).where(*live())
 ).scalar_one()
 fact_tax = db.execute(select(func.coalesce(func.sum(FactPayment.tax_cents), 0))).scalar_one()
 check(src_tax == fact_tax, "GST survives proportional allocation to allocation grain",
