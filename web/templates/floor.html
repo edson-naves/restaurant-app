@@ -17,10 +17,14 @@
    answer has to be instant, and reloading would collapse any open seat form. #}
 <div class="findbar">
   <input type="search" id="tableFind" autocomplete="off"
-         placeholder="Find a table — number, zone, floor, waiter or status">
+         placeholder="Find tables — e.g. 12, 21, 30  ·  or  sofia ready">
   <span class="meta" id="findCount"></span>
   <button type="button" class="btn sm" id="findClear" hidden>Clear</button>
 </div>
+<p class="sub" style="margin:-8px 0 16px">
+  Separate with commas to look for several at once; words without a comma
+  narrow the search. Matches number, zone, floor, waiter, status or order code.
+</p>
 <p class="empty" id="findNone" hidden>No table matches that.</p>
 
 {# 'sec', not 's' — the seat-guests form below already loops `s` over staff. #}
@@ -50,7 +54,7 @@
          (c.order.code if c.order else '')
        )|lower %}
     {% if c.order %}
-      <a class="tbl {{ c.table.status }}" data-find="{{ haystack }}"
+      <a class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
          href="/orders/{{ c.order.id }}">
         <span class="n">Table {{ c.table.number }}</span>
         <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes }}m</span>
@@ -59,7 +63,7 @@
         <span class="tot">${{ c.total_cents|money }}</span>
       </a>
     {% else %}
-      <details class="tbl {{ c.table.status }}" data-find="{{ haystack }}">
+      <details class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}">
         <summary style="cursor:pointer;list-style:none">
           <span class="n">Table {{ c.table.number }}</span><br>
           <span class="meta">{{ c.table.zone }} · seats {{ c.table.capacity }}</span><br>
@@ -104,15 +108,38 @@
   const cards = Array.from(document.querySelectorAll('.tbl[data-find]'));
   const sections = Array.from(document.querySelectorAll('section'));
 
+  // Two levels, so one box covers both questions a waiter asks:
+  //   "table 12 in the Sun zone"  -> "12 sun"    words narrow (AND)
+  //   "tables 12, 21 and 30"      -> "12, 21, 30" commas widen (OR)
+  function parse(value) {
+    return value
+      .toLowerCase()
+      .split(',')
+      .map(function (group) { return group.split(/\s+/).filter(Boolean); })
+      .filter(function (words) { return words.length > 0; });
+  }
+
+  function cardMatches(hay, number, value) {
+    const groups = parse(value);
+    if (groups.length === 0) return true;
+    return groups.some(function (words) {
+      return words.every(function (w) {
+        // A run of digits means a table number. Matching it as plain text
+        // would hit any number on the card — searching 21 would turn up
+        // table 12 because its order code reads ord-260721-00012.
+        // Prefix, not equality, so the list narrows as digits are typed.
+        if (/^\d+$/.test(w)) return number.indexOf(w) === 0;
+        return hay.indexOf(w) !== -1;
+      });
+    });
+  }
+
   function apply() {
-    // Every space-separated word must match, so "12 sofia" narrows rather
-    // than widening the way a single substring test would.
-    const terms = box.value.toLowerCase().split(/\s+/).filter(Boolean);
+    const groups = parse(box.value);
     let shown = 0;
 
     cards.forEach(function (card) {
-      const hay = card.dataset.find;
-      const hit = terms.every(function (t) { return hay.indexOf(t) !== -1; });
+      const hit = cardMatches(card.dataset.find, card.dataset.number, box.value);
       card.hidden = !hit;
       if (hit) shown++;
     });
@@ -120,10 +147,10 @@
     // A floor with nothing left to show would otherwise leave a stray heading.
     sections.forEach(function (sec) {
       const any = sec.querySelector('.tbl[data-find]:not([hidden])');
-      sec.hidden = terms.length > 0 && !any;
+      sec.hidden = groups.length > 0 && !any;
     });
 
-    const searching = terms.length > 0;
+    const searching = groups.length > 0;
     countEl.textContent = searching ? shown + ' of ' + cards.length : '';
     clearBtn.hidden = !searching;
     noneEl.hidden = !(searching && shown === 0);

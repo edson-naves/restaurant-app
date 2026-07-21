@@ -21,6 +21,7 @@ the dropdown in the header.
 
 ```bash
 python tests/test_templates.py        # every template compiles
+node tests/js/test_floor_search.js    # floor plan search rules (needs Node)
 python tests/test_admin.py            # setup module: guards, permissions, price parsing
 python tests/test_money.py            # split arithmetic invariants
 python tests/test_reconciliation.py   # star schema ties back to OLTP
