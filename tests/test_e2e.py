@@ -661,6 +661,20 @@ client.post(f"/orders/{order2_id}/items", data={"menu_item_id": steak.id, "seat_
 client.post(f"/orders/{order2_id}/items", data={"menu_item_id": bread.id, "seat_number": 1})
 client.post(f"/orders/{order2_id}/items", data={"menu_item_id": burger.id, "seat_number": 2})
 
+# Fire-before-pay: settling food the kitchen hasn't been sent is refused.
+_seat1 = db.execute(
+    select(Seat).where(Seat.order_id == order2_id, Seat.seat_number == 1)
+).scalar_one()
+r = client.post(
+    f"/orders/{order2_id}/seats/{_seat1.id}/pay",
+    data={"instrument_id": visa.id, "tip_mode": "none"},
+)
+check(r.status_code == 400, "paying an order with un-fired items is refused")
+r = client.post(f"/orders/{order2_id}/pay-all", data={"instrument_id": visa.id})
+check(r.status_code == 400, "paying the whole order is also blocked until fired")
+# Now send the food to the kitchen; payment is unlocked.
+client.post(f"/orders/{order2_id}/send")
+
 db.expire_all()
 order2 = db.get(Order, order2_id)
 seat_a = db.execute(select(Seat).where(Seat.order_id == order2_id, Seat.seat_number == 1)).scalar_one()

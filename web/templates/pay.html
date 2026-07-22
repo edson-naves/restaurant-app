@@ -12,6 +12,24 @@
   <a class="btn" href="/orders/{{ order.id }}">← Order</a>
 </div>
 
+{% if unfired %}
+{# Fire-before-pay (4.1.3 / 4.2): the kitchen has to be told to make the food
+   before it can be charged for, so payment is blocked until nothing is pending. #}
+<div class="card" style="border-color:rgba(212,72,59,.55)">
+  <h2>⛔ Send the order to the kitchen first</h2>
+  <p class="sub">
+    {{ unfired|length }} item{{ 's' if unfired|length != 1 else '' }} haven't been fired yet.
+    You can't take payment for food the kitchen hasn't been asked to make.
+  </p>
+  <ul class="sub" style="margin:6px 0 12px">
+    {% for i in unfired %}<li>{{ i.quantity }}× {{ i.menu_item.name }} · {{ i.course|course }}</li>{% endfor %}
+  </ul>
+  <form method="post" action="/orders/{{ order.id }}/send">
+    <button class="btn primary">Send to kitchen</button>
+  </form>
+</div>
+{% endif %}
+
 {% if unassigned %}
 <div class="card" style="border-color:rgba(201,138,27,.5)">
   <h2>⚠ Unassigned items <span class="spec">req 4.2.4</span></h2>
@@ -67,7 +85,7 @@
       {% if L.paid_cents %}<div class="bal-row"><span class="lbl">Paid</span><span class="collected">${{ L.paid_cents|money }}</span></div>{% endif %}
       <div class="bal-row"><span class="lbl">Owing</span><span class="owed">${{ L.outstanding_cents|money }}</span></div>
 
-      {% if L.outstanding_cents > 0 and can('payments.take') %}
+      {% if L.outstanding_cents > 0 and can('payments.take') and not unfired %}
       <details style="margin-top:10px">
         <summary class="btn primary sm" style="width:100%">Take payment</summary>
         <form method="post" action="/orders/{{ order.id }}/seats/{{ L.seat.id }}/pay" style="margin-top:10px">
@@ -163,6 +181,7 @@
       <p class="sub" style="margin:8px 0 0;font-size:11px">Divides every item across N seats. Each seat still picks its own instrument.</p>
     </div>
 
+    {% if not unfired %}
     <div class="card">
       <h2>Pay whole order <span class="spec">req 4.2.2</span></h2>
       <form method="post" action="/orders/{{ order.id }}/pay-all">
@@ -191,6 +210,7 @@
         <button class="btn primary" style="width:100%">Settle ${{ panel.owed_cents|money }} + tax</button>
       </form>
     </div>
+    {% endif %}
     {% endif %}
 
     {% if order.payments %}

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import can, current_staff, render, require
 from app.models.oltp import (
+    KitchenStatus,
     Order,
     OrderItem,
     OrderStatus,
@@ -47,6 +48,28 @@ def _load(db: Session, order_id: int) -> Order:
     if order is None:
         raise HTTPException(404, "Order not found")
     return order
+
+
+def _unfired(order: Order) -> list[OrderItem]:
+    """Items not yet sent to the kitchen."""
+    return [i for i in order.items if i.kitchen_status == KitchenStatus.PENDING]
+
+
+def _require_all_fired(order: Order) -> None:
+    """Fire-before-pay: you can't settle food the kitchen hasn't been told to make.
+
+    Payment and firing are otherwise independent, but for table service the
+    order is fire -> cook -> serve -> pay. Blocking payment while items are
+    still pending keeps a line from ever being 'paid but never cooked'.
+    """
+    pending = _unfired(order)
+    if pending:
+        n = len(pending)
+        raise HTTPException(
+            400,
+            f"Send all items to the kitchen before taking payment — "
+            f"{n} item{'s' if n != 1 else ''} still pending.",
+        )
 
 
 @router.get("/orders/{order_id}/pay")
@@ -86,6 +109,8 @@ def payment_screen(
         "unassigned": unassigned, "panel": panel, "instruments": usable,
         "managers": managers,
         "settled": settled, "refundable": refundable, "refunded": refunded,
+        # Fire-before-pay: block settlement while food is still un-fired.
+        "unfired": _unfired(order),
         "tax_cfg": settings_svc.tax_config(db),
         "title": f"Payment · {order.code}",
     })
@@ -189,6 +214,7 @@ def take_seat_payment(
 ):
     """4.2.4 / 4.2.5 — settle a seat, optionally only the ticked items."""
     order = _load(db, order_id)
+    _require_all_fired(order)
     seat = db.get(Seat, seat_id)
     if seat is None or seat.order_id != order.id:
         raise HTTPException(404, "Seat not found")
@@ -260,6 +286,7 @@ def take_full_payment(
 ):
     """4.2.2 — single-instrument settlement of the whole order."""
     order = _load(db, order_id)
+    _require_all_fired(order)
     outstanding = sum(
         i.line_total_cents - sum(a.amount_cents for a in i.allocations)
         for i in order.items
