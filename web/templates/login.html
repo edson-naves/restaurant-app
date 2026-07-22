@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · RMS</title>
+  <link rel="stylesheet" href="/static/app.css?v={{ asset_v() }}">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🍽️</text></svg>">
+</head>
+<body>
+<main class="wrap" style="max-width:420px;margin-top:8vh">
+  <div class="brand" style="text-align:center;font-size:24px;margin-bottom:6px">🍽️ <span>RMS</span></div>
+  <p class="sub" style="text-align:center">Restaurant Management System</p>
+
+  <div class="card">
+    <h2>Sign in</h2>
+    {% if error %}
+    <div class="err" style="margin-bottom:12px">That name and PIN don't match. Try again.</div>
+    {% endif %}
+    <form method="post" action="/login">
+      <div class="field">
+        <label>Who are you?</label>
+        <select name="staff_id" required>
+          {% for s in staff %}
+          <option value="{{ s.id }}">{{ s.name }} — {{ s.role.replace('_', ' ') }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>PIN</label>
+        <input type="password" name="pin" inputmode="numeric" autocomplete="off"
+               pattern="[0-9]{4,8}" placeholder="••••" required autofocus>
+      </div>
+      <button class="btn primary" style="width:100%">Sign in</button>
+    </form>
+  </div>
+</main>
+</body>
+</html>

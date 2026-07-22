@@ -532,10 +532,3 @@ def delivery_update(
             d.delivered_at = datetime.now()
     db.commit()
     return RedirectResponse("/delivery", status_code=303)
-
-
-@router.post("/staff/switch")
-def switch_staff(staff_id: int = Form(...), next_url: str = Form("/")):
-    resp = RedirectResponse(next_url, status_code=303)
-    resp.set_cookie("staff_id", str(staff_id), max_age=60 * 60 * 12)
-    return resp

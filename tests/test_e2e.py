@@ -48,6 +48,31 @@ kitchen = db.execute(select(Staff).where(Staff.role == Role.KITCHEN)).scalars().
 
 client = httpx.Client(base_url=BASE, follow_redirects=True, timeout=30)
 
+# ---------------------------------------------------------------- auth (§3, §5)
+print("--- sign in ---")
+noauth = httpx.Client(base_url=BASE, follow_redirects=False, timeout=30)
+r = noauth.get("/")
+check(r.status_code == 303 and r.headers.get("location") == "/login",
+      "an unauthenticated request is redirected to /login", str(r.status_code))
+check(noauth.get("/login").status_code == 200, "the login page is reachable signed out")
+
+# Wrong PIN is rejected.
+r = noauth.post("/login", data={"staff_id": owner.id, "pin": "000000"})
+check(r.status_code == 303 and "error" in r.headers.get("location", ""),
+      "a wrong PIN is rejected")
+# Correct PIN signs in and sets the session cookie.
+r = noauth.post("/login", data={"staff_id": owner.id, "pin": owner.pin_code})
+check(r.status_code == 303 and r.headers.get("location") == "/"
+      and "staff_id" in r.cookies, "the right PIN signs in and sets the session")
+# The session then reaches a protected page, and sign-out clears it.
+authed = httpx.Client(base_url=BASE, follow_redirects=False, timeout=30)
+authed.cookies.set("staff_id", str(owner.id))
+check(authed.get("/").status_code == 200, "the signed-in session reaches the floor plan")
+r = authed.get("/logout")
+check(r.status_code == 303 and r.headers.get("location") == "/login", "sign-out redirects to /login")
+noauth.close()
+authed.close()
+
 # ---------------------------------------------------------------- pages load
 print("--- pages render ---")
 for path in ["/", "/kitchen", "/delivery", "/reports", "/reports/daily",

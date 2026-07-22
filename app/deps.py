@@ -58,16 +58,19 @@ PERMISSIONS: dict[str, set[str]] = {
 
 
 def current_staff(request: Request, db: Session = Depends(get_db)) -> Staff:
+    """The logged-in staff, from the session cookie set at /login.
+
+    No fallback: an unauthenticated request raises 401, which the app turns into
+    a redirect to /login (see main.http_error). The cookie is the session — the
+    PIN is checked once at login, not on every request — so a member deactivated
+    mid-shift keeps their session until it expires or they log out.
+    """
     staff_id = request.cookies.get("staff_id")
     staff = None
     if staff_id and staff_id.isdigit():
         staff = db.get(Staff, int(staff_id))
     if staff is None:
-        staff = db.execute(
-            select(Staff).where(Staff.role == Role.OWNER).limit(1)
-        ).scalar_one_or_none()
-    if staff is None:
-        raise HTTPException(500, "No staff configured. Run: python -m app.seed")
+        raise HTTPException(401, "Please sign in.")
     return staff
 
 

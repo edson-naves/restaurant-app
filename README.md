@@ -14,8 +14,11 @@ cd restaurant_app
 .venv/Scripts/python -m uvicorn app.main:app --reload --port 8000
 ```
 
-Open <http://127.0.0.1:8000>. Switch the acting user (and therefore role) from
-the dropdown in the header.
+Open <http://127.0.0.1:8000>. You'll be sent to **/login** — pick your name and
+enter your PIN. The seed sets memorable PINs by role: owner `1000`, manager
+`2000`, kitchen `4001`, delivery `5001`, and waiters `3001`+ (see `app/seed.py`).
+Sign out from the header. The session is a 12-hour cookie; PINs are compared as
+stored — hashing them is the obvious next hardening step.
 
 ## Tests
 

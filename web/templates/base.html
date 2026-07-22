@@ -21,16 +21,14 @@
     <a href="/admin/tables" class="{{ 'on' if request.url.path.startswith('/admin') else '' }}">Manage</a>
     {% endif %}
   </nav>
-  <form class="whoami" method="post" action="/staff/switch">
-    <input type="hidden" name="next_url" value="{{ request.url.path }}">
-    <select name="staff_id" onchange="this.form.submit()" title="Acting as">
-      {% for s in all_staff %}
-      <option value="{{ s.id }}" {{ 'selected' if staff and s.id == staff.id else '' }}>
-        {{ s.name }} — {{ s.role.replace('_', ' ') }}
-      </option>
-      {% endfor %}
-    </select>
-  </form>
+  <div class="whoami" style="display:flex;align-items:center;gap:10px">
+    {% if staff %}
+    <span class="meta" style="color:var(--muted);font-size:13px">
+      {{ staff.name }} · {{ staff.role.replace('_', ' ') }}
+    </span>
+    <a class="btn sm" href="/logout">Sign out</a>
+    {% endif %}
+  </div>
 </header>
 
 <main class="wrap">
