@@ -299,6 +299,43 @@ for label in (f"GST ({_cfg.gst_rate}%)", "Total number of items:", "Please pay y
               "Tip guide", "GST#"):
     check(label in rr.text, f"receipt shows '{label}'")
 
+# 4.2.7 — email / text the receipt to the guest (local outbox transport).
+from pathlib import Path as _Path  # noqa: E402
+
+from app.models.oltp import ReceiptDelivery  # noqa: E402
+from app.services.receipt_delivery import OUTBOX  # noqa: E402
+
+before_files = len(list((OUTBOX / "email").glob("*.txt"))) if (OUTBOX / "email").exists() else 0
+r = client.post(f"/payments/{p1.id}/receipt/send",
+                data={"method": "email", "destination": "guest@example.com"})
+check(r.status_code == 200, "receipt emails to a valid address")
+db.expire_all()
+deliv = db.execute(
+    select(ReceiptDelivery).where(ReceiptDelivery.receipt_id == receipt_row.id)
+).scalars().all()
+check(any(d.method == "email" and d.status == "sent" for d in deliv),
+      "the email send is recorded as sent")
+after_files = len(list((OUTBOX / "email").glob("*.txt")))
+check(after_files == before_files + 1, "an email file lands in the outbox",
+      f"{before_files} -> {after_files}")
+# The outbox file carries the receipt body.
+newest = max((OUTBOX / "email").glob("*.txt"), key=lambda p: p.stat().st_mtime)
+body = newest.read_text(encoding="utf-8")
+check("guest@example.com" in body and "TOTAL" in body,
+      "the emailed file has the address and the receipt total")
+
+# A malformed address is refused, and nothing is recorded.
+r = client.post(f"/payments/{p1.id}/receipt/send",
+                data={"method": "email", "destination": "not-an-email"})
+check(r.status_code == 400, "a malformed email is refused")
+
+# SMS to a phone number works and is filed under sms/.
+r = client.post(f"/payments/{p1.id}/receipt/send",
+                data={"method": "sms", "destination": "555-123-4567"})
+check(r.status_code == 200 and (OUTBOX / "sms").exists()
+      and len(list((OUTBOX / "sms").glob("*.txt"))) >= 1,
+      "texting the receipt files it under the sms outbox")
+
 # Seat 2 pays cash — different instrument, same order (4.2.2).
 seat2 = db.execute(select(Seat).where(Seat.order_id == order_id, Seat.seat_number == 2)).scalar_one()
 r = client.post(f"/orders/{order_id}/seats/{seat2.id}/pay", data={"instrument_id": cash.id, "tip_mode": "none"})

@@ -583,3 +583,24 @@ class DayClose(Base):
     notes: Mapped[str] = mapped_column(String(300), default="")
 
     closed_by: Mapped["Staff"] = relationship(lazy="joined")
+
+
+class ReceiptDelivery(Base):
+    """One record per time a receipt is emailed or texted (section 4.2.7).
+
+    Kept separate from the Receipt row so a receipt can be re-sent, to more than
+    one destination, without losing the trail. Each row is who sent what, where,
+    when, and whether it went out.
+    """
+    __tablename__ = "receipt_delivery"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    receipt_id: Mapped[int] = mapped_column(ForeignKey("receipt.id", ondelete="CASCADE"), nullable=False)
+    method: Mapped[str] = mapped_column(String(10), nullable=False)   # email | sms
+    destination: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(10), default="sent")   # sent | failed
+    detail: Mapped[str] = mapped_column(String(300), default="")      # outbox path or error
+    sent_by_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+    sent_by: Mapped["Staff | None"] = relationship(lazy="joined")

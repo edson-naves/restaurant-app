@@ -17,10 +17,12 @@ from app.models.oltp import (
     Payment,
     PaymentInstrument,
     Receipt,
+    ReceiptDelivery,
     Role,
     Seat,
     Staff,
 )
+from app.services import receipt_delivery
 from app.services import settings as settings_svc
 from app.services.money import money, pct
 from app.services.payments import (
@@ -321,6 +323,7 @@ def void_a_payment(
 def view_receipt(
     payment_id: int,
     request: Request,
+    sent: str = "",
     db: Session = Depends(get_db),
     staff: Staff = Depends(current_staff),
 ):
@@ -346,9 +349,36 @@ def view_receipt(
         "p15": money(pct(subtotal_cents, 15)),
     }
     cfg = settings_svc.all_settings(db)
+    deliveries = db.execute(
+        select(ReceiptDelivery).where(ReceiptDelivery.receipt_id == receipt.id)
+        .order_by(ReceiptDelivery.sent_at.desc())
+    ).scalars().all()
     return render(request, "receipt.html", {
         "db": db, "staff": staff, "receipt": receipt, "data": data,
-        "tip_guide": tip_guide,
+        "tip_guide": tip_guide, "deliveries": deliveries, "sent": sent,
         "biz": {"name": cfg["biz_name"], "addr": cfg["biz_address"], "phone": cfg["biz_phone"]},
         "title": "Receipt",
     })
+
+
+@router.post("/payments/{payment_id}/receipt/send")
+def send_receipt(
+    payment_id: int,
+    method: str = Form(...),
+    destination: str = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(current_staff),
+):
+    """4.2.7 — email or text the receipt to the guest."""
+    receipt = db.execute(
+        select(Receipt).where(Receipt.payment_id == payment_id)
+    ).scalars().first()
+    if receipt is None:
+        raise HTTPException(404, "No receipt was issued for that payment.")
+    try:
+        receipt_delivery.send(db, receipt, method, destination, staff)
+    except receipt_delivery.DeliveryError as e:
+        raise HTTPException(400, str(e))
+    return RedirectResponse(
+        f"/payments/{payment_id}/receipt?sent={method.lower()}", status_code=303
+    )

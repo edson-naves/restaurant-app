@@ -20,3 +20,4 @@ db/*.db-wal
 .idea/
 Thumbs.db
 desktop.ini
+outbox/

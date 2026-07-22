@@ -308,3 +308,8 @@ td.pending { color: var(--accent); font-weight: 700; }
   width: 44px; height: 30px; min-height: 0; padding: 2px;
   border-radius: 6px; cursor: pointer; background: var(--panel-2);
 }
+
+/* Screen-only chrome hidden when printing a receipt / Z-report. */
+@media print {
+  .noprint, nav, .between > div:last-child { display: none !important; }
+}

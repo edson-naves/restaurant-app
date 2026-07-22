@@ -11,6 +11,43 @@
   </div>
 </div>
 
+{% if sent %}
+<div class="note" style="margin-bottom:14px">Receipt sent by {{ sent }}.</div>
+{% endif %}
+
+{# Email / text delivery. No print styling on this block — it's screen only. #}
+<div class="card noprint" style="margin-bottom:16px">
+  <div class="filters">
+    <form method="post" action="/payments/{{ data.payment_id | default(receipt.payment_id) }}/receipt/send" class="filters" style="gap:8px;margin:0">
+      <input type="hidden" name="method" value="email">
+      <div class="field" style="margin:0"><label>Email receipt</label>
+        <input type="email" name="destination" placeholder="guest@example.com" required>
+      </div>
+      <button class="btn">Send email</button>
+    </form>
+    <form method="post" action="/payments/{{ data.payment_id | default(receipt.payment_id) }}/receipt/send" class="filters" style="gap:8px;margin:0">
+      <input type="hidden" name="method" value="sms">
+      <div class="field" style="margin:0"><label>Text receipt</label>
+        <input type="tel" name="destination" placeholder="555-123-4567" required>
+      </div>
+      <button class="btn">Send SMS</button>
+    </form>
+  </div>
+  {% if deliveries %}
+  <p class="sub" style="margin:12px 0 4px"><strong>Sent</strong></p>
+  <table>
+    {% for d in deliveries %}
+    <tr>
+      <td style="width:60px">{{ d.method }}</td>
+      <td>{{ d.destination }}</td>
+      <td class="meta">{{ d.sent_at.strftime('%H:%M') }} · {{ d.sent_by.name if d.sent_by else '—' }}</td>
+      <td>{% if d.status == 'sent' %}<span class="pill ok">sent</span>{% else %}<span class="pill ready_to_pay">failed</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+</div>
+
 <div class="receipt">
   <div class="c b" style="font-size:18px;letter-spacing:1px">{{ biz.name }}</div>
   <div class="c" style="font-size:11px">{{ biz.addr }}</div>
