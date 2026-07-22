@@ -47,6 +47,7 @@ PERMISSIONS: dict[str, set[str]] = {
     "orders.manage":   {Role.OWNER, Role.MANAGER, Role.WAITER},
     "kitchen.view":    {Role.OWNER, Role.MANAGER, Role.KITCHEN, Role.WAITER},
     "kitchen.update":  {Role.OWNER, Role.MANAGER, Role.KITCHEN},
+    "menu.availability": {Role.OWNER, Role.MANAGER, Role.WAITER, Role.KITCHEN},  # 86 an item
     "delivery.view":   {Role.OWNER, Role.MANAGER, Role.DELIVERY_COORDINATOR, Role.KITCHEN},
     "delivery.update": {Role.OWNER, Role.MANAGER, Role.DELIVERY_COORDINATOR},
     "payments.take":   {Role.OWNER, Role.MANAGER, Role.WAITER},

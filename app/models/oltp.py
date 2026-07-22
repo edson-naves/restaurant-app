@@ -243,7 +243,12 @@ class MenuItem(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
     price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    # is_active is the owner's "on the menu at all" flag (admin). available is
+    # the kitchen's "in stock right now" flag — 86'd mid-service and put back
+    # later. An item is orderable only when both are true; separating them keeps
+    # a temporary sell-out distinct from a permanent menu change.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # Section 4.2.4 — shared items (bread, appetizers) can be split across seats.
     is_shareable: Mapped[bool] = mapped_column(Boolean, default=False)
 

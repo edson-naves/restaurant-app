@@ -522,6 +522,27 @@ table2 = db.execute(
 r = client.post(f"/tables/{table2.id}/open", data={"guests": 2, "waiter_id": waiter.id})
 order2_id = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
 
+# 4.1.2 — 86 an item mid-service (kitchen sold out of the burger).
+print("\n--- 86 an item ---")
+client.cookies.set("staff_id", str(kitchen.id))   # kitchen can 86
+r = client.post(f"/menu/{burger.id}/availability", data={"available": 0})
+db.expire_all()
+check(r.status_code == 200 and db.get(MenuItem, burger.id).available is False,
+      "the kitchen 86's the burger")
+check("86" in client.get("/availability").text, "the availability board shows it 86'd")
+# It drops off the order screen at once.
+client.cookies.set("staff_id", str(waiter.id))
+scr = client.get(f"/orders/{order2_id}?category={burger.category_id}").text
+check("Beef Burger" not in scr, "an 86'd item leaves the order screen")
+# And a stale page cannot still order it.
+r = client.post(f"/orders/{order2_id}/items", data={"menu_item_id": burger.id, "seat_number": 2})
+check(r.status_code == 400, "adding an 86'd item is refused")
+# Put it back on.
+client.post(f"/menu/{burger.id}/availability", data={"available": 1})
+db.expire_all()
+check(db.get(MenuItem, burger.id).available is True, "switching it on makes it sellable again")
+client.cookies.set("staff_id", str(waiter.id))
+
 # Seat 1 orders two items; only one is paid before they leave.
 client.post(f"/orders/{order2_id}/items", data={"menu_item_id": steak.id, "seat_number": 1})
 client.post(f"/orders/{order2_id}/items", data={"menu_item_id": bread.id, "seat_number": 1})

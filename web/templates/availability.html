@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>Menu availability</h1>
+    <p class="sub">
+      Tap to 86 an item the moment it sells out — it leaves the order screen at
+      once, and comes back when you switch it on.
+      {% if eighty_sixed %} · <strong style="color:var(--ready)">{{ eighty_sixed }} 86'd</strong>{% endif %}
+      · <span class="spec">req 4.1.2</span>
+    </p>
+  </div>
+</div>
+
+{% for c in categories %}
+{% if by_cat.get(c.id) %}
+<div class="card">
+  <strong>{{ c.name }}</strong>
+  <div class="avail-grid">
+    {% for i in by_cat[c.id] %}
+    <form method="post" action="/menu/{{ i.id }}/availability" class="avail {{ 'off' if not i.available else '' }}">
+      <input type="hidden" name="available" value="{{ 0 if i.available else 1 }}">
+      <button class="avail-btn">
+        <span class="nm">{{ i.name }}</span>
+        <span class="st">{{ 'Available' if i.available else '86 — tap to restore' }}</span>
+      </button>
+    </form>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% endfor %}
+{% endblock %}

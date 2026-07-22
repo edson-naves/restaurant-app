@@ -313,3 +313,18 @@ td.pending { color: var(--accent); font-weight: 700; }
 @media print {
   .noprint, nav, .between > div:last-child { display: none !important; }
 }
+
+/* ---------- menu availability (86) ---------- */
+.avail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-top: 12px; }
+.avail { margin: 0; }
+.avail-btn {
+  width: 100%; text-align: left; cursor: pointer; font: inherit;
+  background: var(--panel-2); border: 1px solid var(--line); border-left: 4px solid var(--ok);
+  border-radius: 10px; padding: 12px; color: var(--ink); min-height: 60px;
+}
+.avail-btn:hover { border-color: var(--accent); }
+.avail-btn .nm { display: block; font-weight: 600; }
+.avail-btn .st { display: block; color: var(--muted); font-size: 12px; margin-top: 3px; }
+.avail.off .avail-btn { border-left-color: var(--ready); opacity: .7; }
+.avail.off .avail-btn .nm { text-decoration: line-through; }
+.avail.off .avail-btn .st { color: #ff9a90; }

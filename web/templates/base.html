@@ -14,6 +14,9 @@
     <a href="/" class="{{ 'on' if request.url.path == '/' else '' }}">Floor</a>
     <a href="/kitchen" class="{{ 'on' if request.url.path.startswith('/kitchen') else '' }}">Kitchen</a>
     <a href="/delivery" class="{{ 'on' if request.url.path.startswith('/delivery') else '' }}">Delivery</a>
+    {% if can('menu.availability') %}
+    <a href="/availability" class="{{ 'on' if request.url.path.startswith('/availability') else '' }}">86</a>
+    {% endif %}
     {% if can('reports.view') %}
     <a href="/reports" class="{{ 'on' if request.url.path.startswith('/reports') else '' }}">Reports</a>
     {% endif %}

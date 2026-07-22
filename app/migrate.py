@@ -40,6 +40,8 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("fact_order_header", "refund_cents", "INTEGER NOT NULL DEFAULT 0"),
     ("day_close", "refund_cents", "INTEGER NOT NULL DEFAULT 0"),
     ("day_close", "cash_refund_cents", "INTEGER NOT NULL DEFAULT 0"),
+    # 86 / out-of-stock. Defaults available so every existing item stays sellable.
+    ("menu_item", "available", "BOOLEAN NOT NULL DEFAULT 1"),
 )
 
 DEFAULT_FLOOR = "1st floor"

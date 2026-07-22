@@ -197,9 +197,12 @@ def order_screen(
         select(MenuCategory).order_by(MenuCategory.sort_order)
     ).scalars().all()
     active_cat = category or (categories[0].id if categories else None)
+    # 86'd items (available=False) drop off the order screen alongside items the
+    # owner has taken off the menu (is_active=False).
     items = db.execute(
         select(MenuItem).where(
-            MenuItem.category_id == active_cat, MenuItem.is_active.is_(True)
+            MenuItem.category_id == active_cat,
+            MenuItem.is_active.is_(True), MenuItem.available.is_(True),
         ).order_by(MenuItem.name)
     ).scalars().all()
 
@@ -235,6 +238,9 @@ def add_item(
     mi = db.get(MenuItem, menu_item_id)
     if mi is None:
         raise HTTPException(404, "Menu item not found")
+    if not mi.available or not mi.is_active:
+        # A stale order screen could still POST an item 86'd moments ago.
+        raise HTTPException(400, f"{mi.name} is not available right now.")
 
     seat = None
     if seat_number:
@@ -279,6 +285,49 @@ def remove_item(
     db.delete(item)
     db.commit()
     return RedirectResponse(f"/orders/{order_id}", status_code=303)
+
+
+# --------------------------------------------------------------------------
+# 4.1.2  Menu availability — "86" an item mid-service
+# --------------------------------------------------------------------------
+
+@router.get("/availability")
+def availability(
+    request: Request,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("menu.availability")),
+):
+    """A fast on/off board for the whole menu — front-of-house and kitchen use it
+    to 86 an item the moment it sells out, and put it back when it's on again."""
+    categories = db.execute(
+        select(MenuCategory).order_by(MenuCategory.sort_order, MenuCategory.name)
+    ).scalars().all()
+    items = db.execute(
+        select(MenuItem).where(MenuItem.is_active.is_(True)).order_by(MenuItem.name)
+    ).scalars().all()
+    by_cat: dict[int, list] = {c.id: [] for c in categories}
+    for i in items:
+        by_cat.setdefault(i.category_id, []).append(i)
+    return render(request, "availability.html", {
+        "db": db, "staff": staff, "categories": categories, "by_cat": by_cat,
+        "eighty_sixed": sum(1 for i in items if not i.available),
+        "title": "Menu availability",
+    })
+
+
+@router.post("/menu/{item_id}/availability")
+def toggle_availability(
+    item_id: int,
+    available: int = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("menu.availability")),
+):
+    item = db.get(MenuItem, item_id)
+    if item is None:
+        raise HTTPException(404, "Menu item not found")
+    item.available = bool(available)
+    db.commit()
+    return RedirectResponse("/availability", status_code=303)
 
 
 @router.post("/orders/{order_id}/cancel")
