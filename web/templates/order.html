@@ -125,9 +125,34 @@
             {% else %}<span class="sub">—</span>{% endif %}
           </td>
           <td class="num">${{ i.line_total_cents|money }}</td>
-          <td>
-            {% if can('orders.manage') and not i.allocations %}
-            <form method="post" action="/orders/{{ order.id }}/items/{{ i.id }}/remove">
+          <td style="white-space:nowrap">
+            {% if can('orders.manage') and not i.allocations and order.status not in ('paid','closed','cancelled') %}
+            <details style="display:inline-block">
+              <summary class="btn sm" style="display:inline-block" title="Edit">✎</summary>
+              <form method="post" action="/orders/{{ order.id }}/items/{{ i.id }}/edit"
+                    style="margin-top:6px;text-align:left;min-width:200px">
+                <div class="field" style="margin-bottom:8px">
+                  <label>Quantity</label>
+                  <input type="number" name="quantity" value="{{ i.quantity }}" min="1" max="20">
+                </div>
+                <div class="field" style="margin-bottom:8px">
+                  <label>Modifiers</label>
+                  <div class="tipset">
+                    {% set chosen = i.modifiers|map(attribute='modifier_id')|list %}
+                    {% for m in modifiers %}
+                    <label><input type="checkbox" name="modifier_ids" value="{{ m.id }}"
+                           {{ 'checked' if m.id in chosen else '' }}> {{ m.name }}</label>
+                    {% endfor %}
+                  </div>
+                </div>
+                <div class="field" style="margin-bottom:8px">
+                  <label>Special instructions</label>
+                  <input type="text" name="notes" value="{{ i.notes }}">
+                </div>
+                <button class="btn sm primary">Save changes</button>
+              </form>
+            </details>
+            <form method="post" action="/orders/{{ order.id }}/items/{{ i.id }}/remove" style="display:inline">
               <button class="btn sm danger" title="Remove">×</button>
             </form>
             {% endif %}

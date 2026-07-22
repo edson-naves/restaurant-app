@@ -202,6 +202,25 @@ expected = steak.price_cents + salmon.price_cents + burger.price_cents + bread.p
 actual = sum(i.line_total_cents for i in order.items)
 check(actual == expected, "running total is correct", f"${money(actual)}")
 
+# 4.1.2 — edit a line already on the order (change quantity + note), no
+# delete-and-re-add. The steak was rung up as 1; bump it to 2.
+steak_line = next(i for i in order.items if i.menu_item_id == steak.id)
+r = client.post(f"/orders/{order_id}/items/{steak_line.id}/edit",
+                data={"quantity": 2, "notes": "Well done"})
+db.expire_all()
+steak_line = db.get(type(order.items[0]), steak_line.id)
+check(r.status_code == 200 and steak_line.quantity == 2 and steak_line.notes == "Well done",
+      "an existing line's quantity and note are edited in place")
+check(steak_line.line_total_cents == steak.price_cents * 2,
+      "the line total follows the new quantity")
+check(sum(i.line_total_cents for i in db.get(Order, order_id).items)
+      == expected + steak.price_cents, "the order total reflects the edit")
+r = client.post(f"/orders/{order_id}/items/{steak_line.id}/edit", data={"quantity": 99})
+check(r.status_code == 400, "an out-of-range quantity is refused")
+# Restore to 1 so the downstream payment maths are unchanged.
+client.post(f"/orders/{order_id}/items/{steak_line.id}/edit",
+            data={"quantity": 1, "notes": "Medium rare"})
+
 # Step 4: send to kitchen.
 r = client.post(f"/orders/{order_id}/send")
 db.expire_all()
@@ -424,6 +443,12 @@ check(panel.owed_cents == 0, "all item value collected", f"owed ${money(panel.ow
 check(order.status == "paid", "step 10: order marked paid", order.status)
 check(db.get(RestaurantTable, table_id).status == TableStatus.FREE,
       "step 10: table returns to Free on the floor plan")
+
+# A settled order's lines can no longer be edited.
+paid_line = order.items[0]
+check(client.post(f"/orders/{order_id}/items/{paid_line.id}/edit",
+                  data={"quantity": 3}).status_code == 400,
+      "a line on a settled order cannot be edited")
 
 # Three instruments on one order — the 4.2.2 headline requirement.
 instruments_used = {p.instrument.name for p in order.payments}

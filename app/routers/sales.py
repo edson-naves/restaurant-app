@@ -270,6 +270,47 @@ def add_item(
     return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
+@router.post("/orders/{order_id}/items/{item_id}/edit")
+def edit_item(
+    order_id: int,
+    item_id: int,
+    quantity: int = Form(...),
+    notes: str = Form(""),
+    modifier_ids: list[int] = Form(default=[]),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("orders.manage")),
+):
+    """4.1.2 — fix a line already on the order: quantity, note, modifiers.
+
+    Blocked once any of the line has been paid (it has allocations that price
+    it at the old value). Editing before payment saves a delete-and-re-add.
+    """
+    item = db.get(OrderItem, item_id)
+    if item is None or item.order_id != order_id:
+        raise HTTPException(404, "Item not found")
+    if item.order.status in (OrderStatus.PAID, OrderStatus.CLOSED):
+        raise HTTPException(400, "This order is closed.")
+    if item.allocations:
+        raise HTTPException(400, "This item has already been paid for.")
+    if not 1 <= quantity <= 20:
+        raise HTTPException(400, "Quantity must be between 1 and 20.")
+
+    item.quantity = quantity
+    item.notes = notes.strip()
+    # Replace the modifier set; each captures the delta at edit time, matching
+    # how add_item snapshots it.
+    item.modifiers.clear()
+    db.flush()
+    for mod_id in modifier_ids:
+        mod = db.get(Modifier, mod_id)
+        if mod:
+            item.modifiers.append(
+                OrderItemModifier(modifier_id=mod.id, price_delta_cents=mod.price_delta_cents)
+            )
+    db.commit()
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
+
+
 @router.post("/orders/{order_id}/items/{item_id}/remove")
 def remove_item(
     order_id: int,
