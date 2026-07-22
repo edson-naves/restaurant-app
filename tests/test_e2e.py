@@ -217,9 +217,23 @@ check(sum(i.line_total_cents for i in db.get(Order, order_id).items)
       == expected + steak.price_cents, "the order total reflects the edit")
 r = client.post(f"/orders/{order_id}/items/{steak_line.id}/edit", data={"quantity": 99})
 check(r.status_code == 400, "an out-of-range quantity is refused")
-# Restore to 1 so the downstream payment maths are unchanged.
+
+# The line editor can also (re)assign the seat, now that tap-to-add drops
+# items in unassigned. Move the steak to seat 1, then back to unassigned.
 client.post(f"/orders/{order_id}/items/{steak_line.id}/edit",
-            data={"quantity": 1, "notes": "Medium rare"})
+            data={"quantity": 1, "seat_number": 1})
+db.expire_all()
+steak_line = db.get(type(order.items[0]), steak_line.id)
+check(steak_line.seat is not None and steak_line.seat.seat_number == 1,
+      "the line editor assigns a seat")
+client.post(f"/orders/{order_id}/items/{steak_line.id}/edit",
+            data={"quantity": 1, "seat_number": 0})
+db.expire_all()
+check(db.get(type(order.items[0]), steak_line.id).seat is None,
+      "seat 0 clears the seat back to unassigned")
+# Restore to qty 1 on seat 1 so the downstream payment maths are unchanged.
+client.post(f"/orders/{order_id}/items/{steak_line.id}/edit",
+            data={"quantity": 1, "seat_number": 1, "notes": "Medium rare"})
 
 # Step 4: send to kitchen.
 r = client.post(f"/orders/{order_id}/send")
