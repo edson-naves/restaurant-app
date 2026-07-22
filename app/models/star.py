@@ -286,6 +286,9 @@ class FactOrderHeader(Base):
     tax_cents: Mapped[int] = mapped_column(Integer, default=0)
     tip_cents: Mapped[int] = mapped_column(Integer, default=0)
     total_cents: Mapped[int] = mapped_column(Integer, default=0)
+    # Post-settlement reversals against this order. total_cents stays gross;
+    # net revenue is total_cents - refund_cents.
+    refund_cents: Mapped[int] = mapped_column(Integer, default=0)
     duration_minutes: Mapped[int] = mapped_column(Integer, default=0)
 
     __table_args__ = (

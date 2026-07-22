@@ -219,12 +219,24 @@
           <td style="white-space:nowrap">
             {% if not p.voided %}
             <a class="btn sm" href="/payments/{{ p.id }}/receipt">Receipt</a>
+            {% if refunded.get(p.id) %}
+            <br><span class="sub" style="font-size:11px">refunded ${{ refunded[p.id]|money }}</span>
+            {% endif %}
             {% if can('discount.approve') and order.status not in ('paid','closed','cancelled') %}
             <details style="display:inline-block">
               <summary class="btn sm danger" style="display:inline-block">Void</summary>
               <form method="post" action="/payments/{{ p.id }}/void" style="margin-top:6px">
                 <input type="text" name="reason" placeholder="Reason (optional)" style="width:160px">
                 <button class="btn sm danger">Confirm void</button>
+              </form>
+            </details>
+            {% elif can('discount.approve') and settled and refundable.get(p.id) %}
+            <details style="display:inline-block">
+              <summary class="btn sm warn" style="display:inline-block">Refund</summary>
+              <form method="post" action="/payments/{{ p.id }}/refund" style="margin-top:6px">
+                <input type="text" name="amount" value="{{ refundable[p.id]|money }}" style="width:80px" title="up to ${{ refundable[p.id]|money }}">
+                <input type="text" name="reason" placeholder="Reason" style="width:130px">
+                <button class="btn sm warn">Confirm refund</button>
               </form>
             </details>
             {% endif %}

@@ -18,7 +18,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.oltp import DayClose, Payment, Staff
+from app.models.oltp import DayClose, Payment, Refund, Staff
 from app.services.money import money
 
 CASH_TYPES = ("cash",)
@@ -36,7 +36,13 @@ class Pending:
     tip_cents: int = 0
     total_collected_cents: int = 0
     expected_cash_cents: int = 0
+    refund_cents: int = 0
+    cash_refund_cents: int = 0
     by_instrument: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def net_collected_cents(self) -> int:
+        return self.total_collected_cents - self.refund_cents
 
 
 def _window_start(db: Session, now: datetime) -> datetime:
@@ -74,6 +80,17 @@ def compute_pending(db: Session, now: datetime | None = None) -> Pending:
         if pay.instrument.instrument_type in CASH_TYPES:
             p.expected_cash_cents += pay.total_cents
 
+    # Refunds paid out in the window reduce net revenue; cash refunds reduce the
+    # drawer, so they come off expected cash.
+    refunds = db.execute(
+        select(Refund).where(Refund.created_at >= start, Refund.created_at <= now)
+    ).scalars().all()
+    for r in refunds:
+        p.refund_cents += r.amount_cents
+        if r.is_cash:
+            p.cash_refund_cents += r.amount_cents
+    p.expected_cash_cents -= p.cash_refund_cents
+
     return p
 
 
@@ -102,6 +119,8 @@ def record_close(
         tax_cents=p.tax_cents,
         tip_cents=p.tip_cents,
         total_collected_cents=p.total_collected_cents,
+        refund_cents=p.refund_cents,
+        cash_refund_cents=p.cash_refund_cents,
         payment_count=p.payment_count,
         by_instrument_json=json.dumps(p.by_instrument),
         notes=notes.strip()[:300],

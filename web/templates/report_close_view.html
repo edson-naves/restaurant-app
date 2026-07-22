@@ -26,6 +26,10 @@
   <div class="l"><span>Tax</span><span>{{ close.tax_cents|money }}</span></div>
   <div class="l"><span>Tips</span><span>{{ close.tip_cents|money }}</span></div>
   <div class="l b"><span>TOTAL COLLECTED</span><span>{{ close.total_collected_cents|money }}</span></div>
+  {% if close.refund_cents %}
+  <div class="l"><span>Refunds</span><span>-{{ close.refund_cents|money }}</span></div>
+  <div class="l b"><span>NET REVENUE</span><span>{{ (close.total_collected_cents - close.refund_cents)|money }}</span></div>
+  {% endif %}
   <hr>
 
   <div class="c b" style="font-size:12px">By instrument</div>

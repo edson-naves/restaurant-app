@@ -27,6 +27,7 @@ from app.models.oltp import (
     Order,
     OrderStatus,
     Payment,
+    Refund,
     RestaurantTable,
     SeatStatus,
     Staff,
@@ -533,6 +534,11 @@ def load_facts_for_order(db: Session, order: Order) -> tuple[int, int]:
     tip_total = sum(p.tip_cents for p in live_payments)
     tax_total = sum(p.tax_cents for p in live_payments)
     total = sum(p.total_cents for p in live_payments)
+    # Post-settlement refunds against this order; net revenue = total - refunds.
+    refund_total = db.execute(
+        select(func.coalesce(func.sum(Refund.amount_cents), 0))
+        .where(Refund.order_id == order.id)
+    ).scalar_one()
     closed = order.closed_at or opened
     duration = max(0, int((closed - opened).total_seconds() // 60))
 
@@ -561,6 +567,7 @@ def load_facts_for_order(db: Session, order: Order) -> tuple[int, int]:
             tax_cents=tax_total,
             tip_cents=tip_total,
             total_cents=total,
+            refund_cents=refund_total,
             duration_minutes=duration,
         )
     )

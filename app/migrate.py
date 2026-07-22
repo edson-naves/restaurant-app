@@ -35,6 +35,11 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("payment", "voided_at", "DATETIME"),
     ("payment", "voided_by_id", "INTEGER REFERENCES staff(id)"),
     ("payment", "void_reason", "VARCHAR(200) DEFAULT ''"),
+    # Post-settlement refunds. Header column defaults 0 so pre-refund orders'
+    # net still equals their gross and reconciliation ties.
+    ("fact_order_header", "refund_cents", "INTEGER NOT NULL DEFAULT 0"),
+    ("day_close", "refund_cents", "INTEGER NOT NULL DEFAULT 0"),
+    ("day_close", "cash_refund_cents", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 DEFAULT_FLOOR = "1st floor"

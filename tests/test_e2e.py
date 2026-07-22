@@ -416,6 +416,46 @@ check(all(t[2] for t in traced), "4.2.2: every item fully traced to its instrume
 for name, names, _ in traced:
     print(f"        {name:22} paid by {', '.join(names)}")
 
+# --- post-settlement refund (4.2, manager) --------------------------------
+print("\n--- refund a settled payment ---")
+from app.models.oltp import Refund  # noqa: E402
+from app.models.star import FactOrderHeader  # noqa: E402
+from app.services import refunds as refund_svc  # noqa: E402
+
+db.expire_all()
+order = db.get(Order, order_id)
+p1 = db.get(type(order.payments[0]), p1.id)
+check(order.status == "paid", "the order is settled, so refund (not void) applies")
+
+# A waiter cannot refund.
+client.cookies.set("staff_id", str(waiter.id))
+check(client.post(f"/payments/{p1.id}/refund", data={"amount": "1.00"}).status_code == 403,
+      "a waiter cannot refund")
+client.cookies.set("staff_id", str(owner.id))
+
+# Refund $5 of seat 1's Visa payment.
+r = client.post(f"/payments/{p1.id}/refund", data={"amount": "5.00", "reason": "comped app"})
+check(r.status_code == 200, "a manager refunds part of a settled payment")
+db.expire_all()
+refs = db.execute(select(Refund).where(Refund.payment_id == p1.id)).scalars().all()
+check(len(refs) == 1 and refs[0].amount_cents == 500, "the refund is recorded at $5.00")
+check(refund_svc.refunded_so_far(db, p1.id) == 500, "refunded-so-far tracks the running total")
+
+# It must not disturb the settled order or the freed table (that's what void is
+# for) — a refund is a money reversal only.
+check(db.get(Order, order_id).status == "paid", "the order stays settled after a refund")
+check(db.get(RestaurantTable, table_id).status == TableStatus.FREE,
+      "the table stays free after a refund")
+
+# Over-refunding is refused.
+p1_total = p1.total_cents
+r = client.post(f"/payments/{p1.id}/refund",
+                data={"amount": money(p1_total)})  # more than the $5-reduced remainder
+check(r.status_code == 400, "cannot refund more than the payment collected")
+check(refund_svc.refunded_so_far(db, p1.id) == 500, "the refused over-refund changed nothing")
+# The fact-header net-revenue check runs in the reports section below, after the
+# ETL refresh (running it here would load the order into facts too early).
+
 # --- cancel an order ------------------------------------------------------
 print("\n--- cancel an order ---")
 client.cookies.set("staff_id", str(owner.id))
@@ -517,6 +557,9 @@ check(after is not None, "the closed order now appears in fact_order_header")
 if after:
     check(after.distinct_instruments == 3,
           "fact records that the order used 3 instruments", str(after.distinct_instruments))
+    check(after.refund_cents == 500,
+          "the fact header records the $5.00 refund; gross stays intact",
+          f"gross ${money(after.total_cents)}, refund ${money(after.refund_cents)}")
 
 # --- end-of-day close (workflow 6.3, Z-report) ----------------------------
 print("\n--- end-of-day close ---")

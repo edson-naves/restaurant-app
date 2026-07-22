@@ -21,6 +21,10 @@
       <tr><td>Tax collected</td><td class="num">${{ pending.tax_cents|money }}</td></tr>
       <tr><td>Tips</td><td class="num">${{ pending.tip_cents|money }}</td></tr>
       <tr class="b"><td>Total collected</td><td class="num">${{ pending.total_collected_cents|money }}</td></tr>
+      {% if pending.refund_cents %}
+      <tr><td>Refunds</td><td class="num">-${{ pending.refund_cents|money }}</td></tr>
+      <tr class="b"><td>Net revenue</td><td class="num">${{ pending.net_collected_cents|money }}</td></tr>
+      {% endif %}
     </table>
 
     <p class="sub" style="margin:14px 0 4px"><strong>By instrument</strong></p>
@@ -41,7 +45,7 @@
     </p>
     <form method="post" action="/reports/close">
       <div class="field">
-        <label>Expected cash</label>
+        <label>Expected cash{% if pending.cash_refund_cents %} (after ${{ pending.cash_refund_cents|money }} cash refunds){% endif %}</label>
         <input type="text" value="{{ pending.expected_cash_cents|money }}" disabled>
       </div>
       <div class="field">

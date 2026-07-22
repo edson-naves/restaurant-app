@@ -18,6 +18,7 @@ from app.models.oltp import (
     OrderStatus,
     Payment,
     PaymentAllocation,
+    Refund,
 )
 from app.models.star import (
     UNKNOWN_KEY,
@@ -119,6 +120,19 @@ bad_total = db.execute(
 ).scalar_one()
 check(bad_total == 0, "every payment total equals items - discount + tax + tip",
       f"{bad_total} rows break the identity")
+
+# Post-settlement refunds: source total for closed orders == fact header total.
+src_refund = db.execute(
+    select(func.coalesce(func.sum(Refund.amount_cents), 0))
+    .where(Refund.order_id.in_(closed_ids))
+).scalar_one()
+hdr_refund = db.execute(
+    select(func.coalesce(func.sum(FactOrderHeader.refund_cents), 0))
+).scalar_one()
+check(src_refund == hdr_refund, "refunds: OLTP == fact_order_header",
+      f"{money(src_refund)} vs {money(hdr_refund)}")
+# Gross still reconciles regardless of refunds — a refund never un-allocates a
+# sold item, so the "every item allocated" invariant below is untouched.
 
 # Item gross in facts must equal the source line totals.
 src_gross = 0

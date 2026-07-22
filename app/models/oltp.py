@@ -565,11 +565,16 @@ class DayClose(Base):
     window_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     closed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
-    # Drawer reconciliation (cash only).
+    # Drawer reconciliation (cash only). Expected cash already nets cash refunds
+    # paid out in the window.
     opening_float_cents: Mapped[int] = mapped_column(Integer, default=0)
     expected_cash_cents: Mapped[int] = mapped_column(Integer, default=0)
     counted_cash_cents: Mapped[int] = mapped_column(Integer, default=0)
     variance_cents: Mapped[int] = mapped_column(Integer, default=0)  # counted - float - expected
+
+    # Post-settlement refunds paid out in the window.
+    refund_cents: Mapped[int] = mapped_column(Integer, default=0)
+    cash_refund_cents: Mapped[int] = mapped_column(Integer, default=0)
 
     # Snapshot of the whole window, all instruments.
     gross_sales_cents: Mapped[int] = mapped_column(Integer, default=0)   # item value
@@ -604,3 +609,36 @@ class ReceiptDelivery(Base):
     sent_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
     sent_by: Mapped["Staff | None"] = relationship(lazy="joined")
+
+
+class Refund(Base):
+    """A post-settlement reversal of money to the guest (section 4.2, manager).
+
+    A void handles a mistake before the table is settled by removing the
+    payment's allocations. A refund is different: the order is already closed
+    and the table freed, so nothing is un-allocated — the item genuinely was
+    sold and paid. The refund is a separate reversing entry that reduces net
+    revenue and the drawer, while gross sales and the "every item is allocated"
+    invariant stay exactly as they were. Partial refunds are allowed; the sum
+    of refunds against a payment can never exceed what it collected.
+    """
+    __tablename__ = "refund"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    payment_id: Mapped[int] = mapped_column(ForeignKey("payment.id"), nullable=False)
+    order_id: Mapped[int] = mapped_column(ForeignKey("order.id"), nullable=False)
+    amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    # How the money went back — usually the original instrument's name.
+    method: Mapped[str] = mapped_column(String(60), default="")
+    is_cash: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    reason: Mapped[str] = mapped_column(String(200), default="")
+    approved_by_id: Mapped[int] = mapped_column(ForeignKey("staff.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+    approved_by: Mapped["Staff"] = relationship(lazy="joined")
+    payment: Mapped["Payment"] = relationship(lazy="joined")
+
+    __table_args__ = (
+        CheckConstraint("amount_cents > 0", name="ck_refund_amount_pos"),
+        Index("ix_refund_order", "order_id"),
+    )

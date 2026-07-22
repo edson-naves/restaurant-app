@@ -23,6 +23,7 @@ from app.models.oltp import (
     Staff,
 )
 from app.services import receipt_delivery
+from app.services import refunds
 from app.services import settings as settings_svc
 from app.services.money import money, pct
 from app.services.payments import (
@@ -73,11 +74,18 @@ def payment_screen(
         select(Staff).where(Staff.role.in_((Role.OWNER, Role.MANAGER)))
     ).scalars().all()
 
+    # Refunds apply once the order is settled; expose how much each payment has
+    # left to refund so the template can offer the control.
+    settled = order.status in (OrderStatus.PAID, OrderStatus.CLOSED)
+    refundable = {p.id: refunds.refundable_cents(db, p) for p in order.payments}
+    refunded = {p.id: refunds.refunded_so_far(db, p.id) for p in order.payments}
+
     return render(request, "pay.html", {
         "db": db, "staff": staff, "order": order,
         "ledgers": [ledgers[s.id] for s in order.seats if s.id in ledgers],
         "unassigned": unassigned, "panel": panel, "instruments": usable,
         "managers": managers,
+        "settled": settled, "refundable": refundable, "refunded": refunded,
         "tax_cfg": settings_svc.tax_config(db),
         "title": f"Payment · {order.code}",
     })
@@ -317,6 +325,29 @@ def void_a_payment(
         raise HTTPException(400, str(e))
     db.commit()
     return RedirectResponse(f"/orders/{order.id}/pay", status_code=303)
+
+
+@router.post("/payments/{payment_id}/refund")
+def refund_a_payment(
+    payment_id: int,
+    amount: str = Form(...),
+    reason: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("discount.approve")),
+):
+    """4.2 — refund a settled payment (manager). Kept as a reversing record."""
+    payment = db.get(Payment, payment_id)
+    if payment is None:
+        raise HTTPException(404, "Payment not found")
+    try:
+        cents = round(float(amount.replace(",", "").replace("$", "").strip()) * 100)
+    except ValueError:
+        raise HTTPException(400, f"'{amount}' is not a valid amount.")
+    try:
+        refunds.refund_payment(db, payment, cents, staff, reason)
+    except refunds.RefundError as e:
+        raise HTTPException(400, str(e))
+    return RedirectResponse(f"/orders/{payment.order_id}/pay", status_code=303)
 
 
 @router.get("/payments/{payment_id}/receipt", response_class=HTMLResponse)
