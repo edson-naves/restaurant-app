@@ -28,6 +28,8 @@ from app.models.oltp import (
     RestaurantTable,
     Role,
     Seat,
+    SeatStatus,
+    SharedItemShare,
     Staff,
     TableStatus,
 )
@@ -323,6 +325,92 @@ def merge_tables(
            f"merged into Table {dest.number} ({target.code})", target.id)
     db.commit()
     return RedirectResponse(f"/orders/{target.id}", status_code=303)
+
+
+@router.post("/orders/{order_id}/split")
+def split_order(
+    order_id: int,
+    to_table_id: int = Form(...),
+    seat_numbers: list[int] = Form(default=[]),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("orders.manage")),
+):
+    """Peel selected seats (and their items) onto a free table as a new order.
+
+    The reverse of merge: a subset of the party moves to another table. Each
+    picked seat and its items relocate to a fresh order there, renumbered from
+    1; the rest stay put. Blocked for a seat that's already been paid or that
+    shares an item, since either would strand money or a split-item's shares.
+    """
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(404, "Order not found")
+    if order.status in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
+        raise HTTPException(400, "This order is closed.")
+
+    dest = db.get(RestaurantTable, to_table_id)
+    if dest is None:
+        raise HTTPException(404, "Destination table not found")
+    if not dest.is_active or dest.status != TableStatus.FREE:
+        raise HTTPException(400, f"Table {dest.number} is not free.")
+
+    picked = {n for n in seat_numbers if n}
+    seats = [s for s in order.seats if s.seat_number in picked]
+    if not seats:
+        raise HTTPException(400, "Pick at least one seat to split off.")
+    if len(seats) == len(order.seats):
+        raise HTTPException(400, "That moves the whole table — use Move table instead.")
+
+    moved_seat_ids = {s.id for s in seats}
+    if any(s.status != SeatStatus.OPEN for s in seats):
+        raise HTTPException(400, "Settle or void a seat's payment before splitting it.")
+    shared = db.execute(
+        select(SharedItemShare).where(SharedItemShare.seat_id.in_(moved_seat_ids))
+    ).scalars().first()
+    if shared is not None:
+        raise HTTPException(400, "Un-share shared items before splitting those seats.")
+
+    now = datetime.now()
+    new_order = Order(
+        code=_next_code(db), table_id=dest.id, channel_id=order.channel_id,
+        waiter_id=order.waiter_id, status=OrderStatus.OPEN,
+        guest_count=len(seats), opened_at=now,
+    )
+    db.add(new_order)
+    db.flush()
+
+    seat_map: dict[int, int] = {}
+    for idx, s in enumerate(sorted(seats, key=lambda x: x.seat_number), start=1):
+        new_seat = Seat(
+            order_id=new_order.id, seat_number=idx,
+            label=s.label, status=s.status, tip_cents=s.tip_cents,
+        )
+        db.add(new_seat)
+        db.flush()
+        seat_map[s.id] = new_seat.id
+
+    moving_items = [i for i in order.items if i.seat_id in moved_seat_ids]
+    for item in moving_items:
+        item.order_id = new_order.id
+        item.seat_id = seat_map[item.seat_id]
+        item.merged_from_order_id = order.id      # provenance: split from here
+
+    order.guest_count = max(1, order.guest_count - len(seats))
+    for s in seats:
+        db.delete(s)                              # now empty; items moved off
+
+    if order.sent_to_kitchen_at:
+        new_order.sent_to_kitchen_at = order.sent_to_kitchen_at
+    _recompute_kitchen(order, now)
+    _recompute_kitchen(new_order, now)
+
+    dest.status = TableStatus.OCCUPIED
+    dest.current_waiter_id = order.waiter_id
+    _audit(db, staff, "split_table",
+           f"{order.code}: {len(seats)} seat(s) split to Table {dest.number} "
+           f"({new_order.code})", new_order.id)
+    db.commit()
+    return RedirectResponse(f"/orders/{new_order.id}", status_code=303)
 
 
 # --------------------------------------------------------------------------

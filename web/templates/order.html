@@ -64,6 +64,32 @@
       </form>
     </details>
     {% endif %}
+    {# 4.1.1 — split some seats off onto a free table as a new order. #}
+    {% if order.table and free_tables and order.seats|length > 1 and order.status not in ('paid','closed','cancelled') %}
+    <details class="edit-menu">
+      <summary class="btn" style="display:inline-block">Split ▾</summary>
+      <form method="post" action="/orders/{{ order.id }}/split" class="edit-pop">
+        <div class="field" style="margin-bottom:8px">
+          <label>Seats to move off</label>
+          <div class="tipset">
+            {% for s in order.seats %}
+            <label><input type="checkbox" name="seat_numbers" value="{{ s.seat_number }}"> Seat {{ s.seat_number }}{% if s.status != 'open' %} <span class="sub">(paid)</span>{% endif %}</label>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="field" style="margin-bottom:8px">
+          <label>To table</label>
+          <select name="to_table_id" required>
+            {% for t in free_tables %}
+            <option value="{{ t.id }}">Table {{ t.number }}{% if t.floor %} · {{ t.floor.name }}{% endif %}{% if t.zone_ref %} · {{ t.zone_ref.name }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <p class="sub" style="margin:0 0 8px;font-size:11px">The picked seats and their items become a new order.</p>
+        <button class="btn primary sm">Split off</button>
+      </form>
+    </details>
+    {% endif %}
     {% endif %}
     {% if can('payments.take') %}
     <a class="btn good" href="/orders/{{ order.id }}/pay">Payment →</a>

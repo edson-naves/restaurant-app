@@ -722,6 +722,57 @@ client.post(f"/orders/{pd_oid}/cancel")
 client.post(f"/orders/{x_oid}/cancel")
 client.cookies.set("staff_id", str(owner.id))
 
+# --- split some seats onto a new table (4.1.1) ----------------------------
+print("\n--- split table ---")
+client.cookies.set("staff_id", str(waiter.id))
+big_t, split_dest = db.execute(
+    select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE).limit(2)
+).scalars().all()
+r = client.post(f"/tables/{big_t.id}/open", data={"guests": 3, "waiter_id": waiter.id})
+big_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+# Seat 1: steak; seat 2: burger; seat 3: bread.
+client.post(f"/orders/{big_oid}/items", data={"menu_item_id": steak.id, "seat_number": 1})
+client.post(f"/orders/{big_oid}/items", data={"menu_item_id": burger.id, "seat_number": 2})
+client.post(f"/orders/{big_oid}/items", data={"menu_item_id": bread.id, "seat_number": 3})
+# Splitting every seat is refused (that's a move).
+r = client.post(f"/orders/{big_oid}/split",
+                data={"to_table_id": split_dest.id, "seat_numbers": [1, 2, 3]})
+check(r.status_code == 400, "splitting the whole table is refused")
+# Split seats 2 and 3 off to the free table.
+r = client.post(f"/orders/{big_oid}/split",
+                data={"to_table_id": split_dest.id, "seat_numbers": [2, 3]})
+check(r.status_code == 200, "the picked seats split onto a new order")
+new_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+db.expire_all()
+big_o = db.get(Order, big_oid)
+new_o = db.get(Order, new_oid)
+check(new_o.table_id == split_dest.id and new_o.status != "cancelled",
+      "a new order opens on the destination table")
+check(db.get(RestaurantTable, split_dest.id).status == TableStatus.OCCUPIED,
+      "the destination table is occupied")
+check(len(big_o.seats) == 1 and big_o.guest_count == 1,
+      "the source keeps only the un-split seat", f"{len(big_o.seats)} seats")
+check(len(new_o.seats) == 2 and new_o.guest_count == 2,
+      "the new order carries the two split seats")
+check(len(big_o.items) == 1 and len(new_o.items) == 2,
+      "each order holds its own seats' items")
+# Seats on the new order are renumbered from 1, and items keep provenance.
+nums = sorted(s.seat_number for s in new_o.seats)
+check(nums == [1, 2], "the split seats are renumbered from 1", str(nums))
+moved_burger = next(i for i in new_o.items if i.menu_item_id == burger.id)
+check(moved_burger.merged_from_order_id == big_oid,
+      "a split line records the table it came from")
+# The split is on the audit trail.
+sev = db.execute(
+    select(AuditEvent).where(AuditEvent.action == "split_table", AuditEvent.order_id == new_oid)
+).scalars().first()
+check(sev is not None and str(split_dest.number) in sev.detail,
+      "the split is recorded in the audit log", sev.detail if sev else "no event")
+client.cookies.set("staff_id", str(owner.id))
+client.post(f"/orders/{big_oid}/cancel")
+client.post(f"/orders/{new_oid}/cancel")
+client.cookies.set("staff_id", str(owner.id))
+
 # --- cancel an order ------------------------------------------------------
 print("\n--- cancel an order ---")
 client.cookies.set("staff_id", str(owner.id))
