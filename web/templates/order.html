@@ -126,6 +126,9 @@
             {{ i.quantity }}× {{ i.menu_item.name }}
             <span class="pill {{ 'ok' if i.kitchen_status == 'ready' else ('warn' if i.kitchen_status == 'preparing' else 'open') }}">{{ i.kitchen_status }}</span>
             <span class="sub" style="font-size:11px">· {{ i.course|course }}</span>
+            {# A settled line can't be edited or removed (it'd break the total),
+               so mark it "paid" to explain the missing ✎/✕ buttons. #}
+            {% if i.allocations %}<span class="pill paid" title="Already paid — can't be changed or removed">paid ✓</span>{% endif %}
             {% for m in i.modifiers %}<br><span class="sub" style="font-size:11px">+ {{ m.modifier.name }}</span>{% endfor %}
             {% if i.notes %}<br><span style="color:#f2c46b;font-size:11px">✎ {{ i.notes }}</span>{% endif %}
           </td>
