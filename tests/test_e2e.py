@@ -78,7 +78,7 @@ authed.close()
 print("--- pages render ---")
 for path in ["/", "/kitchen", "/delivery", "/reports", "/reports/daily",
              "/reports/best-sellers", "/reports/payments", "/reports/staff",
-             "/reports/channels"]:
+             "/reports/channels", "/reports/activity"]:
     client.cookies.set("staff_id", str(owner.id))
     r = client.get(path)
     check(r.status_code == 200, f"GET {path}", f"{r.status_code}, {len(r.text)}b")

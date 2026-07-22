@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>Activity log</h1>
+    <p class="sub">Table moves and merges, newest first · append-only · <span class="spec">req 4.1.1</span></p>
+  </div>
+  <a class="btn" href="/reports">← Reports</a>
+</div>
+
+<div class="card">
+  {% if not events %}
+    <p class="empty">No table moves or merges recorded yet.</p>
+  {% else %}
+  <div class="scroll">
+  <table>
+    <thead>
+      <tr><th>When</th><th>Action</th><th>Who</th><th>Detail</th></tr>
+    </thead>
+    <tbody>
+      {% for e in events %}
+      <tr>
+        <td style="white-space:nowrap">{{ e.at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>
+          {% if e.action == 'merge_tables' %}<span class="pill warn">merge</span>
+          {% elif e.action == 'move_table' %}<span class="pill open">move</span>
+          {% else %}<span class="pill open">{{ e.action }}</span>{% endif %}
+        </td>
+        <td>{{ e.staff.name if e.staff else '—' }}</td>
+        <td>{{ e.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -14,7 +14,7 @@ from app import reports
 from app.database import get_db
 from app.deps import render, require
 from app.etl import run_etl
-from app.models.oltp import DayClose, MenuCategory, Staff
+from app.models.oltp import AuditEvent, DayClose, MenuCategory, Staff
 from app.services import closeout
 from app.services.money import money
 
@@ -270,4 +270,20 @@ def close_view(
         "db": db, "staff": staff, "close": close,
         "rows": closeout.by_instrument(close),
         "title": f"Z-report #{close.id}",
+    })
+
+
+@router.get("/activity")
+def activity(
+    request: Request,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("reports.view")),
+):
+    """The table-action audit trail (4.1.1) — moves and merges, newest first."""
+    events = db.execute(
+        select(AuditEvent).order_by(AuditEvent.at.desc()).limit(200)
+    ).scalars().all()
+    return render(request, "report_activity.html", {
+        "db": db, "staff": staff, "events": events,
+        "title": "Activity log",
     })
