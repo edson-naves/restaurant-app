@@ -92,6 +92,17 @@ label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 4px; f
   display: inline-block; padding: 2px 9px; border-radius: 999px;
   font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
 }
+
+/* Per-line edit form: a floating popover anchored to the ✎ button, so opening
+   it doesn't blow out the order table's row layout. */
+.edit-menu { position: relative; }
+.edit-pop {
+  position: absolute; right: 0; z-index: 30; margin-top: 6px;
+  width: 260px; text-align: left;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 12px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.45);
+}
 .pill.free { background: rgba(47,158,94,.18); color: #6ee7a0; }
 .pill.occupied { background: rgba(201,138,27,.18); color: #f2c46b; }
 .pill.ready_to_pay, .pill.late { background: rgba(212,72,59,.18); color: #ff9a90; }

@@ -116,7 +116,7 @@
       {% if not order.items %}
         <p class="empty">No items yet.</p>
       {% else %}
-      <div class="scroll">
+      <div class="scroll" style="overflow:visible">
       <table>
         <thead><tr><th>Item</th><th>Seat</th><th class="num">Total</th><th></th></tr></thead>
         <tbody>
@@ -140,10 +140,10 @@
           <td class="num">${{ i.line_total_cents|money }}</td>
           <td style="white-space:nowrap">
             {% if can('orders.manage') and not i.allocations and order.status not in ('paid','closed','cancelled') %}
-            <details style="display:inline-block">
+            <details class="edit-menu" style="display:inline-block">
               <summary class="btn sm" style="display:inline-block" title="Edit">✎</summary>
               <form method="post" action="/orders/{{ order.id }}/items/{{ i.id }}/edit"
-                    style="margin-top:6px;text-align:left;min-width:200px">
+                    class="edit-pop">
                 <div class="field" style="margin-bottom:8px">
                   <label>Quantity</label>
                   <input type="number" name="quantity" value="{{ i.quantity }}" min="1" max="20">
