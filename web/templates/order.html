@@ -232,5 +232,21 @@ function pick(id, name, price, course) {
   var sel = document.getElementById('coursesel');
   if (sel) sel.value = String(course);
 }
+
+// Close an open edit popover when clicking anywhere outside it — a native
+// <details> only toggles from its own summary, so it would otherwise stay open.
+document.addEventListener('click', function (e) {
+  document.querySelectorAll('details.edit-menu[open]').forEach(function (d) {
+    if (!d.contains(e.target)) d.removeAttribute('open');
+  });
+});
+// Escape closes any open editor.
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('details.edit-menu[open]').forEach(function (d) {
+      d.removeAttribute('open');
+    });
+  }
+});
 </script>
 {% endblock %}
