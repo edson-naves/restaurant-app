@@ -174,6 +174,13 @@
               <button class="btn sm danger" title="Remove">×</button>
             </form>
             {% endif %}
+            {# Per-item firing (4.1.3): push one dish now without its course-mates.
+               Only un-fired lines get the button; the status pill shows the rest. #}
+            {% if can('orders.manage') and i.kitchen_status == 'pending' and order.status not in ('paid','closed','cancelled') %}
+            <form method="post" action="/orders/{{ order.id }}/items/{{ i.id }}/fire" style="display:inline">
+              <button class="btn sm primary" title="Fire just this item to the kitchen now">Fire</button>
+            </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}

@@ -504,6 +504,36 @@ def send_to_kitchen(
     return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
+@router.post("/orders/{order_id}/items/{item_id}/fire")
+def fire_item(
+    order_id: int,
+    item_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("orders.manage")),
+):
+    """4.1.3 — fire a single line, for finer control than firing a whole course.
+
+    The exception to coursing: push one dish to the kitchen early (or re-pace it)
+    without sending its course-mates. It's just the send path scoped to one item,
+    so the order/table state is re-derived the same way afterwards.
+    """
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(404, "Order not found")
+    item = db.get(OrderItem, item_id)
+    if item is None or item.order_id != order.id:
+        raise HTTPException(404, "Item not on this order")
+    if item.kitchen_status != KitchenStatus.PENDING:
+        raise HTTPException(400, "That item has already been fired.")
+
+    now = datetime.now()
+    item.kitchen_status = KitchenStatus.PREPARING
+    order.sent_to_kitchen_at = order.sent_to_kitchen_at or now
+    _recompute_kitchen(order, now)
+    db.commit()
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
+
+
 # --------------------------------------------------------------------------
 # 4.1.3  Kitchen display
 # --------------------------------------------------------------------------

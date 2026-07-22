@@ -559,6 +559,41 @@ client.cookies.set("staff_id", str(owner.id))
 client.post(f"/orders/{course_oid}/cancel")
 client.cookies.set("staff_id", str(owner.id))
 
+# --- fire a single item (4.1.3) -------------------------------------------
+print("\n--- fire one item ---")
+client.cookies.set("staff_id", str(waiter.id))
+free_f = db.execute(
+    select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
+).scalars().first()
+r = client.post(f"/tables/{free_f.id}/open", data={"guests": 2, "waiter_id": waiter.id})
+fire_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+client.post(f"/orders/{fire_oid}/items",
+            data={"menu_item_id": steak.id, "seat_number": 1, "course": 2})
+client.post(f"/orders/{fire_oid}/items",
+            data={"menu_item_id": bread.id, "seat_number": 1, "course": 2})
+db.expire_all()
+fo = db.get(Order, fire_oid)
+one, two = fo.items[0], fo.items[1]
+# Fire only the first line; its course-mate stays pending.
+r = client.post(f"/orders/{fire_oid}/items/{one.id}/fire")
+db.expire_all()
+fo = db.get(Order, fire_oid)
+check(r.status_code == 200
+      and db.get(type(one), one.id).kitchen_status == "preparing"
+      and db.get(type(two), two.id).kitchen_status == "pending",
+      "firing one line leaves its course-mate pending")
+check(fo.kitchen_status == "preparing",
+      "the order is preparing once a single item is fired")
+# Re-firing an already-fired line is refused.
+r = client.post(f"/orders/{fire_oid}/items/{one.id}/fire")
+check(r.status_code == 400, "an already-fired item cannot be fired again")
+# A line from another order cannot be fired through this one.
+r = client.post(f"/orders/{fire_oid}/items/99999/fire")
+check(r.status_code == 404, "firing an item not on the order is rejected")
+client.cookies.set("staff_id", str(owner.id))
+client.post(f"/orders/{fire_oid}/cancel")
+client.cookies.set("staff_id", str(owner.id))
+
 # --- cancel an order ------------------------------------------------------
 print("\n--- cancel an order ---")
 client.cookies.set("staff_id", str(owner.id))
