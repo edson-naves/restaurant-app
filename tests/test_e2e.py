@@ -594,6 +594,37 @@ client.cookies.set("staff_id", str(owner.id))
 client.post(f"/orders/{fire_oid}/cancel")
 client.cookies.set("staff_id", str(owner.id))
 
+# --- move a party to another table (4.1.1) --------------------------------
+print("\n--- move table ---")
+client.cookies.set("staff_id", str(waiter.id))
+src_t, dest_t = db.execute(
+    select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE).limit(2)
+).scalars().all()
+r = client.post(f"/tables/{src_t.id}/open", data={"guests": 2, "waiter_id": waiter.id})
+move_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+client.post(f"/orders/{move_oid}/items", data={"menu_item_id": steak.id, "seat_number": 1})
+# Moving onto an occupied table is refused.
+r = client.post(f"/tables/{src_t.id}/move", data={"to_table_id": src_t.id})
+check(r.status_code == 400, "moving a table onto itself is refused")
+# Move the party to the free destination.
+r = client.post(f"/tables/{src_t.id}/move", data={"to_table_id": dest_t.id})
+db.expire_all()
+mo = db.get(Order, move_oid)
+check(r.status_code == 200 and mo.table_id == dest_t.id,
+      "the order now sits on the destination table")
+check(db.get(RestaurantTable, src_t.id).status == TableStatus.FREE,
+      "the original table is freed")
+check(db.get(RestaurantTable, dest_t.id).status == TableStatus.OCCUPIED,
+      "the destination table is occupied")
+check(db.get(RestaurantTable, dest_t.id).current_waiter_id == waiter.id,
+      "the waiter moves with the party")
+# The now-empty source table has no order to move.
+r = client.post(f"/tables/{src_t.id}/move", data={"to_table_id": dest_t.id})
+check(r.status_code == 400, "a table with no open order can't be moved")
+client.cookies.set("staff_id", str(owner.id))
+client.post(f"/orders/{move_oid}/cancel")
+client.cookies.set("staff_id", str(owner.id))
+
 # --- cancel an order ------------------------------------------------------
 print("\n--- cancel an order ---")
 client.cookies.set("staff_id", str(owner.id))

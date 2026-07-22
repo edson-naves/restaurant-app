@@ -180,6 +180,62 @@ def reassign_waiter(
 
 
 # --------------------------------------------------------------------------
+# 4.1.1  Move a party to another table
+# --------------------------------------------------------------------------
+
+LIVE_STATES = (
+    OrderStatus.OPEN, OrderStatus.PREPARING,
+    OrderStatus.READY, OrderStatus.PARTIALLY_PAID,
+)
+
+
+def _live_order(db: Session, table_id: int) -> Order | None:
+    """The open order sitting on a table, if any."""
+    return db.execute(
+        select(Order).where(
+            Order.table_id == table_id, Order.status.in_(LIVE_STATES)
+        )
+    ).scalars().first()
+
+
+@router.post("/tables/{table_id}/move")
+def move_table(
+    table_id: int,
+    to_table_id: int = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("orders.manage")),
+):
+    """Relocate a seated party's whole order to a different free table.
+
+    The order (with its seats, items and any partial payments) simply changes
+    tables — nothing about the bill is touched. The old table is freed and the
+    new one takes on the party's status and waiter.
+    """
+    src = db.get(RestaurantTable, table_id)
+    if src is None:
+        raise HTTPException(404, "Table not found")
+    order = _live_order(db, src.id)
+    if order is None:
+        raise HTTPException(400, f"Table {src.number} has no open order to move.")
+
+    dest = db.get(RestaurantTable, to_table_id)
+    if dest is None:
+        raise HTTPException(404, "Destination table not found")
+    if dest.id == src.id:
+        raise HTTPException(400, "That's the same table.")
+    if not dest.is_active or dest.status != TableStatus.FREE:
+        raise HTTPException(400, f"Table {dest.number} is not free.")
+
+    order.table_id = dest.id
+    dest.status = src.status
+    dest.current_waiter_id = src.current_waiter_id
+    src.status = TableStatus.FREE
+    src.current_waiter_id = None
+    db.commit()
+    return RedirectResponse(f"/orders/{order.id}", status_code=303)
+
+
+# --------------------------------------------------------------------------
 # 4.1.2  Order creation
 # --------------------------------------------------------------------------
 
@@ -211,10 +267,25 @@ def order_screen(
     modifiers = db.execute(select(Modifier).order_by(Modifier.name)).scalars().all()
     panel = balance_panel(db, order)
 
+    # Free tables this party could be moved to (4.1.1). Only for dine-in orders
+    # that are still on a table and not yet closed.
+    free_tables = []
+    if order.table_id and order.status not in (
+        OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED
+    ):
+        free_tables = db.execute(
+            select(RestaurantTable).where(
+                RestaurantTable.is_active.is_(True),
+                RestaurantTable.status == TableStatus.FREE,
+                RestaurantTable.id != order.table_id,
+            ).order_by(RestaurantTable.number)
+        ).scalars().all()
+
     return render(request, "order.html", {
         "db": db, "staff": staff, "order": order, "categories": categories,
         "active_cat": active_cat, "menu_items": items, "modifiers": modifiers,
         "panel": panel, "subtotal": sum(i.line_total_cents for i in order.items),
+        "free_tables": free_tables,
         "title": f"Order {order.code}",
     })
 

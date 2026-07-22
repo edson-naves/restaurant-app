@@ -29,6 +29,23 @@
       {% endif %}
     </form>
     {% endif %}
+    {# 4.1.1 — move this party to another free table. Whole order goes with it. #}
+    {% if order.table and free_tables and order.status not in ('paid','closed','cancelled') %}
+    <details class="edit-menu">
+      <summary class="btn" style="display:inline-block">Move table ▾</summary>
+      <form method="post" action="/tables/{{ order.table.id }}/move" class="edit-pop">
+        <div class="field" style="margin-bottom:8px">
+          <label>Move Table {{ order.table.number }} to</label>
+          <select name="to_table_id" required>
+            {% for t in free_tables %}
+            <option value="{{ t.id }}">Table {{ t.number }}{% if t.floor %} · {{ t.floor.name }}{% endif %}{% if t.zone_ref %} · {{ t.zone_ref.name }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button class="btn primary sm">Move party</button>
+      </form>
+    </details>
+    {% endif %}
     {% endif %}
     {% if can('payments.take') %}
     <a class="btn good" href="/orders/{{ order.id }}/pay">Payment →</a>
