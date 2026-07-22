@@ -48,7 +48,8 @@ def render_text(db: Session, receipt: Receipt) -> str:
     """Plain-text version of the receipt — what gets emailed or texted."""
     d = json.loads(receipt.payload_json or "{}")
     cfg = settings_svc.all_settings(db)
-    lines = [cfg["biz_name"], cfg["biz_address"], cfg["biz_phone"], "-" * 32]
+    addr = cfg["biz_address"] + (f" · {cfg['biz_postal']}" if cfg.get("biz_postal") else "")
+    lines = [cfg["biz_name"], addr, cfg["biz_phone"], "-" * 32]
     if d.get("table"):
         lines.append(f"Table {d['table']}")
     lines.append(f"Order {d.get('order_code', '')}   {d.get('issued_at', '').replace('T', ' ')}")

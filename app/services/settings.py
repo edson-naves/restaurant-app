@@ -21,6 +21,7 @@ DEFAULTS: dict[str, str] = {
     "pst_number": "",
     "biz_name": "THE RESTAURANT",
     "biz_address": "53 Water St. · Anytown",
+    "biz_postal": "",
     "biz_phone": "000-000-0000",
 }
 

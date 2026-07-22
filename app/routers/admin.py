@@ -1101,6 +1101,7 @@ def save_settings(
     pst_number: str = Form(""),
     biz_name: str = Form(""),
     biz_address: str = Form(""),
+    biz_postal: str = Form(""),
     biz_phone: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
@@ -1115,7 +1116,8 @@ def save_settings(
     settings_svc.save(db, {
         "gst_rate": gst_rate, "gst_number": gst_number,
         "pst_rate": pst_rate, "pst_number": pst_number,
-        "biz_name": biz_name, "biz_address": biz_address, "biz_phone": biz_phone,
+        "biz_name": biz_name, "biz_address": biz_address,
+        "biz_postal": biz_postal, "biz_phone": biz_phone,
     })
     return RedirectResponse("/admin/settings?saved=1", status_code=303)
 

@@ -50,7 +50,7 @@
 
 <div class="receipt">
   <div class="c b" style="font-size:18px;letter-spacing:1px">{{ biz.name }}</div>
-  <div class="c" style="font-size:11px">{{ biz.addr }}</div>
+  <div class="c" style="font-size:11px">{{ biz.addr }}{% if biz.postal %} · {{ biz.postal }}{% endif %}</div>
   <div class="c" style="font-size:11px">{{ biz.phone }}</div>
   <hr>
 

@@ -387,7 +387,8 @@ def view_receipt(
     return render(request, "receipt.html", {
         "db": db, "staff": staff, "receipt": receipt, "data": data,
         "tip_guide": tip_guide, "deliveries": deliveries, "sent": sent,
-        "biz": {"name": cfg["biz_name"], "addr": cfg["biz_address"], "phone": cfg["biz_phone"]},
+        "biz": {"name": cfg["biz_name"], "addr": cfg["biz_address"],
+                "postal": cfg["biz_postal"], "phone": cfg["biz_phone"]},
         "title": "Receipt",
     })
 
