@@ -5,7 +5,7 @@ import csv
 import io
 from datetime import date, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -14,7 +14,8 @@ from app import reports
 from app.database import get_db
 from app.deps import render, require
 from app.etl import run_etl
-from app.models.oltp import MenuCategory, Staff
+from app.models.oltp import DayClose, MenuCategory, Staff
+from app.services import closeout
 from app.services.money import money
 
 router = APIRouter(prefix="/reports")
@@ -203,3 +204,70 @@ def refresh(
     """Run the ETL so newly closed orders appear in the reports."""
     run_etl(db, full_refresh=False, verbose=False)
     return RedirectResponse("/reports", status_code=303)
+
+
+# --------------------------------------------------------------------------
+# End-of-day close-out — workflow 6.3 (Z-report)
+# --------------------------------------------------------------------------
+
+def _cents(value: str, field: str = "Amount") -> int:
+    """Parse a typed currency string into integer cents (no float rounding)."""
+    raw = value.strip().replace("$", "").replace(",", "")
+    if not raw:
+        return 0
+    whole, _, frac = raw.partition(".")
+    whole = whole or "0"
+    if not whole.isdigit() or (frac and not frac.isdigit()) or len(frac) > 2:
+        raise HTTPException(400, f"{field} '{value}' is not a valid amount.")
+    return int(whole) * 100 + int(frac.ljust(2, "0") or 0)
+
+
+@router.get("/close")
+def close_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("reports.view")),
+):
+    pending = closeout.compute_pending(db)
+    history = db.execute(
+        select(DayClose).order_by(DayClose.closed_at.desc()).limit(20)
+    ).scalars().all()
+    return render(request, "report_close.html", {
+        "db": db, "staff": staff, "pending": pending, "history": history,
+        "title": "End-of-day close",
+    })
+
+
+@router.post("/close")
+def do_close(
+    request: Request,
+    opening_float: str = Form("0"),
+    counted_cash: str = Form("0"),
+    notes: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("reports.view")),
+):
+    close = closeout.record_close(
+        db, staff,
+        opening_float_cents=_cents(opening_float, "Opening float"),
+        counted_cash_cents=_cents(counted_cash, "Counted cash"),
+        notes=notes,
+    )
+    return RedirectResponse(f"/reports/close/{close.id}", status_code=303)
+
+
+@router.get("/close/{close_id}")
+def close_view(
+    close_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("reports.view")),
+):
+    close = db.get(DayClose, close_id)
+    if close is None:
+        raise HTTPException(404, "Close not found")
+    return render(request, "report_close_view.html", {
+        "db": db, "staff": staff, "close": close,
+        "rows": closeout.by_instrument(close),
+        "title": f"Z-report #{close.id}",
+    })

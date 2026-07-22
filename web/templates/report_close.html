@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>End-of-day close</h1>
+    <p class="sub">Reconcile the cash drawer and cut a Z-report · <span class="spec">req 6.3</span></p>
+  </div>
+  <a class="btn" href="/reports">← Reports</a>
+</div>
+
+<div class="row">
+  <div class="card" style="flex:2">
+    <strong>Since the last close</strong>
+    <p class="sub" style="margin:2px 0 12px">
+      {{ pending.window_start.strftime('%Y-%m-%d %H:%M') }} → now ·
+      {{ pending.payment_count }} payment{{ '' if pending.payment_count == 1 else 's' }}
+    </p>
+    <table>
+      <tr><td>Gross sales (items)</td><td class="num">${{ pending.gross_sales_cents|money }}</td></tr>
+      <tr><td>Discounts</td><td class="num">-${{ pending.discount_cents|money }}</td></tr>
+      <tr><td>Tax collected</td><td class="num">${{ pending.tax_cents|money }}</td></tr>
+      <tr><td>Tips</td><td class="num">${{ pending.tip_cents|money }}</td></tr>
+      <tr class="b"><td>Total collected</td><td class="num">${{ pending.total_collected_cents|money }}</td></tr>
+    </table>
+
+    <p class="sub" style="margin:14px 0 4px"><strong>By instrument</strong></p>
+    <table>
+      {% for name, amt in pending.by_instrument|dictsort(by='value', reverse=true) %}
+      <tr><td>{{ name }}</td><td class="num">${{ amt|money }}</td></tr>
+      {% else %}
+      <tr><td class="empty" colspan="2">No payments in this window yet.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="card">
+    <strong>Count the drawer</strong>
+    <p class="sub" style="margin:2px 0 12px">
+      Expected cash is the cash tenders above. Enter the opening float and what
+      you counted; the variance is worked out for you.
+    </p>
+    <form method="post" action="/reports/close">
+      <div class="field">
+        <label>Expected cash</label>
+        <input type="text" value="{{ pending.expected_cash_cents|money }}" disabled>
+      </div>
+      <div class="field">
+        <label>Opening float</label>
+        <input type="text" name="opening_float" value="0.00" inputmode="decimal">
+      </div>
+      <div class="field">
+        <label>Counted cash</label>
+        <input type="text" name="counted_cash" value="{{ pending.expected_cash_cents|money }}" inputmode="decimal">
+      </div>
+      <div class="field">
+        <label>Notes</label>
+        <input type="text" name="notes" placeholder="e.g. $5 short, gave change error">
+      </div>
+      <button class="btn primary" style="width:100%">Close day &amp; cut Z-report</button>
+    </form>
+  </div>
+</div>
+
+{% if history %}
+<div class="card">
+  <strong>Past closes</strong>
+  <div class="scroll" style="margin-top:12px">
+    <table>
+      <thead>
+        <tr><th>#</th><th>Closed</th><th>By</th>
+          <th class="num">Collected</th><th class="num">Expected cash</th>
+          <th class="num">Counted</th><th class="num">Variance</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for c in history %}
+        <tr>
+          <td>{{ c.id }}</td>
+          <td>{{ c.closed_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td>{{ c.closed_by.name if c.closed_by else '—' }}</td>
+          <td class="num">${{ c.total_collected_cents|money }}</td>
+          <td class="num">${{ c.expected_cash_cents|money }}</td>
+          <td class="num">${{ c.counted_cash_cents|money }}</td>
+          <td class="num" style="color:{{ 'var(--ok)' if c.variance_cents == 0 else 'var(--ready)' }}">
+            {{ '+' if c.variance_cents > 0 else '' }}${{ c.variance_cents|money }}
+          </td>
+          <td><a class="btn sm" href="/reports/close/{{ c.id }}">Z-report</a></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

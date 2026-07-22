@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>Z-report #{{ close.id }}</h1>
+    <p class="sub">End-of-day close · <span class="spec">req 6.3</span></p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a class="btn" href="/reports/close">← Close</a>
+    <button class="btn primary" onclick="window.print()">Print</button>
+  </div>
+</div>
+
+<div class="receipt">
+  <div class="c b" style="font-size:16px">Z-REPORT #{{ close.id }}</div>
+  <div class="c" style="font-size:11px">
+    {{ close.window_start.strftime('%Y-%m-%d %H:%M') }} → {{ close.closed_at.strftime('%Y-%m-%d %H:%M') }}
+  </div>
+  <div class="c" style="font-size:11px">Closed by {{ close.closed_by.name if close.closed_by else '—' }}</div>
+  <hr>
+
+  <div class="l"><span>Payments</span><span>{{ close.payment_count }}</span></div>
+  <hr>
+  <div class="l"><span>Gross sales (items)</span><span>{{ close.gross_sales_cents|money }}</span></div>
+  <div class="l"><span>Discounts</span><span>-{{ close.discount_cents|money }}</span></div>
+  <div class="l"><span>Tax</span><span>{{ close.tax_cents|money }}</span></div>
+  <div class="l"><span>Tips</span><span>{{ close.tip_cents|money }}</span></div>
+  <div class="l b"><span>TOTAL COLLECTED</span><span>{{ close.total_collected_cents|money }}</span></div>
+  <hr>
+
+  <div class="c b" style="font-size:12px">By instrument</div>
+  {% for name, amt in rows %}
+  <div class="l"><span>{{ name }}</span><span>{{ amt }}</span></div>
+  {% endfor %}
+  <hr>
+
+  <div class="c b" style="font-size:12px">Cash drawer</div>
+  <div class="l"><span>Opening float</span><span>{{ close.opening_float_cents|money }}</span></div>
+  <div class="l"><span>Expected cash</span><span>{{ close.expected_cash_cents|money }}</span></div>
+  <div class="l"><span>Counted</span><span>{{ close.counted_cash_cents|money }}</span></div>
+  <div class="l b"><span>VARIANCE</span><span>{{ '+' if close.variance_cents > 0 else '' }}{{ close.variance_cents|money }}</span></div>
+  {% if close.notes %}<hr><div class="c" style="font-size:11px">{{ close.notes }}</div>{% endif %}
+  <hr>
+  <div class="c">{{ 'Balanced' if close.variance_cents == 0 else ('Over' if close.variance_cents > 0 else 'Short') }}</div>
+</div>
+{% endblock %}

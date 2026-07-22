@@ -7,9 +7,12 @@
     <h1>Reports &amp; analytics</h1>
     <p class="sub">Every figure below is read from the star schema · <span class="spec">req 4.3</span></p>
   </div>
-  <form method="post" action="/reports/refresh">
-    <button class="btn">↻ Refresh from live orders</button>
-  </form>
+  <div style="display:flex;gap:8px">
+    <a class="btn warn" href="/reports/close">End-of-day close →</a>
+    <form method="post" action="/reports/refresh">
+      <button class="btn">↻ Refresh from live orders</button>
+    </form>
+  </div>
 </div>
 
 <form class="card filters" method="get" action="/reports">

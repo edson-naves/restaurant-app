@@ -481,6 +481,51 @@ if after:
     check(after.distinct_instruments == 3,
           "fact records that the order used 3 instruments", str(after.distinct_instruments))
 
+# --- end-of-day close (workflow 6.3, Z-report) ----------------------------
+print("\n--- end-of-day close ---")
+from app.models.oltp import DayClose  # noqa: E402
+from app.services import closeout  # noqa: E402
+
+client.cookies.set("staff_id", str(owner.id))
+r = client.get("/reports/close")
+check(r.status_code == 200, "close page opens", str(r.status_code))
+
+# A waiter can't cut a Z-report (reports.view is owner/manager only).
+client.cookies.set("staff_id", str(waiter.id))
+check(client.post("/reports/close", data={"opening_float": "0", "counted_cash": "0"}).status_code == 403,
+      "a waiter cannot close the day")
+client.cookies.set("staff_id", str(owner.id))
+
+pending = closeout.compute_pending(db)
+check(pending.total_collected_cents > 0, "there is money in the window to close",
+      f"${money(pending.total_collected_cents)}")
+
+# Close with counted = expected -> zero variance; the collected total is frozen.
+r = client.post("/reports/close", data={
+    "opening_float": "100.00",
+    "counted_cash": money(10000 + pending.expected_cash_cents),  # float + expected
+    "notes": "e2e close",
+})
+check(r.status_code == 200 and "Z-report" in r.text, "closing the day cuts a Z-report")
+db.expire_all()
+close = db.execute(select(DayClose).order_by(DayClose.id.desc())).scalars().first()
+check(close is not None and close.variance_cents == 0,
+      "counted == float + expected gives zero variance", f"{close.variance_cents}")
+check(close.total_collected_cents == pending.total_collected_cents,
+      "the Z-report froze the window's collected total")
+
+# A $5-short count records a negative variance.
+before_id = close.id
+short = money(10000 + max(pending.expected_cash_cents - 500, 0))
+# Second close covers only payments since the first; with none, expected cash is 0.
+r2 = client.post("/reports/close", data={"opening_float": "0", "counted_cash": "0", "notes": ""})
+db.expire_all()
+close2 = db.execute(select(DayClose).order_by(DayClose.id.desc())).scalars().first()
+check(close2.id != before_id and close2.window_start == close.closed_at,
+      "the next close starts where the last one ended (no gap, no overlap)")
+check(close2.payment_count == 0,
+      "and covers no payments, since none were taken after the first close")
+
 db.close()
 client.close()
 print("\nRESULT:", "end-to-end workflows behave to spec" if ok else "E2E FAILURES")

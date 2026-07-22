@@ -547,3 +547,39 @@ class Receipt(Base):
     destination: Mapped[str] = mapped_column(String(160), default="")
     issued_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
+class DayClose(Base):
+    """End-of-day cash reconciliation — workflow 6.3, the Z-report.
+
+    One row per close. A close snapshots every non-voided payment taken in its
+    window (from the previous close's timestamp up to this one), so successive
+    closes tile the trading history without gaps or overlap. The money figures
+    are frozen at close time: this is an operational record of what the drawer
+    should have held versus what was counted, not a live query.
+    """
+    __tablename__ = "day_close"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    closed_by_id: Mapped[int] = mapped_column(ForeignKey("staff.id"), nullable=False)
+    window_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    closed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+    # Drawer reconciliation (cash only).
+    opening_float_cents: Mapped[int] = mapped_column(Integer, default=0)
+    expected_cash_cents: Mapped[int] = mapped_column(Integer, default=0)
+    counted_cash_cents: Mapped[int] = mapped_column(Integer, default=0)
+    variance_cents: Mapped[int] = mapped_column(Integer, default=0)  # counted - float - expected
+
+    # Snapshot of the whole window, all instruments.
+    gross_sales_cents: Mapped[int] = mapped_column(Integer, default=0)   # item value
+    discount_cents: Mapped[int] = mapped_column(Integer, default=0)
+    tax_cents: Mapped[int] = mapped_column(Integer, default=0)
+    tip_cents: Mapped[int] = mapped_column(Integer, default=0)
+    total_collected_cents: Mapped[int] = mapped_column(Integer, default=0)
+    payment_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Per-instrument totals as JSON: {"Cash": 12345, "Visa": 6789, ...}
+    by_instrument_json: Mapped[str] = mapped_column(Text, default="{}")
+    notes: Mapped[str] = mapped_column(String(300), default="")
+
+    closed_by: Mapped["Staff"] = relationship(lazy="joined")
