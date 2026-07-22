@@ -823,6 +823,31 @@ p = fresh(Staff, name=TEST_STAFF)
 check(p.role == Role.KITCHEN and p.pin_code == "4321",
       "edit role, blank PIN leaves it unchanged")
 
+# Save-all: one button saves every row as parallel lists.
+p = fresh(Staff, name=TEST_STAFF)
+ids = [owner.id, p.id]
+r = client.post("/admin/staff/save-all", data={
+    "staff_id": ids,
+    "name": [owner.name, "QA Probe Renamed"],
+    "role": [Role.OWNER, Role.WAITER],
+    "pin_code": ["", ""],
+})
+check(r.status_code == 200, "save-all saves the staff page in one request")
+check(fresh(Staff, id=p.id).name == "QA Probe Renamed"
+      and fresh(Staff, id=p.id).role == Role.WAITER,
+      "save-all applied the renamed, re-roled row")
+check(fresh(Staff, id=owner.id).pin_code != "",
+      "a blank PIN in save-all leaves that PIN untouched")
+# Reset the fixture's identity for the checks that follow.
+client.post(f"/admin/staff/{p.id}/edit",
+            data={"name": TEST_STAFF, "role": Role.KITCHEN, "pin_code": ""})
+# A mismatched field list is refused rather than pairing rows wrongly.
+r = client.post("/admin/staff/save-all", data={
+    "staff_id": ids, "name": [owner.name], "role": [Role.OWNER, Role.WAITER],
+    "pin_code": ["", ""],
+})
+check(r.status_code == 400, "a short field list is refused")
+
 owners = db.execute(
     select(Staff).where(Staff.role == Role.OWNER, Staff.is_active.is_(True))
 ).scalars().all()

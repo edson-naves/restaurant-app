@@ -950,19 +950,8 @@ def create_staff(
     return RedirectResponse("/admin/staff", status_code=303)
 
 
-@router.post("/staff/{staff_id}/edit")
-def edit_staff(
-    staff_id: int,
-    name: str = Form(...),
-    role: str = Form(...),
-    pin_code: str = Form(""),
-    db: Session = Depends(get_db),
-    staff: Staff = Depends(require("staff.manage")),
-):
-    person = db.get(Staff, staff_id)
-    if person is None:
-        raise HTTPException(404, "Staff member not found")
-
+def _apply_staff_edit(db: Session, person: Staff, name: str, role: str, pin_code: str) -> None:
+    """Apply one person's edits. Shared by the single-row and save-all routes."""
     name = name.strip()
     if not name:
         raise HTTPException(400, "Name is required.")
@@ -975,7 +964,54 @@ def edit_staff(
     person.role = role
     if pin_code.strip():                       # blank means "leave the PIN alone"
         person.pin_code = _check_pin(pin_code)
+
+
+@router.post("/staff/{staff_id}/edit")
+def edit_staff(
+    staff_id: int,
+    name: str = Form(...),
+    role: str = Form(...),
+    pin_code: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("staff.manage")),
+):
+    person = db.get(Staff, staff_id)
+    if person is None:
+        raise HTTPException(404, "Staff member not found")
+    _apply_staff_edit(db, person, name, role, pin_code)
     db.commit()
+    return RedirectResponse("/admin/staff", status_code=303)
+
+
+@router.post("/staff/save-all")
+def save_all_staff(
+    staff_id: list[int] = Form([]),
+    name: list[str] = Form([]),
+    role: list[str] = Form([]),
+    pin_code: list[str] = Form([]),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("staff.manage")),
+):
+    """Save every staff row on the page at once.
+
+    Fields arrive as parallel lists in row order; a length mismatch means the
+    form did not submit completely and would pair one person's value with
+    another, so the whole batch is refused. All-or-nothing: one bad row rolls
+    the lot back, so the operator can always tell which of their edits stuck.
+    """
+    if len({len(staff_id), len(name), len(role), len(pin_code)}) != 1:
+        raise HTTPException(400, "The form did not submit completely — reload and retry.")
+    try:
+        for sid, nm, rl, pin in zip(staff_id, name, role, pin_code):
+            person = db.get(Staff, sid)
+            if person is None:
+                raise HTTPException(404, f"Staff id {sid} not found")
+            _apply_staff_edit(db, person, nm, rl, pin)
+            db.flush()
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return RedirectResponse("/admin/staff", status_code=303)
 
 
