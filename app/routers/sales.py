@@ -351,14 +351,13 @@ def edit_item(
     order_id: int,
     item_id: int,
     quantity: int = Form(...),
-    seat_number: int = Form(-1),
     notes: str = Form(""),
     course: int = Form(0),
     modifier_ids: list[int] = Form(default=[]),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("orders.manage")),
 ):
-    """4.1.2 — fix a line already on the order: seat, quantity, note, modifiers, course.
+    """4.1.2 — fix a line already on the order: quantity, note, modifiers, course.
 
     Blocked once any of the line has been paid (it has allocations that price
     it at the old value). Editing before payment saves a delete-and-re-add.
@@ -377,19 +376,6 @@ def edit_item(
     item.notes = notes.strip()
     if course in COURSE_LABELS:
         item.course = course
-    # seat_number=-1 means "leave unchanged"; 0 clears the seat (table/unassigned).
-    if seat_number >= 0:
-        if seat_number == 0:
-            item.seat_id = None
-        else:
-            seat = db.execute(
-                select(Seat).where(
-                    Seat.order_id == item.order_id, Seat.seat_number == seat_number
-                )
-            ).scalar_one_or_none()
-            if seat is None:
-                raise HTTPException(404, f"Seat {seat_number} not found on this order.")
-            item.seat_id = seat.id
     # Replace the modifier set; each captures the delta at edit time, matching
     # how add_item snapshots it.
     item.modifiers.clear()
