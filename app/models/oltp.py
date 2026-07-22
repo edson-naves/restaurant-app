@@ -69,6 +69,23 @@ def course_label(n: int) -> str:
     return COURSE_LABELS.get(n, f"Course {n}")
 
 
+def course_for_category(category_name: str) -> int:
+    """A menu section's natural firing course.
+
+    The menu category (Starters/Mains/Sides/Desserts/Drinks) and the kitchen
+    course are separate concepts, but for most items they line up — so this is
+    the sensible default the order screen pre-selects. Starters fire first,
+    desserts fire last, and everything else (mains, sides, drinks) rides with
+    the mains. The waiter can always override per line.
+    """
+    n = (category_name or "").strip().lower()
+    if "start" in n or "appet" in n:
+        return 1
+    if "dessert" in n or "sweet" in n:
+        return 3
+    return 2
+
+
 class DeliveryStatus:
     """Section 4.1.4 — Pending -> Preparing -> Ready -> On the way -> Delivered."""
     PENDING = "pending"
@@ -261,6 +278,11 @@ class MenuItem(Base):
     is_shareable: Mapped[bool] = mapped_column(Boolean, default=False)
 
     category: Mapped["MenuCategory"] = relationship(back_populates="items")
+
+    @property
+    def default_course(self) -> int:
+        """The course this item falls into by default, from its menu section."""
+        return course_for_category(self.category.name if self.category else "")
 
 
 class Modifier(Base):

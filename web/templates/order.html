@@ -57,7 +57,7 @@
 
     <div class="menu-grid">
       {% for mi in menu_items %}
-      <button class="mi" type="button" onclick="pick({{ mi.id }}, '{{ mi.name|replace("'", "\\'") }}', {{ mi.price_cents }})">
+      <button class="mi" type="button" onclick="pick({{ mi.id }}, '{{ mi.name|replace("'", "\\'") }}', {{ mi.price_cents }}, {{ mi.default_course }})">
         <span class="nm">{{ mi.name }}</span>
         <span class="pr">${{ mi.price_cents|money }}{% if mi.is_shareable %} · shareable{% endif %}</span>
       </button>
@@ -84,9 +84,10 @@
         </div>
         <div class="field">
           <label>Course <span class="spec">req 4.1.3</span></label>
-          <select name="course">
+          <select name="course" id="coursesel">
+            <option value="0" selected>Auto — by menu section</option>
             {% for n, lbl in COURSE_LABELS.items() %}
-            <option value="{{ n }}" {{ 'selected' if n == 2 else '' }}>{{ lbl }}</option>
+            <option value="{{ n }}">{{ lbl }}</option>
             {% endfor %}
           </select>
         </div>
@@ -211,10 +212,15 @@
 </div>
 
 <script>
-function pick(id, name, price) {
+function pick(id, name, price, course) {
   document.getElementById('mid').value = id;
   document.getElementById('picked').textContent = 'Adding: ' + name + '  ($' + (price/100).toFixed(2) + ')';
   document.getElementById('addb').disabled = false;
+  // Pre-select the item's natural course (Starter/Main/Dessert) so a Caesar
+  // Salad fires as a starter without the waiter touching the dropdown. Still
+  // fully overridable before Add.
+  var sel = document.getElementById('coursesel');
+  if (sel) sel.value = String(course);
 }
 </script>
 {% endblock %}

@@ -226,7 +226,7 @@ def add_item(
     seat_number: int = Form(0),
     quantity: int = Form(1),
     notes: str = Form(""),
-    course: int = Form(2),
+    course: int = Form(0),
     modifier_ids: list[int] = Form(default=[]),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("orders.manage")),
@@ -258,7 +258,8 @@ def add_item(
         quantity=max(1, quantity),
         unit_price_cents=mi.price_cents,
         notes=notes.strip(),
-        course=course if course in COURSE_LABELS else 2,
+        # 0 = "auto" from the menu section; an explicit choice overrides it.
+        course=course if course in COURSE_LABELS else mi.default_course,
         kitchen_status=KitchenStatus.PENDING,
     )
     db.add(item)
