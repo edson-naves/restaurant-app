@@ -72,60 +72,30 @@
       {% endfor %}
     </div>
 
+    {# Tap-to-add (4.1.2): clicking a menu item drops it straight onto the order
+       at qty 1 and its auto course. Seat, quantity, modifiers and notes are
+       then tuned on the line with the ✎ editor — no separate add form. #}
+    {% if can('orders.manage') %}
+    <p class="sub" style="margin:0 0 10px">Tap an item to add it — adjust it on the order with ✎.</p>
+    {% endif %}
     <div class="menu-grid">
       {% for mi in menu_items %}
-      <button class="mi" type="button"
-              {% if can('orders.manage') %}onclick="pick({{ mi.id }}, '{{ mi.name|replace("'", "\\'") }}', {{ mi.price_cents }}, {{ mi.default_course }})"{% else %}disabled style="cursor:default"{% endif %}>
+      {% if can('orders.manage') %}
+      <form method="post" action="/orders/{{ order.id }}/items" class="mi-form">
+        <input type="hidden" name="menu_item_id" value="{{ mi.id }}">
+        <button class="mi" type="submit">
+          <span class="nm">{{ mi.name }}</span>
+          <span class="pr">${{ mi.price_cents|money }}{% if mi.is_shareable %} · shareable{% endif %}</span>
+        </button>
+      </form>
+      {% else %}
+      <div class="mi" style="cursor:default">
         <span class="nm">{{ mi.name }}</span>
         <span class="pr">${{ mi.price_cents|money }}{% if mi.is_shareable %} · shareable{% endif %}</span>
-      </button>
+      </div>
+      {% endif %}
       {% endfor %}
     </div>
-
-    {# Set the options here; tapping a menu item above adds it to the order
-       instantly with these choices — no separate confirm button (4.1.2). #}
-    {% if can('orders.manage') %}
-    <form method="post" action="/orders/{{ order.id }}/items" id="addf" style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
-      <input type="hidden" name="menu_item_id" id="mid">
-      <p id="picked" class="sub" style="margin:0 0 10px">Set the options below, then tap an item to add it.</p>
-      <div class="row">
-        <div class="field">
-          <label>Seat (0 = table / unassigned)</label>
-          <select name="seat_number">
-            <option value="0">Unassigned</option>
-            {% for s in order.seats %}
-            <option value="{{ s.seat_number }}">Seat {{ s.seat_number }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="field">
-          <label>Quantity</label>
-          <input type="number" name="quantity" value="1" min="1" max="20">
-        </div>
-        <div class="field">
-          <label>Course <span class="spec">req 4.1.3</span></label>
-          <select name="course" id="coursesel">
-            <option value="0" selected>Auto — by menu section</option>
-            {% for n, lbl in COURSE_LABELS.items() %}
-            <option value="{{ n }}">{{ lbl }}</option>
-            {% endfor %}
-          </select>
-        </div>
-      </div>
-      <div class="field">
-        <label>Modifiers <span class="spec">req 4.1.2</span></label>
-        <div class="tipset">
-          {% for m in modifiers %}
-          <label><input type="checkbox" name="modifier_ids" value="{{ m.id }}"> {{ m.name }}{% if m.price_delta_cents %} +${{ m.price_delta_cents|money }}{% endif %}</label>
-          {% endfor %}
-        </div>
-      </div>
-      <div class="field">
-        <label>Special instructions</label>
-        <input type="text" name="notes" placeholder="e.g. allergy: nuts">
-      </div>
-    </form>
-    {% endif %}
   </div>
 
   <!-- current order -->
@@ -252,15 +222,6 @@
 </div>
 
 <script>
-// Tap a menu item -> add it to the order instantly with the options currently
-// set in the form (seat / quantity / course / modifiers / notes). Course stays
-// on "Auto" unless the user overrode it, and the server maps Auto to the item's
-// menu section.
-function pick(id, name, price, course) {
-  document.getElementById('mid').value = id;
-  document.getElementById('addf').submit();
-}
-
 // Close an open edit popover when clicking anywhere outside it — a native
 // <details> only toggles from its own summary, so it would otherwise stay open.
 document.addEventListener('click', function (e) {
