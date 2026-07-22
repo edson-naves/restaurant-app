@@ -334,7 +334,8 @@ class Order(Base):
     channel: Mapped["Channel"] = relationship(lazy="joined")
     waiter: Mapped["Staff | None"] = relationship(lazy="joined")
     items: Mapped[list["OrderItem"]] = relationship(
-        back_populates="order", cascade="all, delete-orphan"
+        back_populates="order", cascade="all, delete-orphan",
+        foreign_keys="OrderItem.order_id",
     )
     seats: Mapped[list["Seat"]] = relationship(
         back_populates="order", cascade="all, delete-orphan", order_by="Seat.seat_number"
@@ -390,8 +391,19 @@ class OrderItem(Base):
     # Section 4.2.4 — shared items split proportionally across selected seats.
     is_shared: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+    # Provenance: set when this line arrives via a table merge (4.1.1), pointing
+    # at the (now-dissolved) order it came from. Drives the "from Table N" badge
+    # and keeps an on-record trail of what moved between tables.
+    merged_from_order_id: Mapped[int | None] = mapped_column(
+        ForeignKey("order.id"), nullable=True
+    )
 
-    order: Mapped["Order"] = relationship(back_populates="items")
+    order: Mapped["Order"] = relationship(
+        back_populates="items", foreign_keys=[order_id]
+    )
+    merged_from_order: Mapped["Order | None"] = relationship(
+        "Order", foreign_keys=[merged_from_order_id], lazy="joined"
+    )
     menu_item: Mapped["MenuItem"] = relationship(lazy="joined")
     seat: Mapped["Seat | None"] = relationship(back_populates="items")
     modifiers: Mapped[list["OrderItemModifier"]] = relationship(
@@ -682,3 +694,26 @@ class Refund(Base):
         CheckConstraint("amount_cents > 0", name="ck_refund_amount_pos"),
         Index("ix_refund_order", "order_id"),
     )
+
+
+class AuditEvent(Base):
+    """An immutable record of a table-level action, for the security trail.
+
+    Moves and merges relocate a party's whole order, so who did it, when, and
+    between which tables is worth keeping on record — both to explain a line
+    that appears on a table it wasn't ordered at, and to answer "what happened
+    to table N" after the fact. Append-only: rows are written, never edited.
+    """
+    __tablename__ = "audit_event"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    staff_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
+    action: Mapped[str] = mapped_column(String(40), nullable=False)  # move_table | merge_tables
+    # Human-readable summary, e.g. "Table 4 → Table 9" or "Table 7 merged into Table 4".
+    detail: Mapped[str] = mapped_column(String(300), default="")
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("order.id"), nullable=True)
+
+    staff: Mapped["Staff | None"] = relationship(lazy="joined")
+
+    __table_args__ = (Index("ix_audit_at", "at"),)

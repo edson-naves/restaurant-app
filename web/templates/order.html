@@ -164,6 +164,8 @@
             {# A settled line can't be edited or removed (it'd break the total),
                so mark it "paid" to explain the missing ✎/✕ buttons. #}
             {% if i.allocations %}<span class="pill paid" title="Already paid — can't be changed or removed">paid ✓</span>{% endif %}
+            {# Provenance (4.1.1): this line arrived from another table via merge. #}
+            {% if i.merged_from_order and i.merged_from_order.table %}<span class="pill open" title="Merged in from {{ i.merged_from_order.code }}">⤷ from Table {{ i.merged_from_order.table.number }}</span>{% endif %}
             {% for m in i.modifiers %}<br><span class="sub" style="font-size:11px">+ {{ m.modifier.name }}</span>{% endfor %}
             {% if i.notes %}<br><span style="color:#f2c46b;font-size:11px">✎ {{ i.notes }}</span>{% endif %}
           </td>

@@ -12,6 +12,7 @@ from app.database import get_db
 from app.deps import can, current_staff, render, require
 from app.models.oltp import (
     COURSE_LABELS,
+    AuditEvent,
     Channel,
     DeliveryOrder,
     DeliveryStatus,
@@ -198,6 +199,11 @@ def _live_order(db: Session, table_id: int) -> Order | None:
     ).scalars().first()
 
 
+def _audit(db: Session, staff: Staff, action: str, detail: str, order_id: int | None = None) -> None:
+    """Append a table-action to the security trail (4.1.1). Append-only."""
+    db.add(AuditEvent(staff_id=staff.id, action=action, detail=detail, order_id=order_id))
+
+
 @router.post("/tables/{table_id}/move")
 def move_table(
     table_id: int,
@@ -231,6 +237,8 @@ def move_table(
     dest.current_waiter_id = src.current_waiter_id
     src.status = TableStatus.FREE
     src.current_waiter_id = None
+    _audit(db, staff, "move_table",
+           f"{order.code}: Table {src.number} -> Table {dest.number}", order.id)
     db.commit()
     return RedirectResponse(f"/orders/{order.id}", status_code=303)
 
@@ -292,9 +300,12 @@ def merge_tables(
         db.flush()
         seat_map[s.id] = new_seat.id
 
-    for item in list(source.items):
+    moved = list(source.items)
+    for item in moved:
         item.order_id = target.id
         item.seat_id = seat_map.get(item.seat_id) if item.seat_id else None
+        # Stamp provenance so the line shows "from Table N" and stays traceable.
+        item.merged_from_order_id = source.id
 
     target.guest_count += source.guest_count
     now = datetime.now()
@@ -307,6 +318,9 @@ def merge_tables(
     source.closed_at = now
     src.status = TableStatus.FREE
     src.current_waiter_id = None
+    _audit(db, staff, "merge_tables",
+           f"Table {src.number} ({source.code}, {len(moved)} item(s)) "
+           f"merged into Table {dest.number} ({target.code})", target.id)
     db.commit()
     return RedirectResponse(f"/orders/{target.id}", status_code=303)
 

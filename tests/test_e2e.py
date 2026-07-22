@@ -19,6 +19,7 @@ from sqlalchemy import select  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
 from app.models.oltp import (  # noqa: E402
+    AuditEvent,
     Order,
     PaymentInstrument,
     Receipt,
@@ -618,6 +619,12 @@ check(db.get(RestaurantTable, dest_t.id).status == TableStatus.OCCUPIED,
       "the destination table is occupied")
 check(db.get(RestaurantTable, dest_t.id).current_waiter_id == waiter.id,
       "the waiter moves with the party")
+# The move is written to the audit trail.
+mev = db.execute(
+    select(AuditEvent).where(AuditEvent.action == "move_table", AuditEvent.order_id == move_oid)
+).scalars().first()
+check(mev is not None and str(dest_t.number) in mev.detail,
+      "the move is recorded in the audit log", mev.detail if mev else "no event")
 # The now-empty source table has no order to move.
 r = client.post(f"/tables/{src_t.id}/move", data={"to_table_id": dest_t.id})
 check(r.status_code == 400, "a table with no open order can't be moved")
@@ -655,6 +662,16 @@ check(len(keep_o.items) == 2, "both parties' items are on one order")
 moved = next(i for i in keep_o.items if i.menu_item_id == bread.id)
 check(moved.seat is not None and moved.seat.seat_number == 4,
       "the moved item lands on a renumbered seat", f"seat {moved.seat.seat_number if moved.seat else None}")
+# Provenance: the moved line is stamped with the table it came from.
+check(moved.merged_from_order_id == absorb_oid
+      and moved.merged_from_order.table.number == absorb_t.number,
+      "the moved line records the table it came from", f"from Table {absorb_t.number}")
+# And a merge is written to the append-only audit trail (staff + detail).
+ev = db.execute(
+    select(AuditEvent).where(AuditEvent.action == "merge_tables", AuditEvent.order_id == keep_oid)
+).scalars().first()
+check(ev is not None and ev.staff_id == waiter.id and str(absorb_t.number) in ev.detail,
+      "the merge is recorded in the audit log", ev.detail if ev else "no event")
 # A table with no order can't be merged in.
 r = client.post(f"/tables/{keep_t.id}/merge", data={"from_table_id": absorb_t.id})
 check(r.status_code == 400, "merging a table with no open order is refused")
