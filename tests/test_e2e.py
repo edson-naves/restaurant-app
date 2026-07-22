@@ -625,6 +625,43 @@ client.cookies.set("staff_id", str(owner.id))
 client.post(f"/orders/{move_oid}/cancel")
 client.cookies.set("staff_id", str(owner.id))
 
+# --- merge two tables into one (4.1.1) ------------------------------------
+print("\n--- merge tables ---")
+client.cookies.set("staff_id", str(waiter.id))
+keep_t, absorb_t = db.execute(
+    select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE).limit(2)
+).scalars().all()
+# Destination party: 2 guests, one steak on seat 1.
+r = client.post(f"/tables/{keep_t.id}/open", data={"guests": 2, "waiter_id": waiter.id})
+keep_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+client.post(f"/orders/{keep_oid}/items", data={"menu_item_id": steak.id, "seat_number": 1})
+# Source party: 3 guests, a bread on seat 2.
+r = client.post(f"/tables/{absorb_t.id}/open", data={"guests": 3, "waiter_id": waiter.id})
+absorb_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+client.post(f"/orders/{absorb_oid}/items", data={"menu_item_id": bread.id, "seat_number": 2})
+
+r = client.post(f"/tables/{keep_t.id}/merge", data={"from_table_id": absorb_t.id})
+db.expire_all()
+keep_o = db.get(Order, keep_oid)
+absorb_o = db.get(Order, absorb_oid)
+check(r.status_code == 200 and absorb_o.status == "cancelled",
+      "the absorbed order is dissolved")
+check(db.get(RestaurantTable, absorb_t.id).status == TableStatus.FREE,
+      "the absorbed table is freed")
+check(keep_o.guest_count == 5, "guest counts combine (2 + 3)", str(keep_o.guest_count))
+check(len(keep_o.seats) == 5, "the source seats are appended (2 + 3)", f"{len(keep_o.seats)} seats")
+check(len(keep_o.items) == 2, "both parties' items are on one order")
+# The moved bread kept a seat, renumbered onto the destination (seat 2 -> 4).
+moved = next(i for i in keep_o.items if i.menu_item_id == bread.id)
+check(moved.seat is not None and moved.seat.seat_number == 4,
+      "the moved item lands on a renumbered seat", f"seat {moved.seat.seat_number if moved.seat else None}")
+# A table with no order can't be merged in.
+r = client.post(f"/tables/{keep_t.id}/merge", data={"from_table_id": absorb_t.id})
+check(r.status_code == 400, "merging a table with no open order is refused")
+client.cookies.set("staff_id", str(owner.id))
+client.post(f"/orders/{keep_oid}/cancel")
+client.cookies.set("staff_id", str(owner.id))
+
 # --- cancel an order ------------------------------------------------------
 print("\n--- cancel an order ---")
 client.cookies.set("staff_id", str(owner.id))

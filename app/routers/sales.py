@@ -235,6 +235,79 @@ def move_table(
     return RedirectResponse(f"/orders/{order.id}", status_code=303)
 
 
+def _has_paid_items(order: Order) -> bool:
+    """True if any of the order's lines are already allocated to a payment."""
+    return any(i.allocations for i in order.items)
+
+
+@router.post("/tables/{table_id}/merge")
+def merge_tables(
+    table_id: int,
+    from_table_id: int = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("orders.manage")),
+):
+    """Combine another table's order into this one — two parties onto one bill.
+
+    The source order's guests become extra seats on the destination (renumbered
+    after its existing seats), its items move across keeping their seat, course
+    and kitchen state, and the emptied table is freed. Blocked once either side
+    has taken any payment, so no settled money is ever entangled by the merge.
+    """
+    dest = db.get(RestaurantTable, table_id)
+    if dest is None:
+        raise HTTPException(404, "Table not found")
+    target = _live_order(db, dest.id)
+    if target is None:
+        raise HTTPException(400, f"Table {dest.number} has no open order.")
+
+    src = db.get(RestaurantTable, from_table_id)
+    if src is None:
+        raise HTTPException(404, "Table to merge not found")
+    if src.id == dest.id:
+        raise HTTPException(400, "That's the same table.")
+    source = _live_order(db, src.id)
+    if source is None:
+        raise HTTPException(400, f"Table {src.number} has no open order to merge.")
+
+    if _has_paid_items(target) or _has_paid_items(source):
+        raise HTTPException(
+            400,
+            "Settle or void payments on both tables before merging them.",
+        )
+
+    # Append the source party's seats after the destination's, remembering the
+    # old→new mapping so each moved item keeps its seat.
+    base = max((s.seat_number for s in target.seats), default=0)
+    seat_map: dict[int, int] = {}
+    for offset, s in enumerate(sorted(source.seats, key=lambda x: x.seat_number), start=1):
+        new_seat = Seat(
+            order_id=target.id, seat_number=base + offset,
+            label=s.label, status=s.status, tip_cents=s.tip_cents,
+        )
+        db.add(new_seat)
+        db.flush()
+        seat_map[s.id] = new_seat.id
+
+    for item in list(source.items):
+        item.order_id = target.id
+        item.seat_id = seat_map.get(item.seat_id) if item.seat_id else None
+
+    target.guest_count += source.guest_count
+    now = datetime.now()
+    if source.sent_to_kitchen_at:
+        target.sent_to_kitchen_at = target.sent_to_kitchen_at or source.sent_to_kitchen_at
+    _recompute_kitchen(target, now)
+
+    # The absorbed order is dissolved and its table freed.
+    source.status = OrderStatus.CANCELLED
+    source.closed_at = now
+    src.status = TableStatus.FREE
+    src.current_waiter_id = None
+    db.commit()
+    return RedirectResponse(f"/orders/{target.id}", status_code=303)
+
+
 # --------------------------------------------------------------------------
 # 4.1.2  Order creation
 # --------------------------------------------------------------------------
@@ -267,12 +340,16 @@ def order_screen(
     modifiers = db.execute(select(Modifier).order_by(Modifier.name)).scalars().all()
     panel = balance_panel(db, order)
 
-    # Free tables this party could be moved to (4.1.1). Only for dine-in orders
-    # that are still on a table and not yet closed.
+    # Free tables this party could be moved to, and other occupied tables it
+    # could be merged with (4.1.1). Both only when this order is on a table,
+    # still open, and hasn't taken any payment.
     free_tables = []
-    if order.table_id and order.status not in (
-        OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED
-    ):
+    mergeable_tables = []
+    movable = (
+        order.table_id
+        and order.status not in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED)
+    )
+    if movable:
         free_tables = db.execute(
             select(RestaurantTable).where(
                 RestaurantTable.is_active.is_(True),
@@ -280,12 +357,24 @@ def order_screen(
                 RestaurantTable.id != order.table_id,
             ).order_by(RestaurantTable.number)
         ).scalars().all()
+        if not _has_paid_items(order):
+            others = db.execute(
+                select(Order).where(
+                    Order.status.in_(LIVE_STATES),
+                    Order.table_id.is_not(None),
+                    Order.table_id != order.table_id,
+                )
+            ).scalars().all()
+            mergeable_tables = sorted(
+                (o.table for o in others if not _has_paid_items(o)),
+                key=lambda t: t.number,
+            )
 
     return render(request, "order.html", {
         "db": db, "staff": staff, "order": order, "categories": categories,
         "active_cat": active_cat, "menu_items": items, "modifiers": modifiers,
         "panel": panel, "subtotal": sum(i.line_total_cents for i in order.items),
-        "free_tables": free_tables,
+        "free_tables": free_tables, "mergeable_tables": mergeable_tables,
         "title": f"Order {order.code}",
     })
 

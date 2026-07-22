@@ -46,6 +46,24 @@
       </form>
     </details>
     {% endif %}
+    {# 4.1.1 — merge another table's party into this one (one combined bill). #}
+    {% if order.table and mergeable_tables and order.status not in ('paid','closed','cancelled') %}
+    <details class="edit-menu">
+      <summary class="btn" style="display:inline-block">Merge in ▾</summary>
+      <form method="post" action="/tables/{{ order.table.id }}/merge" class="edit-pop">
+        <div class="field" style="margin-bottom:8px">
+          <label>Merge which table into Table {{ order.table.number }}</label>
+          <select name="from_table_id" required>
+            {% for t in mergeable_tables %}
+            <option value="{{ t.id }}">Table {{ t.number }}{% if t.floor %} · {{ t.floor.name }}{% endif %}{% if t.zone_ref %} · {{ t.zone_ref.name }}{% endif %}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <p class="sub" style="margin:0 0 8px;font-size:11px">Its guests join as new seats here; its table is freed.</p>
+        <button class="btn primary sm">Merge party</button>
+      </form>
+    </details>
+    {% endif %}
     {% endif %}
     {% if can('payments.take') %}
     <a class="btn good" href="/orders/{{ order.id }}/pay">Payment →</a>
