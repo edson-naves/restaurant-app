@@ -251,8 +251,10 @@ def merge_tables(
 
     The source order's guests become extra seats on the destination (renumbered
     after its existing seats), its items move across keeping their seat, course
-    and kitchen state, and the emptied table is freed. Blocked once either side
-    has taken any payment, so no settled money is ever entangled by the merge.
+    and kitchen state, and the emptied table is freed. The destination may
+    already be partially paid — its own items and payments are untouched. Only
+    the source must be unpaid, since moving a settled item would orphan its
+    payment.
     """
     dest = db.get(RestaurantTable, table_id)
     if dest is None:
@@ -270,10 +272,11 @@ def merge_tables(
     if source is None:
         raise HTTPException(400, f"Table {src.number} has no open order to merge.")
 
-    if _has_paid_items(target) or _has_paid_items(source):
+    if _has_paid_items(source):
         raise HTTPException(
             400,
-            "Settle or void payments on both tables before merging them.",
+            f"Table {src.number} has already taken payment — settle or void it "
+            "before merging it into another table.",
         )
 
     # Append the source party's seats after the destination's, remembering the
@@ -357,18 +360,19 @@ def order_screen(
                 RestaurantTable.id != order.table_id,
             ).order_by(RestaurantTable.number)
         ).scalars().all()
-        if not _has_paid_items(order):
-            others = db.execute(
-                select(Order).where(
-                    Order.status.in_(LIVE_STATES),
-                    Order.table_id.is_not(None),
-                    Order.table_id != order.table_id,
-                )
-            ).scalars().all()
-            mergeable_tables = sorted(
-                (o.table for o in others if not _has_paid_items(o)),
-                key=lambda t: t.number,
+        # This order (the merge destination) may be partially paid; only the
+        # tables it could absorb must be unpaid.
+        others = db.execute(
+            select(Order).where(
+                Order.status.in_(LIVE_STATES),
+                Order.table_id.is_not(None),
+                Order.table_id != order.table_id,
             )
+        ).scalars().all()
+        mergeable_tables = sorted(
+            (o.table for o in others if not _has_paid_items(o)),
+            key=lambda t: t.number,
+        )
 
     return render(request, "order.html", {
         "db": db, "staff": staff, "order": order, "categories": categories,

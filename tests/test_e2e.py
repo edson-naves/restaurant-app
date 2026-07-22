@@ -660,6 +660,49 @@ r = client.post(f"/tables/{keep_t.id}/merge", data={"from_table_id": absorb_t.id
 check(r.status_code == 400, "merging a table with no open order is refused")
 client.cookies.set("staff_id", str(owner.id))
 client.post(f"/orders/{keep_oid}/cancel")
+client.cookies.set("staff_id", str(waiter.id))
+
+# Merging INTO a partially-paid table is allowed — its own paid items are
+# untouched; only the source being absorbed must be unpaid.
+pd_t, un_t, x_t = db.execute(
+    select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE).limit(3)
+).scalars().all()
+r = client.post(f"/tables/{pd_t.id}/open", data={"guests": 2, "waiter_id": waiter.id})
+pd_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+client.post(f"/orders/{pd_oid}/items", data={"menu_item_id": steak.id, "seat_number": 1})
+# A second item on seat 2 stays unpaid, so settling seat 1 only partly closes it.
+client.post(f"/orders/{pd_oid}/items", data={"menu_item_id": burger.id, "seat_number": 2})
+db.expire_all()
+pd_o = db.get(Order, pd_oid)
+pd_seat1 = next(s for s in pd_o.seats if s.seat_number == 1)
+pd_steak = next(i for i in pd_o.items if i.menu_item_id == steak.id)
+# Partially settle the steak on seat 1 so this table is PARTIALLY PAID.
+client.post(f"/orders/{pd_oid}/seats/{pd_seat1.id}/pay",
+            data={"instrument_id": visa.id, "tip_mode": "none",
+                  "partial": "1", "item_ids": pd_steak.id})
+db.expire_all()
+pd_o = db.get(Order, pd_oid)
+check(pd_o.status == "partially_paid", "destination table is partially paid", pd_o.status)
+# An unpaid table merges into it fine.
+r = client.post(f"/tables/{un_t.id}/open", data={"guests": 1, "waiter_id": waiter.id})
+un_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+client.post(f"/orders/{un_oid}/items", data={"menu_item_id": bread.id, "seat_number": 1})
+r = client.post(f"/tables/{pd_t.id}/merge", data={"from_table_id": un_t.id})
+check(r.status_code == 200, "an unpaid table merges into a partially-paid one")
+check(db.get(RestaurantTable, un_t.id).status == TableStatus.FREE,
+      "the absorbed table is freed even though the destination was paid")
+# But a source that has taken payment can't be merged out of.
+r = client.post(f"/tables/{x_t.id}/open", data={"guests": 1, "waiter_id": waiter.id})
+x_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+r = client.post(f"/tables/{x_t.id}/merge", data={"from_table_id": pd_t.id})
+check(r.status_code == 400, "a partially-paid table can't be merged into another")
+# Tidy up: void the payment, then cancel both fresh orders.
+client.cookies.set("staff_id", str(owner.id))
+db.expire_all()
+for p in db.get(Order, pd_oid).payments:
+    client.post(f"/payments/{p.id}/void", data={"reason": "test cleanup"})
+client.post(f"/orders/{pd_oid}/cancel")
+client.post(f"/orders/{x_oid}/cancel")
 client.cookies.set("staff_id", str(owner.id))
 
 # --- cancel an order ------------------------------------------------------
