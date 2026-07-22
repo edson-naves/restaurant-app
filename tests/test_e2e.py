@@ -188,6 +188,22 @@ client.cookies.set("staff_id", str(kitchen.id))
 r = client.get("/kitchen")
 check(f"Table {table_no}" in r.text, "step 4: ticket appears on the kitchen display")
 
+# 4.1.1 — a waiter can flag Ready to pay manually, before the kitchen is done.
+client.cookies.set("staff_id", str(waiter.id))
+r = client.post(f"/orders/{order_id}/ready-to-pay", data={"ready": 1})
+db.expire_all()
+check(r.status_code == 200 and db.get(RestaurantTable, table_id).status == TableStatus.READY_TO_PAY,
+      "waiter marks the table Ready to pay by hand")
+# It must not disturb the order's own kitchen/payment state.
+check(db.get(Order, order_id).status != "ready",
+      "the manual flag moves only the table, not the order status")
+# And it toggles back.
+r = client.post(f"/orders/{order_id}/ready-to-pay", data={"ready": 0})
+db.expire_all()
+check(db.get(RestaurantTable, table_id).status == TableStatus.OCCUPIED,
+      "clearing it returns the table to Occupied")
+client.cookies.set("staff_id", str(kitchen.id))   # step 5 acts as the kitchen
+
 # Step 5: kitchen marks ready -> table becomes Ready to Pay.
 r = client.post(f"/kitchen/{order_id}/status", data={"status": "ready"})
 db.expire_all()

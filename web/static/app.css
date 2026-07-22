@@ -77,6 +77,7 @@ h2 { font-size: 17px; margin: 0 0 12px; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.good { background: var(--ok); border-color: var(--ok); color: #fff; }
 .btn.danger { background: var(--ready); border-color: var(--ready); color: #fff; }
+.btn.warn { background: var(--warn); border-color: var(--warn); color: #fff; }
 .btn.sm { padding: 6px 10px; min-height: 34px; font-size: 13px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 

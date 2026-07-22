@@ -315,6 +315,36 @@ def cancel_order(
     return RedirectResponse("/", status_code=303)
 
 
+@router.post("/orders/{order_id}/ready-to-pay")
+def mark_ready_to_pay(
+    order_id: int,
+    ready: int = Form(1),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("orders.manage")),
+):
+    """4.1.1 — a waiter flags a table Ready to pay, or clears it back to Occupied.
+
+    The kitchen flips the table automatically when the food is up, but a guest
+    asks for the bill on their own schedule — often before the kitchen is done,
+    sometimes after. This is the waiter's manual control over that state; it
+    only moves the floor-plan status, never the order's own kitchen/payment
+    state, so it can't interfere with sending food or taking payment.
+    """
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(404, "Order not found")
+    if order.table is None:
+        raise HTTPException(400, "This is not a table order.")
+    if order.status in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
+        raise HTTPException(400, f"Order {order.code} is already closed.")
+
+    order.table.status = (
+        TableStatus.READY_TO_PAY if ready else TableStatus.OCCUPIED
+    )
+    db.commit()
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
+
+
 @router.post("/orders/{order_id}/send")
 def send_to_kitchen(
     order_id: int,

@@ -18,6 +18,17 @@
         Send to kitchen
       </button>
     </form>
+    {% if order.table and order.status not in ('paid','closed','cancelled') %}
+    <form method="post" action="/orders/{{ order.id }}/ready-to-pay">
+      {% if order.table.status == 'ready_to_pay' %}
+      <input type="hidden" name="ready" value="0">
+      <button class="btn warn">Clear ready to pay</button>
+      {% else %}
+      <input type="hidden" name="ready" value="1">
+      <button class="btn warn">Ready to pay</button>
+      {% endif %}
+    </form>
+    {% endif %}
     {% endif %}
     {% if can('payments.take') %}
     <a class="btn good" href="/orders/{{ order.id }}/pay">Payment →</a>
