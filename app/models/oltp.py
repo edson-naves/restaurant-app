@@ -61,6 +61,14 @@ class KitchenStatus:
     READY = "ready"
 
 
+# Section 4.1.3 — coursing. Meal stages, fired in this order.
+COURSE_LABELS = {1: "Starters", 2: "Mains", 3: "Dessert"}
+
+
+def course_label(n: int) -> str:
+    return COURSE_LABELS.get(n, f"Course {n}")
+
+
 class DeliveryStatus:
     """Section 4.1.4 — Pending -> Preparing -> Ready -> On the way -> Delivered."""
     PENDING = "pending"
@@ -352,6 +360,11 @@ class OrderItem(Base):
     unit_price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     notes: Mapped[str] = mapped_column(Text, default="")
     kitchen_status: Mapped[str] = mapped_column(String(20), default=KitchenStatus.PENDING)
+    # Section 4.1.3 — coursing. Which stage of the meal this line belongs to, so
+    # the kitchen fires starters, then mains, then dessert rather than all at
+    # once. Defaults to Mains (2): an untagged item is treated as a main and
+    # fires normally, so an order that ignores courses behaves as before.
+    course: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     # Section 4.2.4 — shared items split proportionally across selected seats.
     is_shared: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)

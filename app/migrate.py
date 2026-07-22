@@ -42,6 +42,8 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("day_close", "cash_refund_cents", "INTEGER NOT NULL DEFAULT 0"),
     # 86 / out-of-stock. Defaults available so every existing item stays sellable.
     ("menu_item", "available", "BOOLEAN NOT NULL DEFAULT 1"),
+    # Coursing. Default 2 (Mains) so existing lines fire as before.
+    ("order_item", "course", "INTEGER NOT NULL DEFAULT 2"),
 )
 
 DEFAULT_FLOOR = "1st floor"

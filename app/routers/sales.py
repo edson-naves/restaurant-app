@@ -11,10 +11,12 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import can, current_staff, render, require
 from app.models.oltp import (
+    COURSE_LABELS,
     Channel,
     DeliveryOrder,
     DeliveryStatus,
     KitchenStatus,
+    course_label,
     MenuCategory,
     MenuItem,
     Modifier,
@@ -224,11 +226,12 @@ def add_item(
     seat_number: int = Form(0),
     quantity: int = Form(1),
     notes: str = Form(""),
+    course: int = Form(2),
     modifier_ids: list[int] = Form(default=[]),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("orders.manage")),
 ):
-    """4.1.2 — add items with modifiers and special instructions."""
+    """4.1.2 — add items with modifiers, special instructions and a course."""
     order = db.get(Order, order_id)
     if order is None:
         raise HTTPException(404, "Order not found")
@@ -255,6 +258,7 @@ def add_item(
         quantity=max(1, quantity),
         unit_price_cents=mi.price_cents,
         notes=notes.strip(),
+        course=course if course in COURSE_LABELS else 2,
         kitchen_status=KitchenStatus.PENDING,
     )
     db.add(item)
@@ -276,11 +280,12 @@ def edit_item(
     item_id: int,
     quantity: int = Form(...),
     notes: str = Form(""),
+    course: int = Form(0),
     modifier_ids: list[int] = Form(default=[]),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("orders.manage")),
 ):
-    """4.1.2 — fix a line already on the order: quantity, note, modifiers.
+    """4.1.2 — fix a line already on the order: quantity, note, modifiers, course.
 
     Blocked once any of the line has been paid (it has allocations that price
     it at the old value). Editing before payment saves a delete-and-re-add.
@@ -297,6 +302,8 @@ def edit_item(
 
     item.quantity = quantity
     item.notes = notes.strip()
+    if course in COURSE_LABELS:
+        item.course = course
     # Replace the modifier set; each captures the delta at edit time, matching
     # how add_item snapshots it.
     item.modifiers.clear()
@@ -435,26 +442,63 @@ def mark_ready_to_pay(
     return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
+def _recompute_kitchen(order: Order, now: datetime) -> None:
+    """Re-derive the order's kitchen/table state from its item statuses (4.1.3).
+
+    With coursing, items advance course by course. The order is Ready only when
+    every item is Ready; while any is preparing it's Preparing; before anything
+    fires it's Pending. Payment states (partially_paid/paid) are never
+    overwritten. A held (still-pending) course keeps the order from going Ready,
+    which is the point — the table isn't done until dessert lands.
+    """
+    items = order.items
+    if not items:
+        return
+    statuses = {i.kitchen_status for i in items}
+
+    if statuses == {KitchenStatus.READY}:
+        order.kitchen_status = KitchenStatus.READY
+        order.ready_at = order.ready_at or now
+        if order.status in (OrderStatus.OPEN, OrderStatus.PREPARING, OrderStatus.READY):
+            order.status = OrderStatus.READY
+            if order.table:
+                order.table.status = TableStatus.READY_TO_PAY
+        if order.delivery:
+            order.delivery.status = DeliveryStatus.READY
+    elif KitchenStatus.PREPARING in statuses or KitchenStatus.READY in statuses:
+        order.kitchen_status = KitchenStatus.PREPARING
+        if order.status in (OrderStatus.OPEN, OrderStatus.PREPARING):
+            order.status = OrderStatus.PREPARING
+    else:
+        order.kitchen_status = KitchenStatus.PENDING
+
+
 @router.post("/orders/{order_id}/send")
 def send_to_kitchen(
     order_id: int,
+    course: int = Form(0),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("orders.manage")),
 ):
-    """4.1.2 / workflow 6.1 step 4 — one tap, kitchen display updates."""
+    """4.1.2 / 4.1.3 — fire food to the kitchen.
+
+    course=0 fires every held item; a specific course fires only that stage, so
+    a waiter sends the starters now and holds the mains until the table is ready.
+    """
     order = db.get(Order, order_id)
     if order is None:
         raise HTTPException(404, "Order not found")
     pending = [i for i in order.items if i.kitchen_status == KitchenStatus.PENDING]
+    if course:
+        pending = [i for i in pending if i.course == course]
     if not pending:
-        raise HTTPException(400, "Nothing new to send to the kitchen.")
+        raise HTTPException(400, "Nothing new to fire to the kitchen.")
 
     now = datetime.now()
     for item in pending:
         item.kitchen_status = KitchenStatus.PREPARING
-    order.kitchen_status = KitchenStatus.PREPARING
-    order.status = OrderStatus.PREPARING
     order.sent_to_kitchen_at = order.sent_to_kitchen_at or now
+    _recompute_kitchen(order, now)
     db.commit()
     return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
@@ -512,6 +556,9 @@ def kitchen_display(
             "server": o.waiter.name if o.waiter else None,
             # Field 5: the line count the expo checks the plated tray against.
             "total_items": sum(i.quantity for i in o.items),
+            # Items grouped by course, each with an aggregate status so the line
+            # can mark a whole course up at once (4.1.3 coursing).
+            "courses": _ticket_courses(o),
             "where": (
                 f"Table {o.table.number}" if o.table
                 else f"{o.channel.name}"
@@ -527,35 +574,61 @@ def kitchen_display(
     })
 
 
+def _ticket_courses(order: Order) -> list[dict]:
+    """An order's items grouped by course for the kitchen display, in meal order.
+
+    Only fired items (preparing/ready) reach the kitchen, so a held course
+    simply doesn't appear until the waiter fires it. Each group's status is the
+    least-advanced item in it — a course is 'ready' only when all its items are.
+    """
+    groups: dict[int, list] = {}
+    for i in order.items:
+        if i.kitchen_status in (KitchenStatus.PREPARING, KitchenStatus.READY):
+            groups.setdefault(i.course, []).append(i)
+    out = []
+    for course in sorted(groups):
+        items = groups[course]
+        statuses = {i.kitchen_status for i in items}
+        status = KitchenStatus.READY if statuses == {KitchenStatus.READY} else KitchenStatus.PREPARING
+        out.append({
+            # 'lines' not 'items': in Jinja, `course.items` would resolve to the
+            # dict's built-in .items() method, not this list.
+            "course": course, "label": course_label(course),
+            "lines": items, "status": status,
+            "multi": len(groups) > 1,
+        })
+    return out
+
+
 @router.post("/kitchen/{order_id}/status")
 def kitchen_status(
     order_id: int,
     status: str = Form(...),
+    course: int = Form(0),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("kitchen.update")),
 ):
-    """Pending -> Preparing -> Ready (4.1.3); Ready flips the table to Ready to Pay."""
+    """Advance items to Pending/Preparing/Ready (4.1.3).
+
+    course=0 moves the whole order; a specific course moves only that stage, so
+    the line can mark the starters up while the mains are still cooking. The
+    order/table state is then re-derived — Ready to Pay only once everything is
+    up (see _recompute_kitchen).
+    """
     order = db.get(Order, order_id)
     if order is None:
         raise HTTPException(404, "Order not found")
     if status not in (KitchenStatus.PENDING, KitchenStatus.PREPARING, KitchenStatus.READY):
         raise HTTPException(400, "Invalid kitchen status.")
 
-    order.kitchen_status = status
-    for item in order.items:
+    targets = order.items if not course else [i for i in order.items if i.course == course]
+    for item in targets:
         item.kitchen_status = status
 
+    now = datetime.now()
     if status == KitchenStatus.PREPARING:
-        order.status = OrderStatus.PREPARING
-        order.sent_to_kitchen_at = order.sent_to_kitchen_at or datetime.now()
-    elif status == KitchenStatus.READY:
-        # Workflow 6.1 step 5 — waiter notified, table becomes Ready to Pay.
-        order.status = OrderStatus.READY
-        order.ready_at = datetime.now()
-        if order.table:
-            order.table.status = TableStatus.READY_TO_PAY
-        if order.delivery:
-            order.delivery.status = DeliveryStatus.READY
+        order.sent_to_kitchen_at = order.sent_to_kitchen_at or now
+    _recompute_kitchen(order, now)
     db.commit()
     return RedirectResponse("/kitchen", status_code=303)
 

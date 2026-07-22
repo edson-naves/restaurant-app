@@ -51,34 +51,40 @@
       <span>Sent {{ t.sent_at.strftime('%H:%M') }}</span>
     </div>
 
-    <ul>
-      {% for i in t.order.items %}
-      <li>
-        {{ i.quantity }}× {{ i.menu_item.name }}
-        {% for m in i.modifiers %}<br><span class="sub">+ {{ m.modifier.name }}</span>{% endfor %}
-        {% if i.notes %}<br><span class="note">✎ {{ i.notes }}</span>{% endif %}
-      </li>
-      {% endfor %}
-    </ul>
-
-    <div class="chit-total">Total items: {{ t.total_items }}</div>
-
-    {% if can('kitchen.update') %}
-    <div style="display:flex;gap:6px">
-      {% if t.order.kitchen_status == 'pending' %}
-        <form method="post" action="/kitchen/{{ t.order.id }}/status" style="flex:1">
-          <input type="hidden" name="status" value="preparing">
-          <button class="btn primary sm" style="width:100%">Start preparing</button>
-        </form>
-      {% elif t.order.kitchen_status == 'preparing' %}
-        <form method="post" action="/kitchen/{{ t.order.id }}/status" style="flex:1">
-          <input type="hidden" name="status" value="ready">
-          <button class="btn good sm" style="width:100%">Mark ready</button>
-        </form>
-      {% else %}
-        <span class="pill ok">ready — waiter notified</span>
+    {# One block per fired course. A held course isn't on the display until the
+       waiter fires it, so the line only sees what it should be cooking now. #}
+    {% for c in t.courses %}
+    <div class="course-block">
+      {% if c.multi %}
+      <div class="course-head">
+        <span>{{ c.label }}</span>
+        {% if c.status == 'ready' %}<span class="pill ok">ready</span>{% endif %}
+      </div>
+      {% endif %}
+      <ul>
+        {% for i in c.lines %}
+        <li>
+          {{ i.quantity }}× {{ i.menu_item.name }}
+          {% for m in i.modifiers %}<br><span class="sub">+ {{ m.modifier.name }}</span>{% endfor %}
+          {% if i.notes %}<br><span class="note">✎ {{ i.notes }}</span>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+      {% if can('kitchen.update') and c.status == 'preparing' %}
+      <form method="post" action="/kitchen/{{ t.order.id }}/status">
+        <input type="hidden" name="status" value="ready">
+        <input type="hidden" name="course" value="{{ c.course }}">
+        <button class="btn good sm" style="width:100%">
+          Mark {{ c.label|lower if c.multi else 'ready' }}
+        </button>
+      </form>
       {% endif %}
     </div>
+    {% endfor %}
+
+    <div class="chit-total">Total items: {{ t.total_items }}</div>
+    {% if t.order.kitchen_status == 'ready' %}
+    <span class="pill ok" style="margin-top:8px;display:inline-block">ready — waiter notified</span>
     {% endif %}
   </div>
   {% endfor %}

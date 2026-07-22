@@ -328,3 +328,12 @@ td.pending { color: var(--accent); font-weight: 700; }
 .avail.off .avail-btn { border-left-color: var(--ready); opacity: .7; }
 .avail.off .avail-btn .nm { text-decoration: line-through; }
 .avail.off .avail-btn .st { color: #ff9a90; }
+
+/* ---------- coursing on the kitchen ticket (4.1.3) ---------- */
+.course-block { margin-top: 8px; }
+.course-block + .course-block { border-top: 1px dashed var(--line); padding-top: 6px; }
+.course-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .4px; color: var(--muted); margin-top: 4px;
+}

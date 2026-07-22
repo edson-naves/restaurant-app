@@ -506,6 +506,59 @@ check(refund_svc.refunded_so_far(db, p1.id) == 500, "the refused over-refund cha
 # The fact-header net-revenue check runs in the reports section below, after the
 # ETL refresh (running it here would load the order into facts too early).
 
+# --- course firing (4.1.3) ------------------------------------------------
+print("\n--- course firing ---")
+client.cookies.set("staff_id", str(waiter.id))
+free_c = db.execute(
+    select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
+).scalars().first()
+r = client.post(f"/tables/{free_c.id}/open", data={"guests": 2, "waiter_id": waiter.id})
+course_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+# A starter (course 1) and a main (course 2).
+client.post(f"/orders/{course_oid}/items",
+            data={"menu_item_id": bread.id, "seat_number": 1, "course": 1})
+client.post(f"/orders/{course_oid}/items",
+            data={"menu_item_id": steak.id, "seat_number": 1, "course": 2})
+
+# Fire only the starters; the main is held.
+r = client.post(f"/orders/{course_oid}/send", data={"course": 1})
+db.expire_all()
+co = db.get(Order, course_oid)
+starter = next(i for i in co.items if i.course == 1)
+main = next(i for i in co.items if i.course == 2)
+check(r.status_code == 200 and starter.kitchen_status == "preparing"
+      and main.kitchen_status == "pending",
+      "firing the starters holds the mains")
+check(co.kitchen_status == "preparing" and co.status == "preparing",
+      "the order is preparing, not ready, while a course is held")
+
+# Kitchen marks the starters up — order still not ready (main is held).
+client.cookies.set("staff_id", str(kitchen.id))
+r = client.post(f"/kitchen/{course_oid}/status", data={"status": "ready", "course": 1})
+db.expire_all()
+co = db.get(Order, course_oid)
+check(db.get(type(co.items[0]), starter.id).kitchen_status == "ready"
+      and co.kitchen_status != "ready",
+      "a course marked ready does not make the whole order ready")
+check(db.get(RestaurantTable, free_c.id).status != TableStatus.READY_TO_PAY,
+      "the table is not Ready to pay while a course is still held")
+
+# Fire and ready the mains -> now the whole order is ready.
+client.cookies.set("staff_id", str(waiter.id))
+client.post(f"/orders/{course_oid}/send", data={"course": 2})
+client.cookies.set("staff_id", str(kitchen.id))
+client.post(f"/kitchen/{course_oid}/status", data={"status": "ready", "course": 2})
+db.expire_all()
+co = db.get(Order, course_oid)
+check(co.kitchen_status == "ready" and co.status == "ready",
+      "with every course up, the order is ready")
+check(db.get(RestaurantTable, free_c.id).status == TableStatus.READY_TO_PAY,
+      "and the table flips to Ready to pay")
+# Clean up this coursing order (no payments).
+client.cookies.set("staff_id", str(owner.id))
+client.post(f"/orders/{course_oid}/cancel")
+client.cookies.set("staff_id", str(owner.id))
+
 # --- cancel an order ------------------------------------------------------
 print("\n--- cancel an order ---")
 client.cookies.set("staff_id", str(owner.id))
