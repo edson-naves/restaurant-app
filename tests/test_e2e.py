@@ -914,20 +914,17 @@ client.cookies.set("staff_id", str(owner.id))
 client.post(f"/orders/{res_oid}/cancel")
 client.cookies.set("staff_id", str(owner.id))
 
-# --- seat auto-advance (4.1.2) --------------------------------------------
-print("\n--- seat auto-advance ---")
+# --- seat selection holds (4.1.2) -----------------------------------------
+print("\n--- seat holds after add ---")
 client.cookies.set("staff_id", str(waiter.id))
 adv_t = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
 ).scalars().first()
 r = client.post(f"/tables/{adv_t.id}/open", data={"guests": 3, "waiter_id": waiter.id})
 adv_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
-# Adding for seat 1 lands the order screen on seat 2 (the next seat).
-r = client.post(f"/orders/{adv_oid}/items", data={"menu_item_id": steak.id, "seat_number": 1})
-check("seat=2" in str(r.url), "adding for a seat advances to the next seat", str(r.url).split('?')[-1])
-# Adding for the last seat stays on the last seat.
-r = client.post(f"/orders/{adv_oid}/items", data={"menu_item_id": bread.id, "seat_number": 3})
-check("seat=3" in str(r.url), "the last seat does not advance past itself")
+# Adding for seat 2 keeps the order screen on seat 2 (manual, no auto-advance).
+r = client.post(f"/orders/{adv_oid}/items", data={"menu_item_id": steak.id, "seat_number": 2})
+check("seat=2" in str(r.url), "the chosen seat holds after adding", str(r.url).split('?')[-1])
 client.cookies.set("staff_id", str(owner.id))
 client.post(f"/orders/{adv_oid}/cancel")
 client.cookies.set("staff_id", str(waiter.id))

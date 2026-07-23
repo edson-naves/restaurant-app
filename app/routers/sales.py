@@ -568,15 +568,9 @@ def add_item(
 
     db.commit()
 
-    # Auto-advance to the next seat so the waiter goes round the table without
-    # re-picking the seat each time; stay on the last seat (and on the table /
-    # unassigned slot). Keep the current menu category too.
-    n_seats = len(order.seats)
-    if 1 <= seat_number < n_seats:
-        next_seat = seat_number + 1
-    else:
-        next_seat = seat_number
-    dest = f"/orders/{order_id}?seat={next_seat}"
+    # Stay on the same seat (and menu category) after adding — the waiter picks
+    # the seat manually and it holds until they change it.
+    dest = f"/orders/{order_id}?seat={seat_number}"
     if category:
         dest += f"&category={category}"
     return RedirectResponse(dest, status_code=303)
