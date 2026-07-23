@@ -69,6 +69,20 @@ def course_label(n: int) -> str:
     return COURSE_LABELS.get(n, f"Course {n}")
 
 
+# 4.1.2 — common allergens a waiter flags on a line. "Other" pairs with a free
+# text box for anything not listed.
+ALLERGEN_OPTIONS = ("Lactose", "Gluten", "Seafood", "Nuts")
+
+
+def build_allergens(selected: list[str], other: str = "") -> str:
+    """Assemble the stored allergen string from ticked options and free text."""
+    parts = [a for a in selected if a in ALLERGEN_OPTIONS]
+    other = (other or "").strip()
+    if other:
+        parts.append(f"Other: {other}")
+    return ", ".join(parts)
+
+
 def course_for_category(category_name: str) -> int:
     """A menu section's natural firing course.
 
@@ -382,6 +396,10 @@ class OrderItem(Base):
     quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     unit_price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     notes: Mapped[str] = mapped_column(Text, default="")
+    # 4.1.2 — allergy flags for this line (e.g. "Lactose, Nuts, Other: shellfish
+    # broth"). Kept distinct from notes so the kitchen ticket can surface them
+    # prominently. Comma-separated; empty when none.
+    allergens: Mapped[str] = mapped_column(String(200), default="")
     kitchen_status: Mapped[str] = mapped_column(String(20), default=KitchenStatus.PENDING)
     # Section 4.1.3 — coursing. Which stage of the meal this line belongs to, so
     # the kitchen fires starters, then mains, then dessert rather than all at

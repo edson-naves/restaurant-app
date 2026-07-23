@@ -229,9 +229,23 @@ check(sum(i.line_total_cents for i in db.get(Order, order_id).items)
       == expected + steak.price_cents, "the order total reflects the edit")
 r = client.post(f"/orders/{order_id}/items/{steak_line.id}/edit", data={"quantity": 99})
 check(r.status_code == 400, "an out-of-range quantity is refused")
-# Restore to 1 so the downstream payment maths are unchanged.
+# Allergies (4.1.2): flag ticked allergens plus a free-text "other" on a line.
+client.post(f"/orders/{order_id}/items/{steak_line.id}/edit",
+            data={"quantity": 1, "notes": "Medium rare",
+                  "allergens": ["Nuts", "Lactose"], "allergen_other": "shellfish broth"})
+db.expire_all()
+steak_line = db.get(type(order.items[0]), steak_line.id)
+check("Nuts" in steak_line.allergens and "Lactose" in steak_line.allergens
+      and "Other: shellfish broth" in steak_line.allergens,
+      "allergies are stored on the line", steak_line.allergens)
+# They appear on the order screen and the kitchen ticket.
+check("Nuts" in client.get(f"/orders/{order_id}").text, "allergies show on the order screen")
+# Clear them again so the rest of the flow is unaffected, keeping qty 1.
 client.post(f"/orders/{order_id}/items/{steak_line.id}/edit",
             data={"quantity": 1, "notes": "Medium rare"})
+db.expire_all()
+check(db.get(type(order.items[0]), steak_line.id).allergens == "",
+      "clearing the allergen boxes removes them")
 
 # Step 4: send to kitchen.
 r = client.post(f"/orders/{order_id}/send")

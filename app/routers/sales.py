@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import can, current_staff, render, require
 from app.models.oltp import (
+    ALLERGEN_OPTIONS,
     COURSE_LABELS,
     AuditEvent,
     Channel,
@@ -25,6 +26,7 @@ from app.models.oltp import (
     OrderItem,
     OrderItemModifier,
     OrderStatus,
+    build_allergens,
     RestaurantTable,
     Role,
     Seat,
@@ -515,10 +517,12 @@ def add_item(
     course: int = Form(0),
     category: int = Form(0),
     modifier_ids: list[int] = Form(default=[]),
+    allergens: list[str] = Form(default=[]),
+    allergen_other: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("orders.manage")),
 ):
-    """4.1.2 — add items with modifiers, special instructions and a course."""
+    """4.1.2 — add items with modifiers, allergies, instructions and a course."""
     order = db.get(Order, order_id)
     if order is None:
         raise HTTPException(404, "Order not found")
@@ -545,6 +549,7 @@ def add_item(
         quantity=max(1, quantity),
         unit_price_cents=mi.price_cents,
         notes=notes.strip(),
+        allergens=build_allergens(allergens, allergen_other),
         # 0 = "auto" from the menu section; an explicit choice overrides it.
         course=course if course in COURSE_LABELS else mi.default_course,
         kitchen_status=KitchenStatus.PENDING,
@@ -584,6 +589,8 @@ def edit_item(
     notes: str = Form(""),
     course: int = Form(0),
     modifier_ids: list[int] = Form(default=[]),
+    allergens: list[str] = Form(default=[]),
+    allergen_other: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("orders.manage")),
 ):
@@ -604,6 +611,7 @@ def edit_item(
 
     item.quantity = quantity
     item.notes = notes.strip()
+    item.allergens = build_allergens(allergens, allergen_other)
     if course in COURSE_LABELS:
         item.course = course
     # Replace the modifier set; each captures the delta at edit time, matching

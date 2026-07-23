@@ -171,8 +171,17 @@
         </div>
       </div>
       <div class="field">
+        <label>Allergies <span class="spec">req 4.1.2</span></label>
+        <div class="tipset">
+          {% for a in ALLERGEN_OPTIONS %}
+          <label class="allergen"><input type="checkbox" name="allergens" value="{{ a }}"> {{ a }}</label>
+          {% endfor %}
+          <input type="text" name="allergen_other" placeholder="Other (specify)" style="width:170px;min-height:30px;padding:4px 8px">
+        </div>
+      </div>
+      <div class="field">
         <label>Special instructions</label>
-        <input type="text" name="notes" placeholder="e.g. allergy: nuts">
+        <input type="text" name="notes" placeholder="e.g. no ice, birthday">
       </div>
       <button class="btn primary" id="addb" disabled>Add to order</button>
     </form>
@@ -202,6 +211,7 @@
             {# Provenance (4.1.1): this line arrived from another table via merge. #}
             {% if i.merged_from_order and i.merged_from_order.table %}<span class="pill open" title="Merged in from {{ i.merged_from_order.code }}">⤷ from Table {{ i.merged_from_order.table.number }}</span>{% endif %}
             {% for m in i.modifiers %}<br><span class="sub" style="font-size:11px">+ {{ m.modifier.name }}</span>{% endfor %}
+            {% if i.allergens %}<br><span class="pill allergy" title="Allergy — flag to the kitchen">⚠ {{ i.allergens }}</span>{% endif %}
             {% if i.notes %}<br><span style="color:#f2c46b;font-size:11px">✎ {{ i.notes }}</span>{% endif %}
           </td>
           <td>
@@ -236,6 +246,18 @@
                     <label><input type="checkbox" name="modifier_ids" value="{{ m.id }}"
                            {{ 'checked' if m.id in chosen else '' }}> {{ m.name }}</label>
                     {% endfor %}
+                  </div>
+                </div>
+                <div class="field" style="margin-bottom:8px">
+                  <label>Allergies</label>
+                  <div class="tipset">
+                    {% for a in ALLERGEN_OPTIONS %}
+                    <label class="allergen"><input type="checkbox" name="allergens" value="{{ a }}"
+                           {{ 'checked' if a in i.allergens else '' }}> {{ a }}</label>
+                    {% endfor %}
+                    <input type="text" name="allergen_other" placeholder="Other (specify)"
+                           value="{{ i.allergens.split('Other: ')[1] if 'Other: ' in i.allergens else '' }}"
+                           style="width:150px;min-height:30px;padding:4px 8px">
                   </div>
                 </div>
                 <div class="field" style="margin-bottom:8px">

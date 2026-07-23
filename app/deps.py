@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.oltp import Role, Staff
-from app.models.oltp import COURSE_LABELS, course_label
+from app.models.oltp import ALLERGEN_OPTIONS, COURSE_LABELS, course_label
 from app.services.money import duration, money
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
@@ -25,6 +25,7 @@ templates.env.filters["money"] = money
 templates.env.filters["duration"] = duration
 templates.env.filters["course"] = course_label
 templates.env.globals["COURSE_LABELS"] = COURSE_LABELS
+templates.env.globals["ALLERGEN_OPTIONS"] = ALLERGEN_OPTIONS
 
 
 def asset_v(name: str = "app.css") -> str:
