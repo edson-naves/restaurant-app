@@ -110,9 +110,25 @@
   <!-- menu -->
   <div class="card">
     <h2>Menu</h2>
+    {# Choose the seat first, then the item (4.1.2). Chips set the hidden seat
+       field via JS, so they sit outside the add form; the active seat
+       auto-advances after each add. #}
+    {% if can('orders.manage') and order.seats %}
+    <div class="field" style="border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px">
+      <label>Adding for seat <span class="sub" style="font-weight:400">— advances to the next automatically</span></label>
+      <div class="seatbtns">
+        {% for s in order.seats %}
+        <button type="button" class="seatbtn {{ 'on' if active_seat == s.seat_number else '' }}" data-seat="{{ s.seat_number }}" onclick="pickSeat({{ s.seat_number }})" title="Seat {{ s.seat_number }}">{{ s.seat_number }}</button>
+        {% endfor %}
+        {# 0 = the whole table, for shared items (bread, a bottle of wine) that
+           aren't tied to one guest and get split across the seats. #}
+        <button type="button" class="seatbtn shared {{ 'on' if active_seat == 0 else '' }}" data-seat="0" onclick="pickSeat(0)" title="Shared / whole-table item, split across all seats">Table</button>
+      </div>
+    </div>
+    {% endif %}
     <div class="catbar">
       {% for c in categories %}
-      <a class="btn sm {{ 'primary' if c.id == active_cat else '' }}" href="/orders/{{ order.id }}?category={{ c.id }}">{{ c.name }}</a>
+      <a class="btn sm {{ 'primary' if c.id == active_cat else '' }}" href="/orders/{{ order.id }}?category={{ c.id }}&seat={{ active_seat }}">{{ c.name }}</a>
       {% endfor %}
     </div>
 
@@ -131,19 +147,6 @@
       <input type="hidden" name="category" value="{{ active_cat }}">
       <input type="hidden" name="seat_number" id="seatf" value="{{ active_seat }}">
       <p id="picked" class="sub" style="margin:0 0 10px">Select an item above.</p>
-      {% if order.seats %}
-      <div class="field">
-        <label>Adding for seat <span class="sub" style="font-weight:400">— advances to the next automatically</span></label>
-        <div class="seatbtns">
-          {% for s in order.seats %}
-          <button type="button" class="seatbtn {{ 'on' if active_seat == s.seat_number else '' }}" data-seat="{{ s.seat_number }}" onclick="pickSeat({{ s.seat_number }})" title="Seat {{ s.seat_number }}">{{ s.seat_number }}</button>
-          {% endfor %}
-          {# 0 = the whole table, for shared items (bread, a bottle of wine) that
-             aren't tied to one guest and get split across the seats. #}
-          <button type="button" class="seatbtn shared {{ 'on' if active_seat == 0 else '' }}" data-seat="0" onclick="pickSeat(0)" title="Shared / whole-table item, split across all seats">Table</button>
-        </div>
-      </div>
-      {% endif %}
       <div class="row">
         <div class="field">
           <label>Quantity</label>
