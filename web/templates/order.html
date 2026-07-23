@@ -102,50 +102,51 @@
   </div>
 </div>
 
-<div class="split">
-  <!-- menu -->
-  <div class="card" id="menucard" style="border-left:4px solid {{ active_seat|seat_color }}">
-    <h2>Menu</h2>
-    {# Choose the seat first, then the item (4.1.2). Chips set the hidden seat
-       field via JS, so they sit outside the add form; the seat holds until the
-       waiter taps another. Each seat carries a stable accent colour, echoed on
-       the panel's left edge, as a quick "which seat am I on" cue. #}
-    {% if can('orders.manage') and order.seats %}
-    <div class="field" style="border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px">
-      <div class="between" style="margin-bottom:8px">
-        <label style="margin:0">Adding for seat <span class="sub" style="font-weight:400">— tap to change</span></label>
-        <span class="seat-legend">
-          <span><i class="sdot ordered"></i>Ordered</span>
-          <span><i class="sdot fired"></i>Fired</span>
-          <span><i class="sdot empty"></i>Empty</span>
-        </span>
-      </div>
-      <div class="seatcards">
-        {% for c in seat_cards %}
-        <button type="button" class="seatcard status-{{ c.status }} {{ 'on' if active_seat == c.seat.seat_number else '' }}"
-                style="--sc:{{ c.seat.seat_number|seat_color }}" data-seat="{{ c.seat.seat_number }}" data-color="{{ c.seat.seat_number|seat_color }}"
-                onclick="pickSeat({{ c.seat.seat_number }})" title="Seat {{ c.seat.seat_number }}">
-          <span class="sc-top"><span class="sc-num">👤 {{ c.seat.seat_number }}</span><i class="sdot {{ c.status }}"></i></span>
-          <span class="sc-count">{{ c.count }} item{{ '' if c.count == 1 else 's' }}</span>
-        </button>
-        {% endfor %}
-        {# 0 = the whole table, for shared items (bread, a bottle of wine) that
-           aren't tied to one guest and get split across the seats. #}
-        <button type="button" class="seatcard shared status-{{ table_card.status }} {{ 'on' if active_seat == 0 else '' }}"
-                style="--sc:{{ 0|seat_color }}" data-seat="0" data-color="{{ 0|seat_color }}"
-                onclick="pickSeat(0)" title="Shared / whole-table item, split across all seats">
-          <span class="sc-top"><span class="sc-num">Table</span><i class="sdot {{ table_card.status }}"></i></span>
-          <span class="sc-count">{{ table_card.count }} shared</span>
-        </button>
-      </div>
-    </div>
-    {% endif %}
-    <div class="catbar">
+{# Seats bar — full width, above the work columns (4.1.2). #}
+{% if can('orders.manage') and order.seats %}
+<div class="card seats-bar">
+  <div class="between" style="margin-bottom:8px">
+    <label style="margin:0">Seats <span class="sub" style="font-weight:400">— tap the seat you're adding for</span></label>
+    <span class="seat-legend">
+      <span><i class="sdot ordered"></i>Ordered</span>
+      <span><i class="sdot fired"></i>Fired</span>
+      <span><i class="sdot empty"></i>Empty</span>
+    </span>
+  </div>
+  <div class="seatcards">
+    {% for c in seat_cards %}
+    <button type="button" class="seatcard status-{{ c.status }} {{ 'on' if active_seat == c.seat.seat_number else '' }}"
+            style="--sc:{{ c.seat.seat_number|seat_color }}" data-seat="{{ c.seat.seat_number }}" data-color="{{ c.seat.seat_number|seat_color }}"
+            onclick="pickSeat({{ c.seat.seat_number }})" title="Seat {{ c.seat.seat_number }}">
+      <span class="sc-top"><span class="sc-num">👤 {{ c.seat.seat_number }}</span><i class="sdot {{ c.status }}"></i></span>
+      <span class="sc-count">{{ c.count }} item{{ '' if c.count == 1 else 's' }}</span>
+    </button>
+    {% endfor %}
+    {# 0 = the whole table, for shared items (bread, a bottle of wine) split across the seats. #}
+    <button type="button" class="seatcard shared status-{{ table_card.status }} {{ 'on' if active_seat == 0 else '' }}"
+            style="--sc:{{ 0|seat_color }}" data-seat="0" data-color="{{ 0|seat_color }}"
+            onclick="pickSeat(0)" title="Shared / whole-table item, split across all seats">
+      <span class="sc-top"><span class="sc-num">Table</span><i class="sdot {{ table_card.status }}"></i></span>
+      <span class="sc-count">{{ table_card.count }} shared</span>
+    </button>
+  </div>
+</div>
+{% endif %}
+
+<div class="pos-grid">
+  {# Column 1 — categories rail #}
+  <div class="card pos-cats">
+    <h2>Categories</h2>
+    <div class="catrail">
       {% for c in categories %}
-      <a class="btn sm {{ 'primary' if c.id == active_cat else '' }}" href="/orders/{{ order.id }}?category={{ c.id }}&seat={{ active_seat }}">{{ c.name }}</a>
+      <a class="catrail-item {{ 'on' if c.id == active_cat else '' }}" href="/orders/{{ order.id }}?category={{ c.id }}&seat={{ active_seat }}">{{ c.name }}</a>
       {% endfor %}
     </div>
+  </div>
 
+  {# Column 2 — item list #}
+  <div class="card pos-list">
+    <h2>Menu</h2>
     <div class="menu-grid">
       {% for mi in menu_items %}
       <a class="mi {{ 'on' if configuring and configuring.id == mi.id else '' }}"
@@ -155,9 +156,13 @@
       </a>
       {% endfor %}
     </div>
+  </div>
 
+  {# Column 3 — item configurator (accent echoes the active seat) #}
+  <div class="card pos-cfg" id="menucard" style="border-left:4px solid {{ active_seat|seat_color }}">
+    <h2>{{ configuring.name if configuring else 'Configure' }}</h2>
     {% if can('orders.manage') %}
-    <form method="post" action="/orders/{{ order.id }}/items" id="addf" style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
+    <form method="post" action="/orders/{{ order.id }}/items" id="addf">
       <input type="hidden" name="category" value="{{ active_cat }}">
       <input type="hidden" name="seat_number" id="seatf" value="{{ active_seat }}">
       {% if configuring %}
@@ -229,8 +234,8 @@
     {% endif %}
   </div>
 
-  <!-- current order -->
-  <div>
+  {# Column 4 — the order #}
+  <div class="pos-order">
     <div class="card">
       <h2>Order</h2>
       {% if not order.items %}
