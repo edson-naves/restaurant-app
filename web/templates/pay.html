@@ -96,7 +96,10 @@
           <div class="field">
             <label>Tip <span class="spec">req 4.2.6</span></label>
             <div class="tipset">
-              <label><input type="radio" name="tip_mode" value="none" checked> None</label>
+              {% if auto_gratuity %}
+              <label><input type="radio" name="tip_mode" value="auto" checked> Auto-gratuity {{ gratuity.rate }}% <span class="sub">party of {{ order.guest_count }}</span></label>
+              {% endif %}
+              <label><input type="radio" name="tip_mode" value="none" {{ '' if auto_gratuity else 'checked' }}> None</label>
               <label><input type="radio" name="tip_mode" value="15"> 15%</label>
               <label><input type="radio" name="tip_mode" value="18"> 18%</label>
               <label><input type="radio" name="tip_mode" value="20"> 20%</label>
@@ -179,7 +182,10 @@
         <div class="field">
           <label>Tip</label>
           <div class="tipset">
-            <label><input type="radio" name="tip_mode" value="none" checked> None</label>
+            {% if auto_gratuity %}
+            <label><input type="radio" name="tip_mode" value="auto" checked> Auto-gratuity {{ gratuity.rate }}% <span class="sub">party of {{ order.guest_count }}</span></label>
+            {% endif %}
+            <label><input type="radio" name="tip_mode" value="none" {{ '' if auto_gratuity else 'checked' }}> None</label>
             <label><input type="radio" name="tip_mode" value="15"> 15%</label>
             <label><input type="radio" name="tip_mode" value="18"> 18%</label>
             <label><input type="radio" name="tip_mode" value="20"> 20%</label>

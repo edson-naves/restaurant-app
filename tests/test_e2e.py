@@ -773,6 +773,45 @@ client.post(f"/orders/{big_oid}/cancel")
 client.post(f"/orders/{new_oid}/cancel")
 client.cookies.set("staff_id", str(owner.id))
 
+# --- auto-gratuity for large parties (4.2.6) ------------------------------
+print("\n--- auto-gratuity ---")
+from app.services import settings as settings_svc  # noqa: E402
+from app.services.money import pct  # noqa: E402
+_saved_party = settings_svc.get(db, "auto_gratuity_party")
+_saved_rate = settings_svc.get(db, "auto_gratuity_rate")
+# Parties of 6+ get an automatic 18% gratuity.
+settings_svc.save(db, {"auto_gratuity_party": "6", "auto_gratuity_rate": "18"})
+db.expire_all()
+client.cookies.set("staff_id", str(waiter.id))
+small_t, big_party_t = db.execute(
+    select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE).limit(2)
+).scalars().all()
+# A small party sees no auto-gratuity option.
+r = client.post(f"/tables/{small_t.id}/open", data={"guests": 2, "waiter_id": waiter.id})
+small_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+client.post(f"/orders/{small_oid}/items", data={"menu_item_id": steak.id, "seat_number": 1})
+check("Auto-gratuity" not in client.get(f"/orders/{small_oid}/pay").text,
+      "a small party gets no auto-gratuity")
+# A party of 6 does, and it's pre-selected.
+r = client.post(f"/tables/{big_party_t.id}/open", data={"guests": 6, "waiter_id": waiter.id})
+big_party_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+client.post(f"/orders/{big_party_oid}/items", data={"menu_item_id": steak.id, "seat_number": 1})
+check("Auto-gratuity" in client.get(f"/orders/{big_party_oid}/pay").text,
+      "a party of 6 is offered auto-gratuity")
+# Paying with the auto option applies the configured 18%.
+r = client.post(f"/orders/{big_party_oid}/pay-all",
+                data={"instrument_id": visa.id, "tip_mode": "auto"})
+db.expire_all()
+big_party_o = db.get(Order, big_party_oid)
+paid = big_party_o.payments[-1]
+check(paid.tip_cents == pct(steak.price_cents, 18),
+      "auto-gratuity charges the configured rate", f"${money(paid.tip_cents)}")
+# Restore the setting and tidy up.
+settings_svc.save(db, {"auto_gratuity_party": _saved_party, "auto_gratuity_rate": _saved_rate})
+client.cookies.set("staff_id", str(owner.id))
+client.post(f"/orders/{small_oid}/cancel")
+client.cookies.set("staff_id", str(owner.id))
+
 # --- cancel an order ------------------------------------------------------
 print("\n--- cancel an order ---")
 client.cookies.set("staff_id", str(owner.id))

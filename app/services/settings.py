@@ -23,6 +23,9 @@ DEFAULTS: dict[str, str] = {
     "biz_address": "53 Water St. · Anytown",
     "biz_postal": "",
     "biz_phone": "000-000-0000",
+    # Auto-gratuity for large parties (4.2.6). Party size of 0 disables it.
+    "auto_gratuity_party": "0",
+    "auto_gratuity_rate": "18",
 }
 
 # What the settings form is allowed to write. Anything else is ignored, so a
@@ -40,6 +43,16 @@ class TaxConfig:
     @property
     def total_rate(self) -> float:
         return self.gst_rate + self.pst_rate
+
+
+@dataclass(frozen=True)
+class GratuityConfig:
+    """Auto-gratuity policy for large parties (4.2.6)."""
+    party_threshold: int   # minimum guests to trigger; 0 = disabled
+    rate: float            # percent added as gratuity
+
+    def applies(self, guest_count: int) -> bool:
+        return self.party_threshold > 0 and guest_count >= self.party_threshold
 
 
 def _all(db: Session) -> dict[str, str]:
@@ -70,6 +83,15 @@ def tax_config(db: Session) -> TaxConfig:
         pst_rate=_rate(s["pst_rate"]),
         pst_number=s["pst_number"].strip(),
     )
+
+
+def gratuity_config(db: Session) -> GratuityConfig:
+    s = _all(db)
+    try:
+        party = max(0, int(float(s["auto_gratuity_party"])))
+    except (TypeError, ValueError):
+        party = 0
+    return GratuityConfig(party_threshold=party, rate=_rate(s["auto_gratuity_rate"]))
 
 
 def save(db: Session, values: dict[str, str]) -> None:

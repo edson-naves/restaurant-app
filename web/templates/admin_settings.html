@@ -45,6 +45,26 @@
   </div>
 
   <div class="card">
+    <strong>Auto-gratuity <span class="spec">req 4.2.6</span></strong>
+    <p class="sub" style="margin:2px 0 12px">
+      Automatically suggest a gratuity for large parties at payment. Set the
+      party size to 0 to switch it off. Staff can still change it per bill.
+    </p>
+    <div class="row" style="gap:16px">
+      <div class="field" style="max-width:200px">
+        <label>Party size (guests, 0 = off)</label>
+        <input type="number" name="auto_gratuity_party" step="1" min="0"
+               value="{{ settings.auto_gratuity_party }}">
+      </div>
+      <div class="field" style="max-width:140px">
+        <label>Gratuity rate (%)</label>
+        <input type="number" name="auto_gratuity_rate" step="0.01" min="0"
+               value="{{ settings.auto_gratuity_rate }}">
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
     <strong>Receipt identity</strong>
     <p class="sub" style="margin:2px 0 12px">The heading printed on every receipt.</p>
     <div class="field">

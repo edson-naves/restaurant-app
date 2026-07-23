@@ -49,6 +49,25 @@ def _load(db: Session, order_id: int) -> Order:
     return order
 
 
+def _tip_for(db: Session, tip_mode: str, tip_custom: str, base: int) -> int:
+    """Resolve the tip in cents from the chosen mode (4.2.6).
+
+    'auto' applies the configured auto-gratuity rate for large parties; the
+    percentage modes and a custom dollar amount work as before. All are
+    proportional to the base actually being paid.
+    """
+    if tip_mode == "custom":
+        try:
+            return max(0, int(round(float(tip_custom or 0) * 100)))
+        except ValueError:
+            raise HTTPException(400, "Invalid custom tip amount.")
+    if tip_mode == "auto":
+        return pct(base, settings_svc.gratuity_config(db).rate)
+    if tip_mode in ("15", "18", "20"):
+        return pct(base, int(tip_mode))
+    return 0
+
+
 @router.get("/orders/{order_id}/pay")
 def payment_screen(
     order_id: int,
@@ -87,6 +106,9 @@ def payment_screen(
         "managers": managers,
         "settled": settled, "refundable": refundable, "refunded": refunded,
         "tax_cfg": settings_svc.tax_config(db),
+        # 4.2.6 — auto-gratuity for large parties; the template pre-selects it.
+        "gratuity": settings_svc.gratuity_config(db),
+        "auto_gratuity": settings_svc.gratuity_config(db).applies(order.guest_count),
         "title": f"Payment · {order.code}",
     })
 
@@ -206,17 +228,9 @@ def take_seat_payment(
     else:
         base = ledger.outstanding_cents
 
-    # 4.2.6 — tip as percentage or custom amount.
-    if tip_mode == "custom":
-        try:
-            tip_cents = int(round(float(tip_custom or 0) * 100))
-        except ValueError:
-            raise HTTPException(400, "Invalid custom tip amount.")
-    elif tip_mode in ("15", "18", "20"):
-        # 4.2.5 — proportional to the items actually being paid.
-        tip_cents = pct(base, int(tip_mode))
-    else:
-        tip_cents = 0
+    # 4.2.6 — tip as a percentage, auto-gratuity, or a custom amount,
+    # proportional to the items actually being paid (4.2.5).
+    tip_cents = _tip_for(db, tip_mode, tip_custom, base)
 
     discount_cents = pct(base, discount_pct) if discount_pct else 0
     if discount_cents and not can(staff, "discount.approve") and not approved_by_id:
@@ -264,15 +278,7 @@ def take_full_payment(
         i.line_total_cents - sum(a.amount_cents for a in i.allocations)
         for i in order.items
     )
-    if tip_mode == "custom":
-        try:
-            tip_cents = int(round(float(tip_custom or 0) * 100))
-        except ValueError:
-            raise HTTPException(400, "Invalid custom tip amount.")
-    elif tip_mode in ("15", "18", "20"):
-        tip_cents = pct(outstanding, int(tip_mode))
-    else:
-        tip_cents = 0
+    tip_cents = _tip_for(db, tip_mode, tip_custom, outstanding)
 
     discount_cents = pct(outstanding, discount_pct) if discount_pct else 0
     try:
