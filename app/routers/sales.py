@@ -590,6 +590,33 @@ def add_item(
             select(Seat).where(Seat.order_id == order.id, Seat.seat_number == seat_number)
         ).scalar_one_or_none()
 
+    resolved_course = course if course in COURSE_LABELS else mi.default_course
+    resolved_allergens = build_allergens(allergens, allergen_other)
+    new_mods = {m.id for m in (db.get(Modifier, i) for i in modifier_ids) if m}
+    new_opts = {o.id for _, o in picked_options}
+
+    # Merge into an identical, still-pending line on the same seat rather than
+    # stacking duplicate rows — pressing + repeatedly just bumps the quantity.
+    # Shared (table) items are left alone: their per-seat shares make merging
+    # ambiguous. A fired or paid line is never touched.
+    if seat_number:
+        for ex in order.items:
+            if (ex.menu_item_id == mi.id
+                    and ex.seat_id == (seat.id if seat else None)
+                    and ex.kitchen_status == KitchenStatus.PENDING
+                    and not ex.allocations and not ex.is_shared
+                    and ex.notes == notes.strip()
+                    and ex.allergens == resolved_allergens
+                    and ex.course == resolved_course
+                    and {m.modifier_id for m in ex.modifiers} == new_mods
+                    and {o.option_id for o in ex.options} == new_opts):
+                ex.quantity = min(99, ex.quantity + max(1, quantity))
+                db.commit()
+                dest = f"/orders/{order_id}?seat={seat_number}"
+                if category:
+                    dest += f"&category={category}"
+                return RedirectResponse(dest, status_code=303)
+
     item = OrderItem(
         order_id=order.id,
         menu_item_id=mi.id,
@@ -597,9 +624,9 @@ def add_item(
         quantity=max(1, quantity),
         unit_price_cents=mi.price_cents,
         notes=notes.strip(),
-        allergens=build_allergens(allergens, allergen_other),
+        allergens=resolved_allergens,
         # 0 = "auto" from the menu section; an explicit choice overrides it.
-        course=course if course in COURSE_LABELS else mi.default_course,
+        course=resolved_course,
         kitchen_status=KitchenStatus.PENDING,
     )
     db.add(item)

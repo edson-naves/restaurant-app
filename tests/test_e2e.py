@@ -247,6 +247,20 @@ db.expire_all()
 check(db.get(type(order.items[0]), steak_line.id).allergens == "",
       "clearing the allergen boxes removes them")
 
+# Quick-add merges identical pending lines instead of stacking duplicates.
+before = len(db.get(Order, order_id).items)
+for _ in range(3):
+    client.post(f"/orders/{order_id}/items",
+                data={"menu_item_id": bread.id, "seat_number": 1})
+db.expire_all()
+after_items = db.get(Order, order_id).items
+merged = [i for i in after_items if i.menu_item_id == bread.id and i.seat and i.seat.seat_number == 1]
+check(len(after_items) == before + 1, "repeated adds merge into one line, not many",
+      f"{len(after_items)} vs {before + 1}")
+check(merged and merged[0].quantity == 3, "the merged line carries the summed quantity",
+      str(merged[0].quantity if merged else None))
+client.post(f"/orders/{order_id}/items/{merged[0].id}/remove")   # tidy up
+
 # Modifier groups (4.1.2): required choice enforced, add-ons priced.
 from app.models.oltp import MenuItem as _MI, ModifierGroup as _MG  # noqa: E402
 lamb = db.execute(select(_MI).where(_MI.name == "Lamb Chops")).scalars().first()
