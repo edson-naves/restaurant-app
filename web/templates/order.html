@@ -10,6 +10,7 @@
       <span class="spec">req 4.1.2</span>
     </p>
   </div>
+  {% set open_order = order.status not in ('paid','closed','cancelled') %}
   <div style="display:flex;gap:8px">
     <a class="btn" href="/">← Floor</a>
     {% if can('orders.manage') %}
@@ -18,90 +19,85 @@
         Send to kitchen
       </button>
     </form>
-    {% if order.table and order.status not in ('paid','closed','cancelled') %}
-    <form method="post" action="/orders/{{ order.id }}/ready-to-pay">
-      {% if order.table.status == 'ready_to_pay' %}
-      <input type="hidden" name="ready" value="0">
-      <button class="btn warn">Clear ready to pay</button>
-      {% else %}
-      <input type="hidden" name="ready" value="1">
-      <button class="btn warn">Ready to pay</button>
-      {% endif %}
-    </form>
     {% endif %}
-    {# 4.1.1 — move this party to another free table. Whole order goes with it. #}
-    {% if order.table and free_tables and order.status not in ('paid','closed','cancelled') %}
+
+    {# The less-frequent order actions (state, table moves, cancel) collapse
+       into one "More actions" menu so the header stays uncluttered. #}
+    {% set show_more = open_order and (can('orders.manage') or can('discount.approve')) %}
+    {% if show_more %}
     <details class="edit-menu">
-      <summary class="btn" style="display:inline-block">Move table ▾</summary>
-      <form method="post" action="/tables/{{ order.table.id }}/move" class="edit-pop">
-        <div class="field" style="margin-bottom:8px">
-          <label>Move Table {{ order.table.number }} to</label>
-          <select name="to_table_id" required>
+      <summary class="btn" style="display:inline-block">More actions ▾</summary>
+      <div class="edit-pop" style="width:300px">
+
+        {% if can('orders.manage') and order.table %}
+        <form method="post" action="/orders/{{ order.id }}/ready-to-pay" style="margin-bottom:10px">
+          {% if order.table.status == 'ready_to_pay' %}
+          <input type="hidden" name="ready" value="0">
+          <button class="btn warn sm" style="width:100%">Clear “ready to pay”</button>
+          {% else %}
+          <input type="hidden" name="ready" value="1">
+          <button class="btn warn sm" style="width:100%">Mark ready to pay</button>
+          {% endif %}
+        </form>
+        {% endif %}
+
+        {# 4.1.1 — move this party to another free table. #}
+        {% if can('orders.manage') and order.table and free_tables %}
+        <form method="post" action="/tables/{{ order.table.id }}/move" class="more-sec">
+          <label>Move to table</label>
+          <select name="to_table_id" required style="margin-bottom:6px">
             {% for t in free_tables %}
-            <option value="{{ t.id }}">Table {{ t.number }}{% if t.floor %} · {{ t.floor.name }}{% endif %}{% if t.zone_ref %} · {{ t.zone_ref.name }}{% endif %}</option>
+            <option value="{{ t.id }}">Table {{ t.number }}{% if t.floor %} · {{ t.floor.name }}{% endif %}</option>
             {% endfor %}
           </select>
-        </div>
-        <button class="btn primary sm">Move party</button>
-      </form>
-    </details>
-    {% endif %}
-    {# 4.1.1 — merge another table's party into this one (one combined bill). #}
-    {% if order.table and mergeable_tables and order.status not in ('paid','closed','cancelled') %}
-    <details class="edit-menu">
-      <summary class="btn" style="display:inline-block">Merge in ▾</summary>
-      <form method="post" action="/tables/{{ order.table.id }}/merge" class="edit-pop">
-        <div class="field" style="margin-bottom:8px">
-          <label>Merge which table into Table {{ order.table.number }}</label>
-          <select name="from_table_id" required>
+          <button class="btn primary sm" style="width:100%">Move party</button>
+        </form>
+        {% endif %}
+
+        {# 4.1.1 — merge another table's party into this one. #}
+        {% if can('orders.manage') and order.table and mergeable_tables %}
+        <form method="post" action="/tables/{{ order.table.id }}/merge" class="more-sec">
+          <label>Merge in table</label>
+          <select name="from_table_id" required style="margin-bottom:6px">
             {% for t in mergeable_tables %}
-            <option value="{{ t.id }}">Table {{ t.number }}{% if t.floor %} · {{ t.floor.name }}{% endif %}{% if t.zone_ref %} · {{ t.zone_ref.name }}{% endif %}</option>
+            <option value="{{ t.id }}">Table {{ t.number }}{% if t.floor %} · {{ t.floor.name }}{% endif %}</option>
             {% endfor %}
           </select>
-        </div>
-        <p class="sub" style="margin:0 0 8px;font-size:11px">Its guests join as new seats here; its table is freed.</p>
-        <button class="btn primary sm">Merge party</button>
-      </form>
-    </details>
-    {% endif %}
-    {# 4.1.1 — split some seats off onto a free table as a new order. #}
-    {% if order.table and free_tables and order.seats|length > 1 and order.status not in ('paid','closed','cancelled') %}
-    <details class="edit-menu">
-      <summary class="btn" style="display:inline-block">Split ▾</summary>
-      <form method="post" action="/orders/{{ order.id }}/split" class="edit-pop">
-        <div class="field" style="margin-bottom:8px">
-          <label>Seats to move off</label>
-          <div class="tipset">
+          <button class="btn primary sm" style="width:100%">Merge party</button>
+        </form>
+        {% endif %}
+
+        {# 4.1.1 — split some seats off onto a free table. #}
+        {% if can('orders.manage') and order.table and free_tables and order.seats|length > 1 %}
+        <form method="post" action="/orders/{{ order.id }}/split" class="more-sec">
+          <label>Split seats to a new table</label>
+          <div class="tipset" style="margin-bottom:6px">
             {% for s in order.seats %}
             <label><input type="checkbox" name="seat_numbers" value="{{ s.seat_number }}"> Seat {{ s.seat_number }}{% if s.status != 'open' %} <span class="sub">(paid)</span>{% endif %}</label>
             {% endfor %}
           </div>
-        </div>
-        <div class="field" style="margin-bottom:8px">
-          <label>To table</label>
-          <select name="to_table_id" required>
+          <select name="to_table_id" required style="margin-bottom:6px">
             {% for t in free_tables %}
-            <option value="{{ t.id }}">Table {{ t.number }}{% if t.floor %} · {{ t.floor.name }}{% endif %}{% if t.zone_ref %} · {{ t.zone_ref.name }}{% endif %}</option>
+            <option value="{{ t.id }}">Table {{ t.number }}{% if t.floor %} · {{ t.floor.name }}{% endif %}</option>
             {% endfor %}
           </select>
-        </div>
-        <p class="sub" style="margin:0 0 8px;font-size:11px">The picked seats and their items become a new order.</p>
-        <button class="btn primary sm">Split off</button>
-      </form>
+          <button class="btn primary sm" style="width:100%">Split off</button>
+        </form>
+        {% endif %}
+
+        {% if can('discount.approve') %}
+        <form method="post" action="/orders/{{ order.id }}/cancel" class="more-sec">
+          <label>Cancel order</label>
+          <input type="text" name="reason" placeholder="Reason (optional)" style="margin-bottom:6px">
+          <button class="btn danger sm" style="width:100%">Confirm cancel — frees the table</button>
+        </form>
+        {% endif %}
+      </div>
     </details>
     {% endif %}
-    {% endif %}
+
     {% if can('payments.take') %}
     <a class="btn good" href="/orders/{{ order.id }}/pay">Payment →</a>
-    {% endif %}
-    {% if can('discount.approve') and order.status not in ('paid','closed','cancelled') %}
-    <details>
-      <summary class="btn danger" style="display:inline-block">Cancel order</summary>
-      <form method="post" action="/orders/{{ order.id }}/cancel" style="margin-top:8px;text-align:right">
-        <input type="text" name="reason" placeholder="Reason (optional)" style="width:180px">
-        <button class="btn danger sm">Confirm cancel — frees the table</button>
-      </form>
-    </details>
     {% endif %}
   </div>
 </div>

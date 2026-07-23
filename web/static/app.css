@@ -103,6 +103,8 @@ label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 4px; f
   border-radius: 10px; padding: 12px;
   box-shadow: 0 10px 28px rgba(0,0,0,.45);
 }
+/* Sections inside the "More actions" menu, divided by a rule. */
+.more-sec { border-top: 1px solid var(--line); padding-top: 10px; margin-top: 10px; }
 .pill.free { background: rgba(47,158,94,.18); color: #6ee7a0; }
 .pill.occupied { background: rgba(201,138,27,.18); color: #f2c46b; }
 .pill.ready_to_pay, .pill.late { background: rgba(212,72,59,.18); color: #ff9a90; }
