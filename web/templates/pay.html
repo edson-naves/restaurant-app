@@ -6,7 +6,6 @@
     <p class="sub">
       {% if order.table %}Table {{ order.table.number }}{% else %}{{ order.channel.name }}{% endif %}
       · {{ order.seats|length }} seats · every seat is an independent payer
-      <span class="spec">req 4.2.4</span>
     </p>
   </div>
   <a class="btn" href="/orders/{{ order.id }}">← Order</a>
@@ -14,7 +13,7 @@
 
 {% if unassigned %}
 <div class="card" style="border-color:rgba(201,138,27,.5)">
-  <h2>⚠ Unassigned items <span class="spec">req 4.2.4</span></h2>
+  <h2>⚠ Unassigned items</h2>
   <p class="sub">Assign each item to a seat, or share it across seats, before settling.</p>
   {% for i in unassigned %}
   <div class="between" style="border-bottom:1px solid var(--line);padding:8px 0">
@@ -72,7 +71,7 @@
         <summary class="btn primary sm" style="width:100%">Take payment</summary>
         <form method="post" action="/orders/{{ order.id }}/seats/{{ L.seat.id }}/pay" style="margin-top:10px">
           <div class="field">
-            <label>Items to pay — untick to leave on the open order <span class="spec">req 4.2.5</span></label>
+            <label>Items to pay — untick to leave on the open order</label>
             {% for line in L.lines if line.outstanding_cents > 0 %}
             <label class="tick">
               <input type="checkbox" name="item_ids" value="{{ line.item.id }}" checked>
@@ -82,7 +81,7 @@
           </div>
 
           <div class="field">
-            <label>Payment instrument <span class="spec">req 4.2.1</span></label>
+            <label>Payment instrument</label>
             <select name="instrument_id" required>
               {% for i in instruments %}<option value="{{ i.id }}">{{ i.name }}</option>{% endfor %}
             </select>
@@ -94,7 +93,7 @@
           </div>
 
           <div class="field">
-            <label>Tip <span class="spec">req 4.2.6</span></label>
+            <label>Tip</label>
             <div class="tipset">
               {% if auto_gratuity %}
               <label><input type="radio" name="tip_mode" value="auto" checked> Auto-gratuity {{ gratuity.rate }}% <span class="sub">party of {{ order.guest_count }}</span></label>
@@ -111,7 +110,7 @@
 
           {% if can('discount.approve') %}
           <div class="field">
-            <label>Discount % — manager approval <span class="spec">req 4.2.6</span></label>
+            <label>Discount % — manager approval</label>
             <select name="discount_pct">
               <option value="0">No discount</option>
               <option value="5">5%</option><option value="10">10%</option>
@@ -123,7 +122,7 @@
 
           <label class="tick" style="margin-bottom:10px">
             <input type="checkbox" name="partial" value="1">
-            Guest is leaving early — close their portion only <span class="spec">req 4.2.5</span>
+            Guest is leaving early — close their portion only
           </label>
 
           <p class="sub" style="margin:0 0 8px">
@@ -148,7 +147,7 @@
   <!-- live balance panel (4.2.4) -->
   <div>
     <div class="card balance">
-      <h2>Live balance <span class="spec">req 4.2.4</span></h2>
+      <h2>Live balance</h2>
       <div class="bal-row"><span class="lbl">Table total</span><span>${{ panel.table_total_cents|money }}</span></div>
       <div class="bal-row"><span class="lbl">Collected</span><span class="collected">${{ panel.collected_cents|money }}</span></div>
       <div class="bal-row"><span class="lbl">Tips</span><span>${{ panel.tips_cents|money }}</span></div>
@@ -168,7 +167,7 @@
 
     {% if panel.owed_cents > 0 and can('payments.take') %}
     <div class="card">
-      <h2>Split equally <span class="spec">req 4.2.3</span></h2>
+      <h2>Split equally</h2>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <form method="post" action="/orders/{{ order.id }}/split-equally" style="display:flex;gap:8px">
           <input type="number" name="guests" value="{{ order.seats|length or 2 }}" min="1" max="40">
@@ -186,7 +185,7 @@
     </div>
 
     <div class="card">
-      <h2>Pay whole order <span class="spec">req 4.2.2</span></h2>
+      <h2>Pay whole order</h2>
       <form method="post" action="/orders/{{ order.id }}/pay-all">
         <div class="field">
           <label>Instrument</label>
@@ -220,7 +219,7 @@
 
     {% if order.payments %}
     <div class="card">
-      <h2>Payment history <span class="spec">req 4.2.2</span></h2>
+      <h2>Payment history</h2>
       <div class="scroll">
       <table>
         <thead><tr><th>Seat</th><th>Instrument</th><th class="num">Total</th><th></th></tr></thead>

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block body %}
 <h1>Best selling items</h1>
-<p class="sub">Ranked by volume, filterable by date, category and channel · <span class="spec">req 4.3.2</span></p>
+<p class="sub">Ranked by volume, filterable by date, category and channel</p>
 
 <form class="card filters" method="get" action="/reports/best-sellers">
   <div class="field"><label>From</label><input type="date" name="start" value="{{ start }}"></div>

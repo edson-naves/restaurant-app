@@ -7,7 +7,6 @@
       {% if order.table %}Table {{ order.table.number }} · {{ order.guest_count }} guests{% else %}{{ order.channel.name }}{% endif %}
       · {{ order.waiter.name if order.waiter else 'unassigned' }}
       · <span class="pill {{ order.status }}">{{ order.status.replace('_',' ') }}</span>
-      <span class="spec">req 4.1.2</span>
     </p>
   </div>
   {% set open_order = order.status not in ('paid','closed','cancelled') %}
@@ -187,25 +186,25 @@
       {% if configuring %}
       <input type="hidden" name="menu_item_id" value="{{ configuring.id }}">
       <p class="sub" style="margin:0 0 10px">Configuring <b>{{ configuring.name }}</b> · base ${{ configuring.price_cents|money }}</p>
-      <div class="row">
-        <div class="field">
-          <label>Quantity</label>
-          <div class="qtystep">
-            <button type="button" class="qbtn" onclick="stepQty(-1)" aria-label="Less">−</button>
-            <input type="number" name="quantity" id="qty" value="1" min="1" max="20" oninput="updAddPrice()">
-            <button type="button" class="qbtn" onclick="stepQty(1)" aria-label="More">+</button>
-          </div>
-        </div>
-        <div class="field">
-          <label>Course <span class="spec">req 4.1.3</span></label>
-          <select name="course" id="coursesel">
-            <option value="0" selected>Auto — by menu section</option>
-            {% for n, lbl in COURSE_LABELS.items() %}
-            <option value="{{ n }}">{{ lbl }}</option>
-            {% endfor %}
-          </select>
+      <div class="field">
+        <label>Quantity</label>
+        <div class="qtystep">
+          <button type="button" class="qbtn" onclick="stepQty(-1)" aria-label="Less">−</button>
+          <input type="number" name="quantity" id="qty" value="1" min="1" max="20" oninput="updAddPrice()">
+          <button type="button" class="qbtn" onclick="stepQty(1)" aria-label="More">+</button>
         </div>
       </div>
+      {# Course is auto-set from the menu section; the override is tucked away
+         since it's rarely needed (coursing: fire starters, then mains). #}
+      <details class="course-adv">
+        <summary class="sub">Course · Auto <span style="opacity:.6">— change</span></summary>
+        <select name="course" id="coursesel" style="margin-top:6px;max-width:260px">
+          <option value="0" selected>Auto — by menu section</option>
+          {% for n, lbl in COURSE_LABELS.items() %}
+          <option value="{{ n }}">{{ lbl }}</option>
+          {% endfor %}
+        </select>
+      </details>
 
       {# Configurator tabs (4.1.2) — Modifiers / Allergies / Special instructions #}
       <div class="cfg-tabs">
@@ -235,7 +234,7 @@
       {% endfor %}
       {% else %}
       <div class="field">
-        <label>Modifiers <span class="spec">req 4.1.2</span></label>
+        <label>Modifiers</label>
         <div class="tipset">
           {% for m in modifiers %}
           <label><input type="checkbox" name="modifier_ids" value="{{ m.id }}" data-price="{{ m.price_delta_cents }}" onchange="updAddPrice()"> {{ m.name }}{% if m.price_delta_cents %} +${{ m.price_delta_cents|money }}{% endif %}</label>
@@ -247,7 +246,7 @@
 
       <div class="cfg-panel hidden" data-panel="allerg">
       <div class="field">
-        <label>Allergies <span class="spec">req 4.1.2</span></label>
+        <label>Allergies</label>
         <div class="tipset">
           {% for a in ALLERGEN_OPTIONS %}
           <label class="allergen"><input type="checkbox" name="allergens" value="{{ a }}"> {{ a }}</label>
@@ -378,7 +377,7 @@
     {% set pending_courses = order.items|selectattr('kitchen_status','equalto','pending')|map(attribute='course')|list|unique|sort %}
     {% if can('orders.manage') and pending_courses|length > 1 %}
     <div class="card">
-      <h2>Fire courses <span class="spec">req 4.1.3</span></h2>
+      <h2>Fire courses</h2>
       <p class="sub" style="margin:0 0 10px">Send one stage now and hold the rest.</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         {% for c in pending_courses %}

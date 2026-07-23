@@ -254,6 +254,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .cfg-tab:hover { color: var(--ink); }
 .cfg-tab.on { color: var(--accent); border-bottom-color: var(--accent); }
 .cfg-panel.hidden { display: none; }
+/* Course override: a subtle disclosure, since Auto handles it. */
+.course-adv { margin: 0 0 12px; }
+.course-adv > summary { cursor: pointer; list-style: none; font-size: 12px; }
+.course-adv > summary::-webkit-details-marker { display: none; }
 
 /* Quantity stepper: [ − ] [ n ] [ + ] */
 .qtystep { display: inline-flex; align-items: stretch; }

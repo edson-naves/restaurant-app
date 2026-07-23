@@ -5,7 +5,7 @@
 <div class="between">
   <div>
     <h1>Reports &amp; analytics</h1>
-    <p class="sub">Every figure below is read from the star schema · <span class="spec">req 4.3</span></p>
+    <p class="sub">Every figure below is read from the star schema</p>
   </div>
   <div style="display:flex;gap:8px">
     <a class="btn" href="/reports/activity">Activity log →</a>
@@ -48,7 +48,7 @@
 
 <div class="row">
   <div class="card">
-    <h2>Payment breakdown <a class="spec" href="/reports/payments?start={{ start }}&end={{ end }}">req 4.3.3 →</a></h2>
+    <h2>Payment breakdown <a class="spec" href="/reports/payments?start={{ start }}&end={{ end }}">view →</a></h2>
     <table>
       {% for m in payments.by_method %}
       <tr>
@@ -62,7 +62,7 @@
   </div>
 
   <div class="card">
-    <h2>Dine-in vs delivery <a class="spec" href="/reports/channels?start={{ start }}&end={{ end }}">req 4.3.5 →</a></h2>
+    <h2>Dine-in vs delivery <a class="spec" href="/reports/channels?start={{ start }}&end={{ end }}">view →</a></h2>
     <table>
       <thead><tr><th>Channel</th><th class="num">Orders</th><th class="num">Revenue</th><th class="num">Avg</th></tr></thead>
       {% for r in channels.by_platform %}
@@ -79,7 +79,7 @@
 
 <div class="row">
   <div class="card">
-    <h2>Top sellers <a class="spec" href="/reports/best-sellers?start={{ start }}&end={{ end }}">req 4.3.2 →</a></h2>
+    <h2>Top sellers <a class="spec" href="/reports/best-sellers?start={{ start }}&end={{ end }}">view →</a></h2>
     <table>
       <thead><tr><th>Item</th><th class="num">Sold</th><th class="num">Revenue</th></tr></thead>
       {% for r in top %}
@@ -93,7 +93,7 @@
   </div>
 
   <div class="card">
-    <h2>Staff performance <a class="spec" href="/reports/staff?start={{ start }}&end={{ end }}">req 4.3.4 →</a></h2>
+    <h2>Staff performance <a class="spec" href="/reports/staff?start={{ start }}&end={{ end }}">view →</a></h2>
     <table>
       <thead><tr><th>Staff</th><th class="num">Orders</th><th class="num">Revenue</th><th class="num">Tips</th></tr></thead>
       {% for r in staff_rows[:6] %}
@@ -109,7 +109,7 @@
 </div>
 
 <div class="card">
-  <h2>Revenue by day <a class="spec" href="/reports/daily">req 4.3.1 →</a></h2>
+  <h2>Revenue by day <a class="spec" href="/reports/daily">view →</a></h2>
   {% set maxrev = trend|map(attribute='revenue_cents')|max if trend else 1 %}
   <div class="hours" style="height:150px">
     {% for d in trend %}
