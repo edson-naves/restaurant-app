@@ -44,6 +44,23 @@
 <footer class="foot">
   Restaurant Management System v1.0 · built to the requirements specification (June 2026)
 </footer>
+<script>
+  // Any <details class="edit-menu"> popover (seat/move/merge/split/edit menus)
+  // closes when you click outside it or press Escape — a native <details> only
+  // toggles from its own summary. Shared here so every page gets it.
+  document.addEventListener('click', function (e) {
+    document.querySelectorAll('details.edit-menu[open]').forEach(function (d) {
+      if (!d.contains(e.target)) d.removeAttribute('open');
+    });
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      document.querySelectorAll('details.edit-menu[open]').forEach(function (d) {
+        d.removeAttribute('open');
+      });
+    }
+  });
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

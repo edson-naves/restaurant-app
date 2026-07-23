@@ -329,8 +329,7 @@ function pick(id, name, price, course) {
 }
 
 // Seat selector: set which seat the next item is added for, and highlight it.
-// The seat auto-advances after each add (server-side), so this is only needed
-// to override — e.g. to add a second item to a seat you've moved past.
+// The seat holds until the waiter taps another chip.
 function pickSeat(n) {
   document.getElementById('seatf').value = String(n);
   var color = null;
@@ -343,21 +342,6 @@ function pickSeat(n) {
   var card = document.getElementById('menucard');
   if (card && color) card.style.borderLeftColor = color;
 }
-
-// Close an open edit popover when clicking anywhere outside it — a native
-// <details> only toggles from its own summary, so it would otherwise stay open.
-document.addEventListener('click', function (e) {
-  document.querySelectorAll('details.edit-menu[open]').forEach(function (d) {
-    if (!d.contains(e.target)) d.removeAttribute('open');
-  });
-});
-// Escape closes any open editor.
-document.addEventListener('keydown', function (e) {
-  if (e.key === 'Escape') {
-    document.querySelectorAll('details.edit-menu[open]').forEach(function (d) {
-      d.removeAttribute('open');
-    });
-  }
-});
+// (Outside-click / Escape close for .edit-menu popovers lives in base.html.)
 </script>
 {% endblock %}
