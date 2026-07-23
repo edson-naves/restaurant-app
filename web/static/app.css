@@ -181,9 +181,11 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .seatbtns { display: flex; gap: 6px; flex-wrap: wrap; }
 .seatbtn {
   background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
-  border-radius: 999px; padding: 8px 14px; font: inherit; font-weight: 600;
-  cursor: pointer; min-height: 38px;
+  border-radius: 999px; padding: 8px 10px; font: inherit; font-weight: 600;
+  cursor: pointer; min-height: 38px; min-width: 40px; text-align: center;
+  font-variant-numeric: tabular-nums;
 }
+.seatbtn.shared { min-width: auto; padding: 8px 14px; }  /* the "Table" chip */
 .seatbtn:hover { border-color: var(--accent); }
 .seatbtn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
