@@ -135,10 +135,12 @@
       <div class="field">
         <label>Adding for <span class="sub" style="font-weight:400">— advances to the next seat automatically</span></label>
         <div class="seatbtns">
-          <button type="button" class="seatbtn {{ 'on' if active_seat == 0 else '' }}" data-seat="0" onclick="pickSeat(0)">Table</button>
           {% for s in order.seats %}
           <button type="button" class="seatbtn {{ 'on' if active_seat == s.seat_number else '' }}" data-seat="{{ s.seat_number }}" onclick="pickSeat({{ s.seat_number }})">Seat {{ s.seat_number }}</button>
           {% endfor %}
+          {# 0 = the whole table, for shared items (bread, a bottle of wine) that
+             aren't tied to one guest and get split across seats at payment. #}
+          <button type="button" class="seatbtn {{ 'on' if active_seat == 0 else '' }}" data-seat="0" onclick="pickSeat(0)" title="Shared / whole-table item, not one guest">Table (shared)</button>
         </div>
       </div>
       {% endif %}
