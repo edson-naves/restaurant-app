@@ -138,6 +138,17 @@ def open_table(
     if table.status != TableStatus.FREE:
         raise HTTPException(400, f"Table {table.number} is not free.")
 
+    order = open_order_on_table(db, table, guests, waiter_id)
+    db.commit()
+    return RedirectResponse(f"/orders/{order.id}", status_code=303)
+
+
+def open_order_on_table(db: Session, table: RestaurantTable, guests: int, waiter_id: int) -> Order:
+    """Create a dine-in order on a free table and occupy it (does not commit).
+
+    Shared by the floor "open table" action and seating a reservation, so both
+    paths create the order, its seats and the table state identically.
+    """
     channel = db.execute(select(Channel).where(Channel.code == "dine_in")).scalar_one()
     order = Order(
         code=_next_code(db),
@@ -154,8 +165,7 @@ def open_table(
     ensure_seats(db, order, guests)          # 4.2.4 — a payer per seat
     table.status = TableStatus.OCCUPIED      # system response: Occupied
     table.current_waiter_id = waiter_id
-    db.commit()
-    return RedirectResponse(f"/orders/{order.id}", status_code=303)
+    return order
 
 
 @router.post("/tables/{table_id}/waiter")

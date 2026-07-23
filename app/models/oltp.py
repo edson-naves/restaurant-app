@@ -721,3 +721,49 @@ class AuditEvent(Base):
     staff: Mapped["Staff | None"] = relationship(lazy="joined")
 
     __table_args__ = (Index("ix_audit_at", "at"),)
+
+
+class ReservationStatus:
+    WAITING = "waiting"        # booked ahead, or in the walk-in queue
+    SEATED = "seated"          # arrived and given a table
+    CANCELLED = "cancelled"
+    NO_SHOW = "no_show"
+
+
+class Reservation(Base):
+    """Section 4.1.5 — future bookings and the walk-in waitlist.
+
+    One model serves both: a `reservation` is booked for a time; a `waitlist`
+    entry is a walk-in queued now with a quoted wait. Both wait for a table,
+    then get seated (which opens an order), or are cancelled / marked no-show.
+    Money never touches this table, so it stays out of the star schema.
+    """
+    __tablename__ = "reservation"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # reservation | waitlist
+    guest_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    party_size: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    phone: Mapped[str] = mapped_column(String(40), default="")
+    notes: Mapped[str] = mapped_column(String(300), default="")
+    # Booking time for a reservation; the moment they joined the queue for a
+    # walk-in. Either way it's what the list sorts by.
+    at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    quoted_minutes: Mapped[int] = mapped_column(Integer, default=0)   # waitlist estimate
+    status: Mapped[str] = mapped_column(String(20), default=ReservationStatus.WAITING, nullable=False)
+    table_id: Mapped[int | None] = mapped_column(ForeignKey("restaurant_table.id"), nullable=True)
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("order.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+    table: Mapped["RestaurantTable | None"] = relationship(lazy="joined")
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('reservation','waitlist')", name="ck_reservation_kind"
+        ),
+        CheckConstraint(
+            "status IN ('waiting','seated','cancelled','no_show')",
+            name="ck_reservation_status",
+        ),
+        Index("ix_reservation_status_at", "status", "at"),
+    )

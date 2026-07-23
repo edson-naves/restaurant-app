@@ -843,6 +843,59 @@ check("Service charge" in client.get(f"/payments/{sp.id}/receipt").text,
 settings_svc.save(db, {"service_charge_rate": _saved_svc})
 client.cookies.set("staff_id", str(owner.id))
 
+# --- reservations & waitlist (4.1.5) --------------------------------------
+print("\n--- reservations & waitlist ---")
+from app.models.oltp import Reservation  # noqa: E402
+client.cookies.set("staff_id", str(waiter.id))
+check(client.get("/reservations").status_code == 200, "the reservations page loads")
+# Book a reservation and add a walk-in.
+client.post("/reservations", data={"guest_name": "Booking Test", "party_size": 4,
+                                    "at": "2026-12-31T19:30", "phone": "555-0100"})
+client.post("/waitlist", data={"guest_name": "Walkin Test", "party_size": 2,
+                               "quoted_minutes": 15})
+db.expire_all()
+booking = db.execute(
+    select(Reservation).where(Reservation.guest_name == "Booking Test")
+).scalars().first()
+walkin = db.execute(
+    select(Reservation).where(Reservation.guest_name == "Walkin Test")
+).scalars().first()
+check(booking is not None and booking.kind == "reservation" and booking.status == "waiting",
+      "a reservation is booked and waiting")
+check(walkin is not None and walkin.kind == "waitlist" and walkin.quoted_minutes == 15,
+      "a walk-in joins the waitlist with a quoted wait")
+# Both appear on the page.
+page = client.get("/reservations").text
+check("Booking Test" in page and "Walkin Test" in page,
+      "both show on the reservations page")
+# Seat the walk-in onto a free table -> opens an order and links it.
+res_free = db.execute(
+    select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
+).scalars().first()
+r = client.post(f"/reservations/{walkin.id}/seat", data={"table_id": res_free.id})
+res_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+db.expire_all()
+walkin = db.get(Reservation, walkin.id)
+check(walkin.status == "seated" and walkin.order_id == res_oid,
+      "seating a party opens an order and links it")
+check(db.get(RestaurantTable, res_free.id).status == TableStatus.OCCUPIED,
+      "the seated party's table is now occupied")
+check(db.get(Order, res_oid).guest_count == 2, "the new order carries the party size")
+# A seated party can't be seated again.
+r = client.post(f"/reservations/{walkin.id}/seat", data={"table_id": res_free.id})
+check(r.status_code == 400, "a seated party can't be seated twice")
+# Cancel the booking; kitchen staff may not touch reservations.
+client.post(f"/reservations/{booking.id}/cancel")
+db.expire_all()
+check(db.get(Reservation, booking.id).status == "cancelled", "a reservation can be cancelled")
+client.cookies.set("staff_id", str(kitchen.id))
+check(client.get("/reservations").status_code == 403,
+      "kitchen staff cannot see reservations")
+# Tidy up the order the seating opened.
+client.cookies.set("staff_id", str(owner.id))
+client.post(f"/orders/{res_oid}/cancel")
+client.cookies.set("staff_id", str(owner.id))
+
 # --- cancel an order ------------------------------------------------------
 print("\n--- cancel an order ---")
 client.cookies.set("staff_id", str(owner.id))

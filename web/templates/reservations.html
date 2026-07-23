@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>Reservations &amp; waitlist</h1>
+    <p class="sub">Book ahead or queue walk-ins, then seat them to a free table · <span class="spec">req 4.1.5</span></p>
+  </div>
+  <a class="btn" href="/">← Floor</a>
+</div>
+
+{% macro seat_form(r) %}
+  {% if free_tables %}
+  <details class="edit-menu">
+    <summary class="btn sm primary" style="display:inline-block">Seat ▾</summary>
+    <form method="post" action="/reservations/{{ r.id }}/seat" class="edit-pop">
+      <div class="field" style="margin-bottom:8px">
+        <label>Open on table</label>
+        <select name="table_id" required>
+          {% for t in free_tables %}
+          <option value="{{ t.id }}">Table {{ t.number }}{% if t.floor %} · {{ t.floor.name }}{% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn sm primary">Seat party of {{ r.party_size }}</button>
+    </form>
+  </details>
+  {% else %}
+  <span class="sub">No free tables</span>
+  {% endif %}
+  <form method="post" action="/reservations/{{ r.id }}/no-show" style="display:inline">
+    <button class="btn sm">No-show</button>
+  </form>
+  <form method="post" action="/reservations/{{ r.id }}/cancel" style="display:inline">
+    <button class="btn sm danger">Cancel</button>
+  </form>
+{% endmacro %}
+
+<div class="split">
+  <!-- reservations -->
+  <div>
+    <div class="card">
+      <h2>Upcoming reservations</h2>
+      {% if not bookings %}
+        <p class="empty">No reservations booked.</p>
+      {% else %}
+      <div class="scroll" style="overflow:visible">
+      <table>
+        <thead><tr><th>Time</th><th>Guest</th><th>Party</th><th></th></tr></thead>
+        <tbody>
+        {% for r in bookings %}
+        <tr>
+          <td style="white-space:nowrap">{{ r.at.strftime('%b %d · %H:%M') }}</td>
+          <td>
+            {{ r.guest_name }}
+            {% if r.phone %}<br><span class="sub" style="font-size:11px">{{ r.phone }}</span>{% endif %}
+            {% if r.notes %}<br><span class="sub" style="font-size:11px">✎ {{ r.notes }}</span>{% endif %}
+          </td>
+          <td>{{ r.party_size }}</td>
+          <td style="white-space:nowrap;text-align:right">{{ seat_form(r) }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Book a reservation</h2>
+      <form method="post" action="/reservations">
+        <div class="row">
+          <div class="field"><label>Guest name</label><input type="text" name="guest_name" required></div>
+          <div class="field" style="max-width:120px"><label>Party size</label><input type="number" name="party_size" value="2" min="1" max="40"></div>
+        </div>
+        <div class="row">
+          <div class="field"><label>Date &amp; time</label><input type="datetime-local" name="at"></div>
+          <div class="field"><label>Phone</label><input type="text" name="phone" placeholder="optional"></div>
+        </div>
+        <div class="field"><label>Notes</label><input type="text" name="notes" placeholder="e.g. window seat, birthday"></div>
+        <button class="btn primary">Add reservation</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- waitlist -->
+  <div>
+    <div class="card">
+      <h2>Walk-in waitlist</h2>
+      {% if not waitlist %}
+        <p class="empty">Nobody waiting.</p>
+      {% else %}
+      <div class="scroll" style="overflow:visible">
+      <table>
+        <thead><tr><th>Waiting</th><th>Guest</th><th>Party</th><th></th></tr></thead>
+        <tbody>
+        {% for r in waitlist %}
+        <tr>
+          <td style="white-space:nowrap">
+            {{ ((now - r.at).total_seconds() // 60)|int }}m
+            {% if r.quoted_minutes %}<br><span class="sub" style="font-size:11px">quoted {{ r.quoted_minutes }}m</span>{% endif %}
+          </td>
+          <td>
+            {{ r.guest_name }}
+            {% if r.phone %}<br><span class="sub" style="font-size:11px">{{ r.phone }}</span>{% endif %}
+          </td>
+          <td>{{ r.party_size }}</td>
+          <td style="white-space:nowrap;text-align:right">{{ seat_form(r) }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>Add a walk-in</h2>
+      <form method="post" action="/waitlist">
+        <div class="row">
+          <div class="field"><label>Guest name</label><input type="text" name="guest_name" required></div>
+          <div class="field" style="max-width:120px"><label>Party size</label><input type="number" name="party_size" value="2" min="1" max="40"></div>
+        </div>
+        <div class="row">
+          <div class="field" style="max-width:160px"><label>Quoted wait (min)</label><input type="number" name="quoted_minutes" value="0" min="0" max="240"></div>
+          <div class="field"><label>Phone</label><input type="text" name="phone" placeholder="optional"></div>
+        </div>
+        <button class="btn primary">Add to waitlist</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

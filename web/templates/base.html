@@ -12,6 +12,9 @@
   <a class="brand" href="/">🍽️ <span>RMS</span></a>
   <nav class="tabs">
     <a href="/" class="{{ 'on' if request.url.path == '/' else '' }}">Floor</a>
+    {% if can('reservations') %}
+    <a href="/reservations" class="{{ 'on' if request.url.path.startswith('/reservations') or request.url.path.startswith('/waitlist') else '' }}">Reservations</a>
+    {% endif %}
     <a href="/kitchen" class="{{ 'on' if request.url.path.startswith('/kitchen') else '' }}">Kitchen</a>
     <a href="/delivery" class="{{ 'on' if request.url.path.startswith('/delivery') else '' }}">Delivery</a>
     {% if can('menu.availability') %}

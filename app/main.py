@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app import migrate
 from app.database import Base, engine
 from app.deps import WEB_DIR, templates
-from app.routers import admin, analytics, auth, pay, sales
+from app.routers import admin, analytics, auth, pay, reservations, sales
 
 app = FastAPI(title="Restaurant Management System", version="1.0")
 
@@ -22,6 +22,7 @@ migrate.run(engine)          # create_all adds tables, never columns — see mig
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 app.include_router(auth.router)
 app.include_router(sales.router)
+app.include_router(reservations.router)
 app.include_router(pay.router)
 app.include_router(analytics.router)
 app.include_router(admin.router)
