@@ -466,6 +466,29 @@ def order_screen(
     modifiers = db.execute(select(Modifier).order_by(Modifier.name)).scalars().all()
     panel = balance_panel(db, order)
 
+    # Per-seat summary for the seat cards: how many items and their firing state
+    # (empty / ordered but not fired / at least one fired). Shared items sit
+    # under the table card, not a seat.
+    def _seat_status(its: list) -> str:
+        if not its:
+            return "empty"
+        if any(i.kitchen_status != KitchenStatus.PENDING for i in its):
+            return "fired"
+        return "ordered"
+
+    seat_cards = []
+    for s in order.seats:
+        its = [i for i in order.items if i.seat_id == s.id]
+        seat_cards.append({
+            "seat": s, "count": sum(i.quantity for i in its),
+            "status": _seat_status(its),
+        })
+    shared_items = [i for i in order.items if i.is_shared]
+    table_card = {
+        "count": sum(i.quantity for i in shared_items),
+        "status": _seat_status(shared_items),
+    }
+
     # Free tables this party could be moved to, and other occupied tables it
     # could be merged with (4.1.1). Both only when this order is on a table,
     # still open, and hasn't taken any payment.
@@ -503,6 +526,7 @@ def order_screen(
         "panel": panel, "subtotal": sum(i.line_total_cents for i in order.items),
         "free_tables": free_tables, "mergeable_tables": mergeable_tables,
         "active_seat": active_seat,
+        "seat_cards": seat_cards, "table_card": table_card,
         "title": f"Order {order.code}",
     })
 

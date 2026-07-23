@@ -116,14 +116,31 @@
        the panel's left edge, as a quick "which seat am I on" cue. #}
     {% if can('orders.manage') and order.seats %}
     <div class="field" style="border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px">
-      <label>Adding for seat <span class="sub" style="font-weight:400">— tap to change</span></label>
-      <div class="seatbtns">
-        {% for s in order.seats %}
-        <button type="button" class="seatbtn {{ 'on' if active_seat == s.seat_number else '' }}" style="--sc:{{ s.seat_number|seat_color }}" data-seat="{{ s.seat_number }}" data-color="{{ s.seat_number|seat_color }}" onclick="pickSeat({{ s.seat_number }})" title="Seat {{ s.seat_number }}">{{ s.seat_number }}</button>
+      <div class="between" style="margin-bottom:8px">
+        <label style="margin:0">Adding for seat <span class="sub" style="font-weight:400">— tap to change</span></label>
+        <span class="seat-legend">
+          <span><i class="sdot ordered"></i>Ordered</span>
+          <span><i class="sdot fired"></i>Fired</span>
+          <span><i class="sdot empty"></i>Empty</span>
+        </span>
+      </div>
+      <div class="seatcards">
+        {% for c in seat_cards %}
+        <button type="button" class="seatcard status-{{ c.status }} {{ 'on' if active_seat == c.seat.seat_number else '' }}"
+                style="--sc:{{ c.seat.seat_number|seat_color }}" data-seat="{{ c.seat.seat_number }}" data-color="{{ c.seat.seat_number|seat_color }}"
+                onclick="pickSeat({{ c.seat.seat_number }})" title="Seat {{ c.seat.seat_number }}">
+          <span class="sc-top"><span class="sc-num">👤 {{ c.seat.seat_number }}</span><i class="sdot {{ c.status }}"></i></span>
+          <span class="sc-count">{{ c.count }} item{{ '' if c.count == 1 else 's' }}</span>
+        </button>
         {% endfor %}
         {# 0 = the whole table, for shared items (bread, a bottle of wine) that
            aren't tied to one guest and get split across the seats. #}
-        <button type="button" class="seatbtn shared {{ 'on' if active_seat == 0 else '' }}" style="--sc:{{ 0|seat_color }}" data-seat="0" data-color="{{ 0|seat_color }}" onclick="pickSeat(0)" title="Shared / whole-table item, split across all seats">Table</button>
+        <button type="button" class="seatcard shared status-{{ table_card.status }} {{ 'on' if active_seat == 0 else '' }}"
+                style="--sc:{{ 0|seat_color }}" data-seat="0" data-color="{{ 0|seat_color }}"
+                onclick="pickSeat(0)" title="Shared / whole-table item, split across all seats">
+          <span class="sc-top"><span class="sc-num">Table</span><i class="sdot {{ table_card.status }}"></i></span>
+          <span class="sc-count">{{ table_card.count }} shared</span>
+        </button>
       </div>
     </div>
     {% endif %}
@@ -333,7 +350,7 @@ function pick(id, name, price, course) {
 function pickSeat(n) {
   document.getElementById('seatf').value = String(n);
   var color = null;
-  document.querySelectorAll('.seatbtn').forEach(function (b) {
+  document.querySelectorAll('.seatcard').forEach(function (b) {
     var on = b.getAttribute('data-seat') === String(n);
     b.classList.toggle('on', on);
     if (on) color = b.getAttribute('data-color');
