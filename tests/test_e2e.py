@@ -812,6 +812,37 @@ client.cookies.set("staff_id", str(owner.id))
 client.post(f"/orders/{small_oid}/cancel")
 client.cookies.set("staff_id", str(owner.id))
 
+# --- service charge (4.2.6) -----------------------------------------------
+print("\n--- service charge ---")
+_saved_svc = settings_svc.get(db, "service_charge_rate")
+settings_svc.save(db, {"service_charge_rate": "10"})   # 10% house charge
+db.expire_all()
+client.cookies.set("staff_id", str(waiter.id))
+svc_t = db.execute(
+    select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
+).scalars().first()
+r = client.post(f"/tables/{svc_t.id}/open", data={"guests": 2, "waiter_id": waiter.id})
+svc_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+client.post(f"/orders/{svc_oid}/items", data={"menu_item_id": steak.id, "seat_number": 1})
+# The pay screen advertises the charge.
+check("service charge" in client.get(f"/orders/{svc_oid}/pay").text.lower(),
+      "the payment screen notes the service charge")
+r = client.post(f"/orders/{svc_oid}/pay-all",
+                data={"instrument_id": visa.id, "tip_mode": "none"})
+db.expire_all()
+svc_o = db.get(Order, svc_oid)
+sp = svc_o.payments[-1]
+want_svc = pct(steak.price_cents, 10)
+check(sp.service_charge_cents == want_svc,
+      "the service charge is the configured percent of items", f"${money(sp.service_charge_cents)}")
+check(sp.total_cents == sp.items_cents - sp.discount_cents + sp.tax_cents + sp.tip_cents + sp.service_charge_cents,
+      "the payment total includes the service charge")
+# It shows on the receipt as its own line.
+check("Service charge" in client.get(f"/payments/{sp.id}/receipt").text,
+      "the receipt shows a service-charge line")
+settings_svc.save(db, {"service_charge_rate": _saved_svc})
+client.cookies.set("staff_id", str(owner.id))
+
 # --- cancel an order ------------------------------------------------------
 print("\n--- cancel an order ---")
 client.cookies.set("staff_id", str(owner.id))

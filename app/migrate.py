@@ -45,6 +45,9 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # Coursing. Default 2 (Mains) so existing lines fire as before.
     ("order_item", "course", "INTEGER NOT NULL DEFAULT 2"),
     ("order_item", "merged_from_order_id", "INTEGER REFERENCES \"order\"(id)"),
+    ("payment", "service_charge_cents", "INTEGER NOT NULL DEFAULT 0"),
+    ("fact_payment", "service_charge_cents", "INTEGER NOT NULL DEFAULT 0"),
+    ("fact_order_header", "service_charge_cents", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 DEFAULT_FLOOR = "1st floor"

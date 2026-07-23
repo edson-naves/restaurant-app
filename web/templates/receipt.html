@@ -93,6 +93,9 @@
   {% elif data.tax is defined %}
   <div class="l"><span>GST ({{ data.tax_rate }}%)</span><span>{{ data.tax }}</span></div>
   {% endif %}
+  {% if data.service_charge is defined and data.service_charge != '0.00' %}
+  <div class="l"><span>Service charge</span><span>{{ data.service_charge }}</span></div>
+  {% endif %}
   {% if data.tip != '0.00' %}
   <div class="l"><span>Tip</span><span>{{ data.tip }}</span></div>
   {% endif %}

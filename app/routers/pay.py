@@ -109,6 +109,8 @@ def payment_screen(
         # 4.2.6 — auto-gratuity for large parties; the template pre-selects it.
         "gratuity": settings_svc.gratuity_config(db),
         "auto_gratuity": settings_svc.gratuity_config(db).applies(order.guest_count),
+        # 4.2.6 — mandatory service charge rate (0 = none), shown on the screen.
+        "service_charge_rate": settings_svc.service_charge_rate(db),
         "title": f"Payment · {order.code}",
     })
 
@@ -233,6 +235,8 @@ def take_seat_payment(
     tip_cents = _tip_for(db, tip_mode, tip_custom, base)
 
     discount_cents = pct(base, discount_pct) if discount_pct else 0
+    # 4.2.6 — mandatory service charge on the net items being paid.
+    service_charge_cents = pct(base - discount_cents, settings_svc.service_charge_rate(db))
     if discount_cents and not can(staff, "discount.approve") and not approved_by_id:
         raise HTTPException(403, "A discount requires manager approval.")
 
@@ -242,6 +246,7 @@ def take_seat_payment(
             instrument_id=instrument_id,
             staff_id=staff.id,
             tip_cents=max(0, tip_cents),
+            service_charge_cents=max(0, service_charge_cents),
             item_ids=selected,
             discount_cents=discount_cents,
             discount_approved_by_id=(
@@ -281,12 +286,14 @@ def take_full_payment(
     tip_cents = _tip_for(db, tip_mode, tip_custom, outstanding)
 
     discount_cents = pct(outstanding, discount_pct) if discount_pct else 0
+    service_charge_cents = pct(outstanding - discount_cents, settings_svc.service_charge_rate(db))
     try:
         payment = pay_whole_order(
             db, order,
             instrument_id=instrument_id,
             staff_id=staff.id,
             tip_cents=max(0, tip_cents),
+            service_charge_cents=max(0, service_charge_cents),
             discount_cents=discount_cents,
             discount_approved_by_id=(
                 approved_by_id or (staff.id if can(staff, "discount.approve") else None)

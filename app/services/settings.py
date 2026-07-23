@@ -26,6 +26,8 @@ DEFAULTS: dict[str, str] = {
     # Auto-gratuity for large parties (4.2.6). Party size of 0 disables it.
     "auto_gratuity_party": "0",
     "auto_gratuity_rate": "18",
+    # Mandatory house service charge on every bill (4.2.6). 0 disables it.
+    "service_charge_rate": "0",
 }
 
 # What the settings form is allowed to write. Anything else is ignored, so a
@@ -92,6 +94,11 @@ def gratuity_config(db: Session) -> GratuityConfig:
     except (TypeError, ValueError):
         party = 0
     return GratuityConfig(party_threshold=party, rate=_rate(s["auto_gratuity_rate"]))
+
+
+def service_charge_rate(db: Session) -> float:
+    """The mandatory house service-charge percent (0 = off)."""
+    return _rate(_all(db)["service_charge_rate"])
 
 
 def save(db: Session, values: dict[str, str]) -> None:

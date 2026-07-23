@@ -292,6 +292,7 @@ def pay_seat(
     instrument_id: int,
     staff_id: int,
     tip_cents: int = 0,
+    service_charge_cents: int = 0,
     item_ids: list[int] | None = None,
     discount_cents: int = 0,
     discount_approved_by_id: int | None = None,
@@ -337,7 +338,7 @@ def pay_seat(
 
     gst_cents, pst_cents = _taxes(db, items_cents - discount_cents)
     tax_cents = gst_cents + pst_cents
-    total_cents = items_cents - discount_cents + tax_cents + tip_cents
+    total_cents = items_cents - discount_cents + tax_cents + tip_cents + service_charge_cents
     if total_cents < 0:
         raise PaymentError("Payment total cannot be negative.")
 
@@ -348,6 +349,7 @@ def pay_seat(
         staff_id=staff_id,
         items_cents=items_cents,
         tip_cents=tip_cents,
+        service_charge_cents=service_charge_cents,
         discount_cents=discount_cents,
         tax_cents=tax_cents,
         total_cents=total_cents,
@@ -407,6 +409,7 @@ def pay_whole_order(
     instrument_id: int,
     staff_id: int,
     tip_cents: int = 0,
+    service_charge_cents: int = 0,
     discount_cents: int = 0,
     discount_approved_by_id: int | None = None,
     card_last4: str | None = None,
@@ -440,10 +443,11 @@ def pay_whole_order(
         staff_id=staff_id,
         items_cents=items_cents,
         tip_cents=tip_cents,
+        service_charge_cents=service_charge_cents,
         discount_cents=discount_cents,
         tax_cents=sum(_taxes(db, items_cents - discount_cents)),
         total_cents=items_cents - discount_cents
-        + sum(_taxes(db, items_cents - discount_cents)) + tip_cents,
+        + sum(_taxes(db, items_cents - discount_cents)) + tip_cents + service_charge_cents,
         card_brand=instrument.card_brand,
         card_last4=card_last4 if instrument.instrument_type in ("card", "contactless") else None,
         created_at=datetime.now(),
@@ -619,6 +623,8 @@ def _issue_receipt(
         # The stored payment carries only the combined tax_cents; the breakdown
         # is a receipt concern, so it lives here.
         **_tax_breakdown(db, payment),
+        "service_charge": money(payment.service_charge_cents),
+        "service_charge_cents": payment.service_charge_cents,
         "tip": money(payment.tip_cents),
         "total": money(payment.total_cents),
         "total_cents": payment.total_cents,

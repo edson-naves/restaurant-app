@@ -100,6 +100,16 @@ fact_disc = db.execute(select(func.coalesce(func.sum(FactPayment.discount_cents)
 check(src_disc == fact_disc, "discounts survive allocation to allocation grain",
       f"{money(src_disc)} vs {money(fact_disc)}")
 
+src_svc = db.execute(
+    select(func.coalesce(func.sum(Payment.service_charge_cents), 0)).where(*live())
+).scalar_one()
+fact_svc = db.execute(select(func.coalesce(func.sum(FactPayment.service_charge_cents), 0))).scalar_one()
+check(src_svc == fact_svc, "service charge survives allocation to allocation grain",
+      f"{money(src_svc)} vs {money(fact_svc)}")
+hdr_svc = db.execute(select(func.coalesce(func.sum(FactOrderHeader.service_charge_cents), 0))).scalar_one()
+check(src_svc == hdr_svc, "service charge: OLTP payments == fact_order_header",
+      f"{money(src_svc)} vs {money(hdr_svc)}")
+
 src_tax = db.execute(
     select(func.coalesce(func.sum(Payment.tax_cents), 0)).where(*live())
 ).scalar_one()
@@ -110,15 +120,17 @@ hdr_tax = db.execute(select(func.coalesce(func.sum(FactOrderHeader.tax_cents), 0
 check(src_tax == hdr_tax, "GST: OLTP payments == fact_order_header",
       f"{money(src_tax)} vs {money(hdr_tax)}")
 
-# The whole equation must hold at payment level: total = items - disc + tax + tip.
+# The whole equation must hold at payment level:
+# total = items - disc + tax + tip + service charge.
 bad_total = db.execute(
     select(func.count()).select_from(Payment).where(
         Payment.order_id.in_(closed_ids),
         Payment.total_cents
-        != Payment.items_cents - Payment.discount_cents + Payment.tax_cents + Payment.tip_cents,
+        != Payment.items_cents - Payment.discount_cents + Payment.tax_cents
+        + Payment.tip_cents + Payment.service_charge_cents,
     )
 ).scalar_one()
-check(bad_total == 0, "every payment total equals items - discount + tax + tip",
+check(bad_total == 0, "every payment total equals items - discount + tax + tip + service charge",
       f"{bad_total} rows break the identity")
 
 # Post-settlement refunds: source total for closed orders == fact header total.

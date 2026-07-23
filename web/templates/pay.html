@@ -130,6 +130,7 @@
             {{ tax_cfg.total_rate }}% tax
             ({% if tax_cfg.pst_rate %}GST {{ tax_cfg.gst_rate }}% + PST {{ tax_cfg.pst_rate }}%{% else %}GST {{ tax_cfg.gst_rate }}%{% endif %})
             is added to the item subtotal at payment.
+            {% if service_charge_rate %}A {{ service_charge_rate }}% service charge also applies.{% endif %}
           </p>
           <button class="btn good" style="width:100%">Confirm payment</button>
         </form>
@@ -192,7 +193,7 @@
           </div>
         </div>
         <p class="sub" style="margin:0 0 8px">
-          Plus {{ tax_cfg.total_rate }}% tax on the items, and any tip.
+          Plus {{ tax_cfg.total_rate }}% tax on the items{% if service_charge_rate %}, a {{ service_charge_rate }}% service charge{% endif %}, and any tip.
         </p>
         <button class="btn primary" style="width:100%">Settle ${{ panel.owed_cents|money }} + tax</button>
       </form>

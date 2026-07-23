@@ -65,6 +65,21 @@
   </div>
 
   <div class="card">
+    <strong>Service charge <span class="spec">req 4.2.6</span></strong>
+    <p class="sub" style="margin:2px 0 12px">
+      A mandatory house charge added to every bill (a percent of the items,
+      after any discount). This is the restaurant's revenue, separate from the
+      waiter's tip, and is shown as its own line on the receipt. Set to 0 to
+      switch it off.
+    </p>
+    <div class="field" style="max-width:140px">
+      <label>Service charge (%)</label>
+      <input type="number" name="service_charge_rate" step="0.01" min="0"
+             value="{{ settings.service_charge_rate }}">
+    </div>
+  </div>
+
+  <div class="card">
     <strong>Receipt identity</strong>
     <p class="sub" style="margin:2px 0 12px">The heading printed on every receipt.</p>
     <div class="field">

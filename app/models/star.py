@@ -232,6 +232,7 @@ class FactPayment(Base):
 
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     tip_cents: Mapped[int] = mapped_column(Integer, default=0)
+    service_charge_cents: Mapped[int] = mapped_column(Integer, default=0)
     discount_cents: Mapped[int] = mapped_column(Integer, default=0)
     tax_cents: Mapped[int] = mapped_column(Integer, default=0)
     total_cents: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -285,6 +286,7 @@ class FactOrderHeader(Base):
     discount_cents: Mapped[int] = mapped_column(Integer, default=0)
     tax_cents: Mapped[int] = mapped_column(Integer, default=0)
     tip_cents: Mapped[int] = mapped_column(Integer, default=0)
+    service_charge_cents: Mapped[int] = mapped_column(Integer, default=0)
     total_cents: Mapped[int] = mapped_column(Integer, default=0)
     # Post-settlement reversals against this order. total_cents stays gross;
     # net revenue is total_cents - refund_cents.
