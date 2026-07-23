@@ -33,7 +33,7 @@ from app.models.oltp import (
     Staff,
     TableStatus,
 )
-from app.services.payments import balance_panel, ensure_seats
+from app.services.payments import balance_panel, ensure_seats, set_shared_item_shares
 
 router = APIRouter()
 
@@ -558,6 +558,14 @@ def add_item(
             item.modifiers.append(
                 OrderItemModifier(modifier_id=mod.id, price_delta_cents=mod.price_delta_cents)
             )
+
+    # 4.2.4 — an item added to the table (seat 0) is a shared item: split it
+    # evenly across every seat right away, so "Table" means shared, not just
+    # unassigned. Waiters can still re-share or reassign it at payment.
+    if seat_number == 0 and order.seats:
+        db.flush()
+        set_shared_item_shares(db, item, [s.id for s in order.seats])
+
     db.commit()
 
     # Auto-advance to the next seat so the waiter goes round the table without

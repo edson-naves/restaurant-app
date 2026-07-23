@@ -272,11 +272,16 @@ check(table.status == TableStatus.READY_TO_PAY, "step 5: table -> Ready to Pay")
 client.cookies.set("staff_id", str(waiter.id))
 r = client.get(f"/orders/{order_id}/pay")
 check(r.status_code == 200, "step 6: payment screen opens")
-check("Unassigned items" in r.text, "unassigned shared item is surfaced, not silently dropped")
 
-# Share the garlic bread across all 3 seats (4.2.4).
+# The garlic bread was added to the table (seat 0), so it auto-shares across
+# every seat (4.2.4) rather than sitting unassigned.
 db.expire_all()
 order = db.get(Order, order_id)
+bread_line = next(i for i in order.items if i.menu_item_id == bread.id)
+check(bread_line.is_shared and len(bread_line.shares) == 3,
+      "a table item auto-shares across the seats", f"{len(bread_line.shares)} shares")
+
+# It can still be re-shared explicitly across the same seats (4.2.4).
 shared_item = next(i for i in order.items if i.menu_item_id == bread.id)
 r = client.post(
     f"/orders/{order_id}/items/{shared_item.id}/share",
@@ -925,6 +930,28 @@ r = client.post(f"/orders/{adv_oid}/items", data={"menu_item_id": bread.id, "sea
 check("seat=3" in str(r.url), "the last seat does not advance past itself")
 client.cookies.set("staff_id", str(owner.id))
 client.post(f"/orders/{adv_oid}/cancel")
+client.cookies.set("staff_id", str(waiter.id))
+
+# --- a table (shared) item auto-splits across seats (4.2.4) ---------------
+print("\n--- table item auto-splits ---")
+client.cookies.set("staff_id", str(waiter.id))
+sh_t = db.execute(
+    select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
+).scalars().first()
+r = client.post(f"/tables/{sh_t.id}/open", data={"guests": 4, "waiter_id": waiter.id})
+sh_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+# Add a shareable item to the table (seat 0).
+client.post(f"/orders/{sh_oid}/items", data={"menu_item_id": bread.id, "seat_number": 0})
+db.expire_all()
+sh_o = db.get(Order, sh_oid)
+shared = sh_o.items[0]
+check(shared.is_shared and shared.seat_id is None,
+      "a table item is marked shared, not tied to a seat")
+check(len(shared.shares) == 4, "it is split across all four seats", f"{len(shared.shares)} shares")
+check(sum(s.share_cents for s in shared.shares) == shared.line_total_cents,
+      "the shares sum to the item exactly (no lost cent)")
+client.cookies.set("staff_id", str(owner.id))
+client.post(f"/orders/{sh_oid}/cancel")
 client.cookies.set("staff_id", str(waiter.id))
 
 # --- split equally, then reset it (4.2.3) ---------------------------------
