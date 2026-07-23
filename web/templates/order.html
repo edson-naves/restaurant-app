@@ -179,7 +179,7 @@
 
   {# Column 3 — item configurator (accent echoes the active seat) #}
   <div class="card pos-cfg" id="menucard" style="border-left:4px solid {{ active_seat|seat_color }}">
-    <h2>{{ configuring.name if configuring else 'Configure' }}</h2>
+    <h2>{{ configuring.name if configuring else 'Customize' }}</h2>
     {% if can('orders.manage') %}
     <form method="post" action="/orders/{{ order.id }}/items" id="addf">
       <input type="hidden" name="category" value="{{ active_cat }}">
@@ -207,6 +207,14 @@
         </div>
       </div>
 
+      {# Configurator tabs (4.1.2) — Modifiers / Allergies / Special instructions #}
+      <div class="cfg-tabs">
+        <button type="button" class="cfg-tab on" data-tab="mods" onclick="cfgTab('mods')">Modifiers</button>
+        <button type="button" class="cfg-tab" data-tab="allerg" onclick="cfgTab('allerg')">Allergies</button>
+        <button type="button" class="cfg-tab" data-tab="notes" onclick="cfgTab('notes')">Special instructions</button>
+      </div>
+
+      <div class="cfg-panel" data-panel="mods">
       {% if configuring.modifier_groups %}
       {# Grouped, rule-based modifiers (4.1.2). Single-select groups behave like
          radios (JS unchecks siblings); the server enforces required/min/max. #}
@@ -235,7 +243,9 @@
         </div>
       </div>
       {% endif %}
+      </div>{# /mods panel #}
 
+      <div class="cfg-panel hidden" data-panel="allerg">
       <div class="field">
         <label>Allergies <span class="spec">req 4.1.2</span></label>
         <div class="tipset">
@@ -245,10 +255,15 @@
           <input type="text" name="allergen_other" placeholder="Other (specify)" style="width:170px;min-height:30px;padding:4px 8px">
         </div>
       </div>
+      </div>{# /allerg panel #}
+
+      <div class="cfg-panel hidden" data-panel="notes">
       <div class="field">
         <label>Special instructions</label>
         <input type="text" name="notes" placeholder="e.g. no ice, birthday">
       </div>
+      </div>{# /notes panel #}
+
       <button class="btn primary" id="addb">Add to order <span id="addp"></span></button>
       {% else %}
       <p class="sub" style="margin:0">Select an item above to configure it.</p>
@@ -412,6 +427,16 @@ function updAddPrice() {
   if (out) out.textContent = '· $' + ((sum * qty) / 100).toFixed(2);
 }
 document.addEventListener('DOMContentLoaded', updAddPrice);
+
+// Configurator tabs: show one panel at a time.
+function cfgTab(name) {
+  document.querySelectorAll('.cfg-tab').forEach(function (t) {
+    t.classList.toggle('on', t.getAttribute('data-tab') === name);
+  });
+  document.querySelectorAll('.cfg-panel').forEach(function (p) {
+    p.classList.toggle('hidden', p.getAttribute('data-panel') !== name);
+  });
+}
 
 // Quantity stepper: nudge the qty within 1..20 and re-price.
 function stepQty(d) {
