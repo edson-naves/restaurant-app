@@ -188,14 +188,16 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
    seat is visible and taps are one step. The active seat auto-advances. */
 .seatbtns { display: flex; gap: 6px; flex-wrap: wrap; }
 .seatbtn {
-  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+  --sc: var(--accent);   /* per-seat accent, set inline */
+  background: var(--panel-2); border: 1px solid var(--sc); color: var(--ink);
   border-radius: 999px; padding: 8px 10px; font: inherit; font-weight: 600;
   cursor: pointer; min-height: 38px; min-width: 40px; text-align: center;
   font-variant-numeric: tabular-nums;
 }
 .seatbtn.shared { min-width: auto; padding: 8px 14px; }  /* the "Table" chip */
-.seatbtn:hover { border-color: var(--accent); }
-.seatbtn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.seatbtn:hover { filter: brightness(1.15); }
+/* Active seat: filled with its own colour, echoed on the panel's left edge. */
+.seatbtn.on { background: var(--sc); border-color: var(--sc); color: #fff; }
 
 /* ---------- payment (4.2) ---------- */
 .seat { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 10px; background: var(--panel-2); }

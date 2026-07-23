@@ -177,6 +177,17 @@ ZONE_PALETTE = (
 )
 
 
+def seat_color(n: int) -> str:
+    """A stable accent colour for a seat number (0 = the table / shared).
+
+    Cycles the zone palette so each seat has a consistent colour on the order
+    screen; the table slot is neutral so it reads as "not one seat".
+    """
+    if not n:
+        return "#8a9bb0"   # slate — the shared / table slot
+    return ZONE_PALETTE[(n - 1) % len(ZONE_PALETTE)]
+
+
 class Zone(Base):
     """A named area within one floor — Zone A, Patio, Bar.
 

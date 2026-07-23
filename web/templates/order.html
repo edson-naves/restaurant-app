@@ -108,21 +108,22 @@
 
 <div class="split">
   <!-- menu -->
-  <div class="card">
+  <div class="card" id="menucard" style="border-left:4px solid {{ active_seat|seat_color }}">
     <h2>Menu</h2>
     {# Choose the seat first, then the item (4.1.2). Chips set the hidden seat
        field via JS, so they sit outside the add form; the seat holds until the
-       waiter taps another. #}
+       waiter taps another. Each seat carries a stable accent colour, echoed on
+       the panel's left edge, as a quick "which seat am I on" cue. #}
     {% if can('orders.manage') and order.seats %}
     <div class="field" style="border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:14px">
       <label>Adding for seat <span class="sub" style="font-weight:400">— tap to change</span></label>
       <div class="seatbtns">
         {% for s in order.seats %}
-        <button type="button" class="seatbtn {{ 'on' if active_seat == s.seat_number else '' }}" data-seat="{{ s.seat_number }}" onclick="pickSeat({{ s.seat_number }})" title="Seat {{ s.seat_number }}">{{ s.seat_number }}</button>
+        <button type="button" class="seatbtn {{ 'on' if active_seat == s.seat_number else '' }}" style="--sc:{{ s.seat_number|seat_color }}" data-seat="{{ s.seat_number }}" data-color="{{ s.seat_number|seat_color }}" onclick="pickSeat({{ s.seat_number }})" title="Seat {{ s.seat_number }}">{{ s.seat_number }}</button>
         {% endfor %}
         {# 0 = the whole table, for shared items (bread, a bottle of wine) that
            aren't tied to one guest and get split across the seats. #}
-        <button type="button" class="seatbtn shared {{ 'on' if active_seat == 0 else '' }}" data-seat="0" onclick="pickSeat(0)" title="Shared / whole-table item, split across all seats">Table</button>
+        <button type="button" class="seatbtn shared {{ 'on' if active_seat == 0 else '' }}" style="--sc:{{ 0|seat_color }}" data-seat="0" data-color="{{ 0|seat_color }}" onclick="pickSeat(0)" title="Shared / whole-table item, split across all seats">Table</button>
       </div>
     </div>
     {% endif %}
@@ -332,9 +333,15 @@ function pick(id, name, price, course) {
 // to override — e.g. to add a second item to a seat you've moved past.
 function pickSeat(n) {
   document.getElementById('seatf').value = String(n);
+  var color = null;
   document.querySelectorAll('.seatbtn').forEach(function (b) {
-    b.classList.toggle('on', b.getAttribute('data-seat') === String(n));
+    var on = b.getAttribute('data-seat') === String(n);
+    b.classList.toggle('on', on);
+    if (on) color = b.getAttribute('data-color');
   });
+  // Echo the active seat's colour on the panel edge as a confirmation cue.
+  var card = document.getElementById('menucard');
+  if (card && color) card.style.borderLeftColor = color;
 }
 
 // Close an open edit popover when clicking anywhere outside it — a native
