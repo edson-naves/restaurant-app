@@ -326,6 +326,11 @@ class MenuItem(Base):
     def thumb_emoji(self) -> str:
         """A food emoji standing in for a missing photo, from the category."""
         return category_emoji(self.category.name if self.category else "")
+
+    @property
+    def requires_choice(self) -> bool:
+        """True if adding needs the configurator (a required modifier group)."""
+        return any(g.required or g.min_select for g in self.modifier_groups)
     modifier_groups: Mapped[list["ModifierGroup"]] = relationship(
         back_populates="menu_item", cascade="all, delete-orphan",
         order_by="ModifierGroup.sort_order, ModifierGroup.id",
