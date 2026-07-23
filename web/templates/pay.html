@@ -155,6 +155,15 @@
       <div class="bal-row"><span class="lbl">Seats paid</span><span>{{ panel.seats_paid }} / {{ panel.seats_total }}</span></div>
       <div class="bal-row"><span class="lbl">Seats remaining</span><span>{{ panel.seats_remaining }}</span></div>
       <div class="bal-row big"><span>Still owed</span><span class="owed">${{ panel.owed_cents|money }}</span></div>
+      {% if panel.service_charge_cents or panel.auto_gratuity_cents %}
+      <p class="sub" style="margin:10px 0 0;font-size:11px">Still to be added on the amount owed:</p>
+      {% if panel.service_charge_cents %}
+      <div class="bal-row"><span class="lbl">Service charge ({{ panel.service_charge_rate }}%)</span><span>+${{ panel.service_charge_cents|money }}</span></div>
+      {% endif %}
+      {% if panel.auto_gratuity_cents %}
+      <div class="bal-row"><span class="lbl">Auto-gratuity ({{ panel.auto_gratuity_rate }}%)</span><span>+${{ panel.auto_gratuity_cents|money }}</span></div>
+      {% endif %}
+      {% endif %}
     </div>
 
     {% if panel.owed_cents > 0 and can('payments.take') %}

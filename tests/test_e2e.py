@@ -47,6 +47,17 @@ owner = db.execute(select(Staff).where(Staff.role == Role.OWNER)).scalars().firs
 waiter = db.execute(select(Staff).where(Staff.role == Role.WAITER)).scalars().first()
 kitchen = db.execute(select(Staff).where(Staff.role == Role.KITCHEN)).scalars().first()
 
+# Pin the money-affecting settings off for the run so the suite is independent
+# of whatever the live config happens to be; the dedicated tests toggle them
+# locally, and the originals are restored at the end.
+from app.services import settings as settings_svc  # noqa: E402
+_orig_settings = {
+    "service_charge_rate": settings_svc.get(db, "service_charge_rate"),
+    "auto_gratuity_party": settings_svc.get(db, "auto_gratuity_party"),
+    "auto_gratuity_rate": settings_svc.get(db, "auto_gratuity_rate"),
+}
+settings_svc.save(db, {"service_charge_rate": "0", "auto_gratuity_party": "0"})
+
 client = httpx.Client(base_url=BASE, follow_redirects=True, timeout=30)
 
 # ---------------------------------------------------------------- auth (§3, §5)
@@ -856,9 +867,11 @@ client.post("/waitlist", data={"guest_name": "Walkin Test", "party_size": 2,
 db.expire_all()
 booking = db.execute(
     select(Reservation).where(Reservation.guest_name == "Booking Test")
+    .order_by(Reservation.id.desc())
 ).scalars().first()
 walkin = db.execute(
     select(Reservation).where(Reservation.guest_name == "Walkin Test")
+    .order_by(Reservation.id.desc())
 ).scalars().first()
 check(booking is not None and booking.kind == "reservation" and booking.status == "waiting",
       "a reservation is booked and waiting")
@@ -1066,6 +1079,9 @@ check(close2.id != before_id and close2.window_start == close.closed_at,
       "the next close starts where the last one ended (no gap, no overlap)")
 check(close2.payment_count == 0,
       "and covers no payments, since none were taken after the first close")
+
+# Restore the money-affecting settings the suite pinned at the start.
+settings_svc.save(db, _orig_settings)
 
 db.close()
 client.close()

@@ -97,6 +97,12 @@ class BalancePanel:
     seats_total: int
     seats_paid: int
     tips_cents: int
+    # 4.2.6 — previews of what settling the rest will add. Estimated on the
+    # amount still owed; zero when the setting is off.
+    service_charge_cents: int = 0
+    service_charge_rate: float = 0.0
+    auto_gratuity_cents: int = 0
+    auto_gratuity_rate: float = 0.0
 
     @property
     def seats_remaining(self) -> int:
@@ -173,6 +179,12 @@ def balance_panel(db: Session, order: Order) -> BalancePanel:
         if led.seat.status in (SeatStatus.PAID, SeatStatus.PAID_PARTIAL) and led.outstanding_cents == 0
     )
 
+    # 4.2.6 — preview the mandatory service charge and any auto-gratuity on the
+    # amount still owed, so they're visible before a payment is taken.
+    svc_rate = settings_svc.service_charge_rate(db)
+    grat = settings_svc.gratuity_config(db)
+    grat_applies = grat.applies(order.guest_count)
+
     return BalancePanel(
         table_total_cents=table_total,
         collected_cents=collected,
@@ -180,6 +192,10 @@ def balance_panel(db: Session, order: Order) -> BalancePanel:
         seats_total=len(order.seats),
         seats_paid=seats_paid,
         tips_cents=tips,
+        service_charge_cents=pct(owed, svc_rate),
+        service_charge_rate=svc_rate,
+        auto_gratuity_cents=pct(owed, grat.rate) if grat_applies else 0,
+        auto_gratuity_rate=grat.rate if grat_applies else 0.0,
     )
 
 
