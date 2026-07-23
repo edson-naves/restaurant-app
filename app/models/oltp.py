@@ -83,6 +83,22 @@ def build_allergens(selected: list[str], other: str = "") -> str:
     return ", ".join(parts)
 
 
+def category_emoji(category_name: str) -> str:
+    """A representative emoji for a menu category (icons + item thumbnails)."""
+    n = (category_name or "").strip().lower()
+    table = [
+        (("start", "appet"), "🥟"), (("salad",), "🥗"), (("burger",), "🍔"),
+        (("sandwich",), "🥪"), (("pasta",), "🍝"), (("side",), "🍟"),
+        (("dessert", "sweet"), "🍰"), (("beer",), "🍺"), (("wine",), "🍷"),
+        (("hot drink", "coffee", "tea"), "☕"), (("drink", "soft", "beverage"), "🥤"),
+        (("main", "entr"), "🍽️"), (("fav",), "⭐"),
+    ]
+    for keys, emoji in table:
+        if any(k in n for k in keys):
+            return emoji
+    return "🍴"
+
+
 def course_for_category(category_name: str) -> int:
     """A menu section's natural firing course.
 
@@ -301,8 +317,15 @@ class MenuItem(Base):
     available: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # Section 4.2.4 — shared items (bread, appetizers) can be split across seats.
     is_shareable: Mapped[bool] = mapped_column(Boolean, default=False)
+    # A photo for the item row (4.1.2). Empty falls back to a category emoji.
+    image_url: Mapped[str] = mapped_column(String(300), default="")
 
     category: Mapped["MenuCategory"] = relationship(back_populates="items")
+
+    @property
+    def thumb_emoji(self) -> str:
+        """A food emoji standing in for a missing photo, from the category."""
+        return category_emoji(self.category.name if self.category else "")
     modifier_groups: Mapped[list["ModifierGroup"]] = relationship(
         back_populates="menu_item", cascade="all, delete-orphan",
         order_by="ModifierGroup.sort_order, ModifierGroup.id",

@@ -46,6 +46,7 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("order_item", "course", "INTEGER NOT NULL DEFAULT 2"),
     ("order_item", "merged_from_order_id", "INTEGER REFERENCES \"order\"(id)"),
     ("order_item", "allergens", "VARCHAR(200) NOT NULL DEFAULT ''"),
+    ("menu_item", "image_url", "VARCHAR(300) NOT NULL DEFAULT ''"),
     ("payment", "service_charge_cents", "INTEGER NOT NULL DEFAULT 0"),
     ("fact_payment", "service_charge_cents", "INTEGER NOT NULL DEFAULT 0"),
     ("fact_order_header", "service_charge_cents", "INTEGER NOT NULL DEFAULT 0"),

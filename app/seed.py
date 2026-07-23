@@ -152,6 +152,37 @@ MODIFIERS = [
     ("Spicy", 0),
 ]
 
+# Short menu-item descriptions shown under the name in the item list (4.1.2).
+MENU_DESCRIPTIONS = {
+    "Beef Burger": "Lettuce, tomato, onion, pickles",
+    "Bruschetta": "Grilled bread, tomato, basil",
+    "Caesar Salad": "Romaine, parmesan, croutons",
+    "Chicken Parmesan": "Breaded chicken, marinara, mozzarella",
+    "Chocolate Lava Cake": "Warm centre, vanilla ice cream",
+    "Craft Beer": "Local IPA, on tap",
+    "Crispy Calamari": "Lightly fried, lemon aioli",
+    "Espresso": "Double shot",
+    "Garlic Bread": "Toasted, garlic butter, herbs",
+    "Gelato (2 scoops)": "Ask your server for flavours",
+    "Grilled Salmon": "Atlantic salmon, seasonal greens",
+    "House Red (glass)": "Cabernet blend",
+    "House White (glass)": "Crisp Sauvignon Blanc",
+    "Lamb Chops": "Herb-crusted, red wine jus",
+    "Margherita Pizza": "Tomato, mozzarella, basil",
+    "Mashed Potatoes": "Buttery, creamy",
+    "Mushroom Risotto": "Arborio rice, wild mushrooms",
+    "New York Cheesecake": "Classic, berry compote",
+    "Pad Thai": "Rice noodles, peanuts, lime",
+    "Ribeye Steak": "10oz, hand-cut, chimichurri",
+    "Seasonal Vegetables": "Chef's daily selection",
+    "Side Salad": "Mixed greens, house dressing",
+    "Soft Drink": "Coke, Sprite, or ginger ale",
+    "Soup of the Day": "Ask your server",
+    "Sparkling Water": "500ml bottle",
+    "Tiramisu": "Espresso, mascarpone, cocoa",
+    "Truffle Fries": "Parmesan, truffle oil",
+}
+
 # 4.1.2 — grouped, rule-based modifiers per item:
 #   item -> [(group, required, min_select, max_select, [(option, price_cents)])]
 MODIFIER_GROUPS = {
@@ -237,7 +268,8 @@ def seed_reference(db: Session) -> dict:
         db.flush()
         for item_name, price, shareable, weight in entries:
             mi = MenuItem(
-                category_id=cat.id, name=item_name, description="",
+                category_id=cat.id, name=item_name,
+                description=MENU_DESCRIPTIONS.get(item_name, ""),
                 price_cents=price, is_shareable=shareable, is_active=True,
             )
             db.add(mi)
