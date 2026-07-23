@@ -909,6 +909,44 @@ client.cookies.set("staff_id", str(owner.id))
 client.post(f"/orders/{res_oid}/cancel")
 client.cookies.set("staff_id", str(owner.id))
 
+# --- split equally, then reset it (4.2.3) ---------------------------------
+print("\n--- split equally & reset ---")
+client.cookies.set("staff_id", str(waiter.id))
+sp_t = db.execute(
+    select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
+).scalars().first()
+r = client.post(f"/tables/{sp_t.id}/open", data={"guests": 2, "waiter_id": waiter.id})
+sp_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
+client.post(f"/orders/{sp_oid}/items", data={"menu_item_id": steak.id, "seat_number": 1})
+client.post(f"/orders/{sp_oid}/items", data={"menu_item_id": bread.id, "seat_number": 2})
+# Split the whole order equally across the two seats.
+client.post(f"/orders/{sp_oid}/split-equally", data={"guests": 2})
+db.expire_all()
+sp_o = db.get(Order, sp_oid)
+check(all(i.is_shared for i in sp_o.items), "split equally shares every item across seats")
+# The party changes its mind — reset it back to one bill.
+r = client.post(f"/orders/{sp_oid}/reset-split")
+db.expire_all()
+sp_o = db.get(Order, sp_oid)
+check(r.status_code == 200
+      and not any(i.is_shared for i in sp_o.items)
+      and all(i.seat_id is None for i in sp_o.items),
+      "reset clears the split back to unassigned items")
+# After a payment lands, the split can't be reset.
+seat1 = next(s for s in sp_o.seats if s.seat_number == 1)
+client.post(f"/orders/{sp_oid}/items/{sp_o.items[0].id}/assign", data={"seat_number": 1})
+client.post(f"/orders/{sp_oid}/seats/{seat1.id}/pay",
+            data={"instrument_id": visa.id, "tip_mode": "none", "partial": "1"})
+r = client.post(f"/orders/{sp_oid}/reset-split")
+check(r.status_code == 400, "a split can't be reset once a payment has landed")
+# Tidy up: void then cancel.
+client.cookies.set("staff_id", str(owner.id))
+db.expire_all()
+for p in db.get(Order, sp_oid).payments:
+    client.post(f"/payments/{p.id}/void", data={"reason": "test cleanup"})
+client.post(f"/orders/{sp_oid}/cancel")
+client.cookies.set("staff_id", str(owner.id))
+
 # --- cancel an order ------------------------------------------------------
 print("\n--- cancel an order ---")
 client.cookies.set("staff_id", str(owner.id))

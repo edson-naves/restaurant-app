@@ -144,6 +144,32 @@ def do_split_equally(
     return RedirectResponse(f"/orders/{order_id}/pay", status_code=303)
 
 
+@router.post("/orders/{order_id}/reset-split")
+def reset_split(
+    order_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("payments.take")),
+):
+    """Undo a split (4.2.3): un-share every item back to unassigned.
+
+    People change their mind — after an equal split they may want to pay
+    together or divide it differently. This clears the shares so items can be
+    reassigned or paid as a whole. Blocked once any payment has landed, since
+    that money is already tied to the current split.
+    """
+    order = _load(db, order_id)
+    if any(p.allocations for p in order.payments):
+        raise HTTPException(
+            400,
+            "Part of this order is already paid — void the payment before "
+            "changing the split.",
+        )
+    for item in order.items:
+        assign_item_to_seat(db, item, None)   # un-share, back to unassigned
+    db.commit()
+    return RedirectResponse(f"/orders/{order_id}/pay", status_code=303)
+
+
 @router.post("/orders/{order_id}/items/{item_id}/assign")
 def assign_seat(
     order_id: int,

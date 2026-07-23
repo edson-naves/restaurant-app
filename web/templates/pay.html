@@ -169,11 +169,20 @@
     {% if panel.owed_cents > 0 and can('payments.take') %}
     <div class="card">
       <h2>Split equally <span class="spec">req 4.2.3</span></h2>
-      <form method="post" action="/orders/{{ order.id }}/split-equally" style="display:flex;gap:8px">
-        <input type="number" name="guests" value="{{ order.seats|length or 2 }}" min="1" max="20">
-        <button class="btn">Split</button>
-      </form>
-      <p class="sub" style="margin:8px 0 0;font-size:11px">Divides every item across N seats. Each seat still picks its own instrument.</p>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <form method="post" action="/orders/{{ order.id }}/split-equally" style="display:flex;gap:8px">
+          <input type="number" name="guests" value="{{ order.seats|length or 2 }}" min="1" max="40">
+          <button class="btn">Split</button>
+        </form>
+        {# Undo is offered whenever a split is in effect (any item shared), so a
+           party that changes its mind can go back to one bill or re-split. #}
+        {% if order.items|selectattr('is_shared')|list %}
+        <form method="post" action="/orders/{{ order.id }}/reset-split">
+          <button class="btn warn">↩ Reset split</button>
+        </form>
+        {% endif %}
+      </div>
+      <p class="sub" style="margin:8px 0 0;font-size:11px">Divides every item across N seats. Each seat still picks its own instrument. Reset clears it back to one bill.</p>
     </div>
 
     <div class="card">
