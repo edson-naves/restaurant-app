@@ -128,17 +128,21 @@
     {% if can('orders.manage') %}
     <form method="post" action="/orders/{{ order.id }}/items" id="addf" style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
       <input type="hidden" name="menu_item_id" id="mid">
+      <input type="hidden" name="category" value="{{ active_cat }}">
+      <input type="hidden" name="seat_number" id="seatf" value="{{ active_seat }}">
       <p id="picked" class="sub" style="margin:0 0 10px">Select an item above.</p>
-      <div class="row">
-        <div class="field">
-          <label>Seat (0 = table / unassigned)</label>
-          <select name="seat_number">
-            <option value="0">Unassigned</option>
-            {% for s in order.seats %}
-            <option value="{{ s.seat_number }}">Seat {{ s.seat_number }}</option>
-            {% endfor %}
-          </select>
+      {% if order.seats %}
+      <div class="field">
+        <label>Adding for <span class="sub" style="font-weight:400">— advances to the next seat automatically</span></label>
+        <div class="seatbtns">
+          <button type="button" class="seatbtn {{ 'on' if active_seat == 0 else '' }}" data-seat="0" onclick="pickSeat(0)">Table</button>
+          {% for s in order.seats %}
+          <button type="button" class="seatbtn {{ 'on' if active_seat == s.seat_number else '' }}" data-seat="{{ s.seat_number }}" onclick="pickSeat({{ s.seat_number }})">Seat {{ s.seat_number }}</button>
+          {% endfor %}
         </div>
+      </div>
+      {% endif %}
+      <div class="row">
         <div class="field">
           <label>Quantity</label>
           <input type="number" name="quantity" value="1" min="1" max="20">
@@ -294,6 +298,16 @@ function pick(id, name, price, course) {
   // fully overridable before Add.
   var sel = document.getElementById('coursesel');
   if (sel) sel.value = String(course);
+}
+
+// Seat selector: set which seat the next item is added for, and highlight it.
+// The seat auto-advances after each add (server-side), so this is only needed
+// to override — e.g. to add a second item to a seat you've moved past.
+function pickSeat(n) {
+  document.getElementById('seatf').value = String(n);
+  document.querySelectorAll('.seatbtn').forEach(function (b) {
+    b.classList.toggle('on', b.getAttribute('data-seat') === String(n));
+  });
 }
 
 // Close an open edit popover when clicking anywhere outside it — a native

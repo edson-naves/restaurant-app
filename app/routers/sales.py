@@ -432,6 +432,7 @@ def order_screen(
     order_id: int,
     request: Request,
     category: int | None = None,
+    seat: int | None = None,
     db: Session = Depends(get_db),
     staff: Staff = Depends(current_staff),
 ):
@@ -443,6 +444,14 @@ def order_screen(
         select(MenuCategory).order_by(MenuCategory.sort_order)
     ).scalars().all()
     active_cat = category or (categories[0].id if categories else None)
+    # Which seat new items are being added for. The waiter takes the order seat
+    # by seat, so it defaults to the first seat and auto-advances after each add
+    # (see add_item); 0 means the table / unassigned.
+    seat_numbers = [s.seat_number for s in order.seats]
+    if seat is not None:
+        active_seat = seat if seat in seat_numbers else 0
+    else:
+        active_seat = seat_numbers[0] if seat_numbers else 0
     # 86'd items (available=False) drop off the order screen alongside items the
     # owner has taken off the menu (is_active=False).
     items = db.execute(
@@ -491,6 +500,7 @@ def order_screen(
         "active_cat": active_cat, "menu_items": items, "modifiers": modifiers,
         "panel": panel, "subtotal": sum(i.line_total_cents for i in order.items),
         "free_tables": free_tables, "mergeable_tables": mergeable_tables,
+        "active_seat": active_seat,
         "title": f"Order {order.code}",
     })
 
@@ -503,6 +513,7 @@ def add_item(
     quantity: int = Form(1),
     notes: str = Form(""),
     course: int = Form(0),
+    category: int = Form(0),
     modifier_ids: list[int] = Form(default=[]),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("orders.manage")),
@@ -548,7 +559,19 @@ def add_item(
                 OrderItemModifier(modifier_id=mod.id, price_delta_cents=mod.price_delta_cents)
             )
     db.commit()
-    return RedirectResponse(f"/orders/{order_id}", status_code=303)
+
+    # Auto-advance to the next seat so the waiter goes round the table without
+    # re-picking the seat each time; stay on the last seat (and on the table /
+    # unassigned slot). Keep the current menu category too.
+    n_seats = len(order.seats)
+    if 1 <= seat_number < n_seats:
+        next_seat = seat_number + 1
+    else:
+        next_seat = seat_number
+    dest = f"/orders/{order_id}?seat={next_seat}"
+    if category:
+        dest += f"&category={category}"
+    return RedirectResponse(dest, status_code=303)
 
 
 @router.post("/orders/{order_id}/items/{item_id}/edit")

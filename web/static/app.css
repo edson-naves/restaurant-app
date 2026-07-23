@@ -176,6 +176,17 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .mi .pr { color: var(--muted); font-variant-numeric: tabular-nums; }
 .catbar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
 
+/* Seat picker on the order screen — chips instead of a dropdown, so the active
+   seat is visible and taps are one step. The active seat auto-advances. */
+.seatbtns { display: flex; gap: 6px; flex-wrap: wrap; }
+.seatbtn {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--ink);
+  border-radius: 999px; padding: 8px 14px; font: inherit; font-weight: 600;
+  cursor: pointer; min-height: 38px;
+}
+.seatbtn:hover { border-color: var(--accent); }
+.seatbtn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
 /* ---------- payment (4.2) ---------- */
 .seat { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-bottom: 10px; background: var(--panel-2); }
 .seat.settled { opacity: .62; }
