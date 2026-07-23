@@ -65,6 +65,7 @@
         {% for i in c.lines %}
         <li>
           {{ i.quantity }}× {{ i.menu_item.name }}
+          {% for o in i.options %}<br><span class="sub">+ {{ o.label }}</span>{% endfor %}
           {% for m in i.modifiers %}<br><span class="sub">+ {{ m.modifier.name }}</span>{% endfor %}
           {% if i.allergens %}<br><span class="allergy-chit">⚠ ALLERGY: {{ i.allergens }}</span>{% endif %}
           {% if i.notes %}<br><span class="note">✎ {{ i.notes }}</span>{% endif %}

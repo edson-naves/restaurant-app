@@ -615,12 +615,14 @@ def _issue_receipt(
     lines = []
     for alloc in payment.allocations:
         item = alloc.order_item
+        extras = [o.label for o in item.options] + [m.modifier.name for m in item.modifiers]
         lines.append(
             {
                 "item": item.menu_item.name,
                 "qty": item.quantity,
                 "amount": money(alloc.amount_cents),
                 "shared": item.is_shared,
+                "options": extras,
             }
         )
 

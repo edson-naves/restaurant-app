@@ -247,6 +247,32 @@ db.expire_all()
 check(db.get(type(order.items[0]), steak_line.id).allergens == "",
       "clearing the allergen boxes removes them")
 
+# Modifier groups (4.1.2): required choice enforced, add-ons priced.
+from app.models.oltp import MenuItem as _MI, ModifierGroup as _MG  # noqa: E402
+lamb = db.execute(select(_MI).where(_MI.name == "Lamb Chops")).scalars().first()
+if lamb and lamb.modifier_groups:
+    cook = next(g for g in lamb.modifier_groups if g.name == "Cooking level")
+    addons = next(g for g in lamb.modifier_groups if g.name == "Add-ons")
+    medium = next(o for o in cook.options if o.name == "Medium")
+    extra_chop = next(o for o in addons.options if o.name == "Extra chop")  # +$6
+    # Missing the required cooking level is refused.
+    r = client.post(f"/orders/{order_id}/items",
+                    data={"menu_item_id": lamb.id, "seat_number": 1})
+    check(r.status_code == 400, "a required modifier group must be chosen")
+    # With the cooking level + a priced add-on it goes on, priced correctly.
+    r = client.post(f"/orders/{order_id}/items",
+                    data={"menu_item_id": lamb.id, "seat_number": 1,
+                          "option_ids": [medium.id, extra_chop.id]})
+    check(r.status_code == 200, "a valid grouped item is added")
+    db.expire_all()
+    lamb_line = next(i for i in db.get(Order, order_id).items if i.menu_item_id == lamb.id)
+    labels = {o.label for o in lamb_line.options}
+    check(labels == {"Medium", "Extra chop"}, "the chosen options are recorded", str(labels))
+    check(lamb_line.line_total_cents == lamb.price_cents + extra_chop.price_delta_cents,
+          "the add-on price is added to the line", money(lamb_line.line_total_cents))
+    # Remove it so the downstream payment maths are unchanged.
+    client.post(f"/orders/{order_id}/items/{lamb_line.id}/remove")
+
 # Step 4: send to kitchen.
 r = client.post(f"/orders/{order_id}/send")
 db.expire_all()

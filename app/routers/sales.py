@@ -25,6 +25,7 @@ from app.models.oltp import (
     Order,
     OrderItem,
     OrderItemModifier,
+    OrderItemOption,
     OrderStatus,
     build_allergens,
     RestaurantTable,
@@ -435,12 +436,20 @@ def order_screen(
     request: Request,
     category: int | None = None,
     seat: int | None = None,
+    item: int | None = None,
     db: Session = Depends(get_db),
     staff: Staff = Depends(current_staff),
 ):
     order = db.get(Order, order_id)
     if order is None:
         raise HTTPException(404, "Order not found")
+
+    # The item currently being configured (its modifier groups drive the panel).
+    configuring = None
+    if item:
+        configuring = db.get(MenuItem, item)
+        if configuring and not (configuring.is_active and configuring.available):
+            configuring = None
 
     categories = db.execute(
         select(MenuCategory).order_by(MenuCategory.sort_order)
@@ -527,6 +536,7 @@ def order_screen(
         "free_tables": free_tables, "mergeable_tables": mergeable_tables,
         "active_seat": active_seat,
         "seat_cards": seat_cards, "table_card": table_card,
+        "configuring": configuring,
         "title": f"Order {order.code}",
     })
 
@@ -541,6 +551,7 @@ def add_item(
     course: int = Form(0),
     category: int = Form(0),
     modifier_ids: list[int] = Form(default=[]),
+    option_ids: list[int] = Form(default=[]),
     allergens: list[str] = Form(default=[]),
     allergen_other: str = Form(""),
     db: Session = Depends(get_db),
@@ -559,6 +570,19 @@ def add_item(
     if not mi.available or not mi.is_active:
         # A stale order screen could still POST an item 86'd moments ago.
         raise HTTPException(400, f"{mi.name} is not available right now.")
+
+    # 4.1.2 — validate the item's modifier groups against what was picked, and
+    # gather the chosen options (snapshotted onto the line below).
+    chosen = set(option_ids)
+    picked_options = []
+    for g in mi.modifier_groups:
+        picks = [o for o in g.options if o.id in chosen]
+        need = g.min_select or (1 if g.required else 0)
+        if len(picks) < need:
+            raise HTTPException(400, f"Please choose {g.name} for {mi.name}.")
+        if g.max_select and len(picks) > g.max_select:
+            raise HTTPException(400, f"Choose at most {g.max_select} for {g.name}.")
+        picked_options.extend((g, o) for o in picks)
 
     seat = None
     if seat_number:
@@ -587,6 +611,12 @@ def add_item(
             item.modifiers.append(
                 OrderItemModifier(modifier_id=mod.id, price_delta_cents=mod.price_delta_cents)
             )
+    # Snapshot the chosen modifier-group options (name + price) onto the line.
+    for g, o in picked_options:
+        item.options.append(OrderItemOption(
+            option_id=o.id, group_name=g.name, label=o.name,
+            price_delta_cents=o.price_delta_cents,
+        ))
 
     # 4.2.4 — an item added to the table (seat 0) is a shared item: split it
     # evenly across every seat right away, so "Table" means shared, not just

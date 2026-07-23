@@ -23,6 +23,8 @@ from app.models.oltp import (
     MenuCategory,
     MenuItem,
     Modifier,
+    ModifierGroup,
+    ModifierOption,
     Order,
     OrderItem,
     OrderItemModifier,
@@ -150,6 +152,25 @@ MODIFIERS = [
     ("Spicy", 0),
 ]
 
+# 4.1.2 — grouped, rule-based modifiers per item:
+#   item -> [(group, required, min_select, max_select, [(option, price_cents)])]
+MODIFIER_GROUPS = {
+    "Lamb Chops": [
+        ("Cooking level", True, 1, 1,
+         [("Rare", 0), ("Medium Rare", 0), ("Medium", 0), ("Medium Well", 0), ("Well Done", 0)]),
+        ("Sauce", False, 0, 1,
+         [("None", 0), ("Peppercorn", 150), ("Béarnaise", 150), ("Mint jelly", 0)]),
+        ("Add-ons", False, 0, 0,
+         [("Extra chop", 600), ("Grilled mushrooms", 200), ("Truffle butter", 250)]),
+    ],
+    "Chicken Parmesan": [
+        ("Pasta side", True, 1, 1,
+         [("Spaghetti", 0), ("Penne", 0), ("Side salad instead", 0)]),
+        ("Add-ons", False, 0, 0,
+         [("Extra cheese", 200), ("Extra sauce", 100), ("Chilli flakes", 0)]),
+    ],
+}
+
 SPECIAL_NOTES = [
     "", "", "", "", "",
     "Allergy: nuts", "No coriander please", "Birthday - candle on dessert",
@@ -228,6 +249,22 @@ def seed_reference(db: Session) -> dict:
         m = Modifier(name=name, price_delta_cents=delta)
         db.add(m)
         modifiers.append(m)
+
+    # 4.1.2 — grouped, rule-based modifiers on a couple of demo items. Kept off
+    # the items the e2e suite orders, which add them without options.
+    by_name = {mi.name: mi for mi, _ in items}
+    for item_name, groups in MODIFIER_GROUPS.items():
+        mi = by_name.get(item_name)
+        if mi is None:
+            continue
+        for gi, (gname, req, mn, mx, opts) in enumerate(groups):
+            g = ModifierGroup(menu_item_id=mi.id, name=gname, required=req,
+                              min_select=mn, max_select=mx, sort_order=gi)
+            db.add(g)
+            db.flush()
+            for oi, (oname, price) in enumerate(opts):
+                db.add(ModifierOption(group_id=g.id, name=oname,
+                                      price_delta_cents=price, sort_order=oi))
 
     db.flush()
     return {

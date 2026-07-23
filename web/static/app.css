@@ -180,10 +180,13 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .split { display: grid; grid-template-columns: 1.15fr .85fr; gap: 16px; align-items: start; }
 @media (max-width: 900px) { .split { grid-template-columns: 1fr; } }
 .menu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-.mi { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; text-align: left; cursor: pointer; color: var(--ink); font: inherit; }
-.mi:hover { border-color: var(--accent); }
+.mi { display: block; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; text-align: left; cursor: pointer; color: var(--ink); font: inherit; text-decoration: none; }
+.mi:hover { border-color: var(--accent); text-decoration: none; }
+.mi.on { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
 .mi .nm { font-weight: 600; display: block; margin-bottom: 4px; }
 .mi .pr { color: var(--muted); font-variant-numeric: tabular-nums; }
+/* "Required" flag on a modifier group. */
+.req { background: rgba(212,72,59,.2); color: #ff9a90; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; padding: 1px 6px; border-radius: 4px; }
 .catbar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
 
 /* Seat picker on the order screen — chips instead of a dropdown, so the active

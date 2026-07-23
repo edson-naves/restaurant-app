@@ -303,6 +303,10 @@ class MenuItem(Base):
     is_shareable: Mapped[bool] = mapped_column(Boolean, default=False)
 
     category: Mapped["MenuCategory"] = relationship(back_populates="items")
+    modifier_groups: Mapped[list["ModifierGroup"]] = relationship(
+        back_populates="menu_item", cascade="all, delete-orphan",
+        order_by="ModifierGroup.sort_order, ModifierGroup.id",
+    )
 
     @property
     def default_course(self) -> int:
@@ -318,6 +322,54 @@ class Modifier(Base):
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     price_delta_cents: Mapped[int] = mapped_column(Integer, default=0)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("menu_category.id"), nullable=True)
+
+
+class ModifierGroup(Base):
+    """Section 4.1.2 — a set of choices for a menu item (e.g. "Cooking level",
+    "Cheese", "Add-ons"), with rules on how many may be picked.
+
+    required + min_select force a choice ("choose one cooking level"); max_select
+    caps it (0 = unlimited). Each option carries its own price delta, so add-ons
+    can cost extra while a cooking level is free.
+    """
+    __tablename__ = "modifier_group"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    menu_item_id: Mapped[int] = mapped_column(
+        ForeignKey("menu_item.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    min_select: Mapped[int] = mapped_column(Integer, default=0)
+    max_select: Mapped[int] = mapped_column(Integer, default=0)   # 0 = unlimited
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    menu_item: Mapped["MenuItem"] = relationship(back_populates="modifier_groups")
+    options: Mapped[list["ModifierOption"]] = relationship(
+        back_populates="group", cascade="all, delete-orphan",
+        order_by="ModifierOption.sort_order, ModifierOption.id",
+        lazy="selectin",
+    )
+
+    @property
+    def single(self) -> bool:
+        """True when at most one option may be chosen (radio, not checkboxes)."""
+        return self.max_select == 1
+
+
+class ModifierOption(Base):
+    """One choice within a ModifierGroup, with its price delta (4.1.2)."""
+    __tablename__ = "modifier_option"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(
+        ForeignKey("modifier_group.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    price_delta_cents: Mapped[int] = mapped_column(Integer, default=0)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    group: Mapped["ModifierGroup"] = relationship(back_populates="options")
 
 
 class PaymentInstrument(Base):
@@ -438,6 +490,10 @@ class OrderItem(Base):
     modifiers: Mapped[list["OrderItemModifier"]] = relationship(
         cascade="all, delete-orphan", lazy="selectin"
     )
+    options: Mapped[list["OrderItemOption"]] = relationship(
+        cascade="all, delete-orphan", lazy="selectin",
+        order_by="OrderItemOption.id",
+    )
     shares: Mapped[list["SharedItemShare"]] = relationship(
         cascade="all, delete-orphan", lazy="selectin"
     )
@@ -445,7 +501,9 @@ class OrderItem(Base):
 
     @property
     def modifier_total_cents(self) -> int:
-        return sum(m.price_delta_cents for m in self.modifiers)
+        # Both legacy flat modifiers and grouped-option selections add to the line.
+        return (sum(m.price_delta_cents for m in self.modifiers)
+                + sum(o.price_delta_cents for o in self.options))
 
     @property
     def line_total_cents(self) -> int:
@@ -465,6 +523,27 @@ class OrderItemModifier(Base):
     price_delta_cents: Mapped[int] = mapped_column(Integer, default=0)
 
     modifier: Mapped["Modifier"] = relationship(lazy="joined")
+
+
+class OrderItemOption(Base):
+    """A chosen modifier-group option on an order line (4.1.2), snapshotted.
+
+    Records the group and option names and the price delta at order time, so
+    the line, receipt and kitchen ticket stay correct even if the menu's
+    modifier definitions change later.
+    """
+    __tablename__ = "order_item_option"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_item_id: Mapped[int] = mapped_column(
+        ForeignKey("order_item.id", ondelete="CASCADE"), nullable=False
+    )
+    option_id: Mapped[int | None] = mapped_column(
+        ForeignKey("modifier_option.id"), nullable=True
+    )
+    group_name: Mapped[str] = mapped_column(String(80), default="")
+    label: Mapped[str] = mapped_column(String(80), default="")
+    price_delta_cents: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class SharedItemShare(Base):

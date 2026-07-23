@@ -148,23 +148,25 @@
 
     <div class="menu-grid">
       {% for mi in menu_items %}
-      <button class="mi" type="button" onclick="pick({{ mi.id }}, '{{ mi.name|replace("'", "\\'") }}', {{ mi.price_cents }}, {{ mi.default_course }})">
-        <span class="nm">{{ mi.name }}</span>
+      <a class="mi {{ 'on' if configuring and configuring.id == mi.id else '' }}"
+         href="/orders/{{ order.id }}?item={{ mi.id }}&seat={{ active_seat }}&category={{ active_cat }}">
+        <span class="nm">{{ mi.name }}{% if mi.modifier_groups %} <span class="spec">options</span>{% endif %}</span>
         <span class="pr">${{ mi.price_cents|money }}{% if mi.is_shareable %} · shareable{% endif %}</span>
-      </button>
+      </a>
       {% endfor %}
     </div>
 
     {% if can('orders.manage') %}
     <form method="post" action="/orders/{{ order.id }}/items" id="addf" style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
-      <input type="hidden" name="menu_item_id" id="mid">
       <input type="hidden" name="category" value="{{ active_cat }}">
       <input type="hidden" name="seat_number" id="seatf" value="{{ active_seat }}">
-      <p id="picked" class="sub" style="margin:0 0 10px">Select an item above.</p>
+      {% if configuring %}
+      <input type="hidden" name="menu_item_id" value="{{ configuring.id }}">
+      <p class="sub" style="margin:0 0 10px">Configuring <b>{{ configuring.name }}</b> · base ${{ configuring.price_cents|money }}</p>
       <div class="row">
         <div class="field">
           <label>Quantity</label>
-          <input type="number" name="quantity" value="1" min="1" max="20">
+          <input type="number" name="quantity" id="qty" value="1" min="1" max="20" oninput="updAddPrice()">
         </div>
         <div class="field">
           <label>Course <span class="spec">req 4.1.3</span></label>
@@ -176,14 +178,36 @@
           </select>
         </div>
       </div>
+
+      {% if configuring.modifier_groups %}
+      {# Grouped, rule-based modifiers (4.1.2). Single-select groups behave like
+         radios (JS unchecks siblings); the server enforces required/min/max. #}
+      {% for g in configuring.modifier_groups %}
+      <div class="field">
+        <label>{{ g.name }}
+          {% if g.required %}<span class="req">Required</span>{% endif %}
+          <span class="sub" style="font-weight:400">— {{ 'choose one' if g.single else ('choose any' if not g.max_select else 'up to ' ~ g.max_select) }}</span>
+        </label>
+        <div class="tipset">
+          {% for o in g.options %}
+          <label><input type="checkbox" name="option_ids" value="{{ o.id }}"
+                 data-group="{{ g.id }}" data-single="{{ 1 if g.single else 0 }}" data-price="{{ o.price_delta_cents }}"
+                 onchange="optChange(this)"> {{ o.name }}{% if o.price_delta_cents %} +${{ o.price_delta_cents|money }}{% endif %}</label>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+      {% else %}
       <div class="field">
         <label>Modifiers <span class="spec">req 4.1.2</span></label>
         <div class="tipset">
           {% for m in modifiers %}
-          <label><input type="checkbox" name="modifier_ids" value="{{ m.id }}"> {{ m.name }}{% if m.price_delta_cents %} +${{ m.price_delta_cents|money }}{% endif %}</label>
+          <label><input type="checkbox" name="modifier_ids" value="{{ m.id }}" data-price="{{ m.price_delta_cents }}" onchange="updAddPrice()"> {{ m.name }}{% if m.price_delta_cents %} +${{ m.price_delta_cents|money }}{% endif %}</label>
           {% endfor %}
         </div>
       </div>
+      {% endif %}
+
       <div class="field">
         <label>Allergies <span class="spec">req 4.1.2</span></label>
         <div class="tipset">
@@ -197,7 +221,10 @@
         <label>Special instructions</label>
         <input type="text" name="notes" placeholder="e.g. no ice, birthday">
       </div>
-      <button class="btn primary" id="addb" disabled>Add to order</button>
+      <button class="btn primary" id="addb">Add to order <span id="addp"></span></button>
+      {% else %}
+      <p class="sub" style="margin:0">Select an item above to configure it.</p>
+      {% endif %}
     </form>
     {% endif %}
   </div>
@@ -224,6 +251,7 @@
             {% if i.allocations %}<span class="pill paid" title="Already paid — can't be changed or removed">paid ✓</span>{% endif %}
             {# Provenance (4.1.1): this line arrived from another table via merge. #}
             {% if i.merged_from_order and i.merged_from_order.table %}<span class="pill open" title="Merged in from {{ i.merged_from_order.code }}">⤷ from Table {{ i.merged_from_order.table.number }}</span>{% endif %}
+            {% for o in i.options %}<br><span class="sub" style="font-size:11px">+ {{ o.label }}{% if o.price_delta_cents %} (+${{ o.price_delta_cents|money }}){% endif %}</span>{% endfor %}
             {% for m in i.modifiers %}<br><span class="sub" style="font-size:11px">+ {{ m.modifier.name }}</span>{% endfor %}
             {% if i.allergens %}<br><span class="pill allergy" title="Allergy — flag to the kitchen">⚠ {{ i.allergens }}</span>{% endif %}
             {% if i.notes %}<br><span style="color:#f2c46b;font-size:11px">✎ {{ i.notes }}</span>{% endif %}
@@ -330,16 +358,32 @@
 </div>
 
 <script>
-function pick(id, name, price, course) {
-  document.getElementById('mid').value = id;
-  document.getElementById('picked').textContent = 'Adding: ' + name + '  ($' + (price/100).toFixed(2) + ')';
-  document.getElementById('addb').disabled = false;
-  // Pre-select the item's natural course (Starter/Main/Dessert) so a Caesar
-  // Salad fires as a starter without the waiter touching the dropdown. Still
-  // fully overridable before Add.
-  var sel = document.getElementById('coursesel');
-  if (sel) sel.value = String(course);
+// Item configurator (4.1.2). Base price of the item being configured; 0 when
+// nothing is selected (no form on screen).
+var CFG_BASE = {{ configuring.price_cents if configuring else 0 }};
+
+// Single-select groups act like radios: checking one unchecks its siblings.
+function optChange(cb) {
+  if (cb.dataset.single === '1' && cb.checked) {
+    document.querySelectorAll('#addf input[data-group="' + cb.dataset.group + '"]').forEach(function (o) {
+      if (o !== cb) o.checked = false;
+    });
+  }
+  updAddPrice();
 }
+
+// Live total on the Add button = (base + ticked option/modifier deltas) x qty.
+function updAddPrice() {
+  var sum = CFG_BASE;
+  document.querySelectorAll('#addf input[type=checkbox]:checked').forEach(function (o) {
+    if (o.dataset.price) sum += parseInt(o.dataset.price, 10) || 0;
+  });
+  var qtyEl = document.getElementById('qty');
+  var qty = qtyEl ? (parseInt(qtyEl.value, 10) || 1) : 1;
+  var out = document.getElementById('addp');
+  if (out) out.textContent = '· $' + ((sum * qty) / 100).toFixed(2);
+}
+document.addEventListener('DOMContentLoaded', updAddPrice);
 
 // Seat selector: set which seat the next item is added for, and highlight it.
 // The seat holds until the waiter taps another chip.
