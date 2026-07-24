@@ -66,6 +66,33 @@ PERMISSIONS: dict[str, set[str]] = {
     "settings":        {Role.OWNER},                  # manager explicitly excluded
 }
 
+# Plain-English name for each permission, in the order they read on the staff
+# page's access-level reference. Kept next to PERMISSIONS so they don't drift.
+PERMISSION_LABELS: dict[str, str] = {
+    "orders.manage":     "Take & edit orders",
+    "payments.take":     "Take payments",
+    "reservations":      "Reservations & waitlist",
+    "menu.availability": "86 items (out of stock)",
+    "kitchen.view":      "See the kitchen display",
+    "kitchen.update":    "Update kitchen status",
+    "delivery.view":     "View delivery queue",
+    "delivery.update":   "Manage delivery orders",
+    "discount.approve":  "Approve discounts & refunds",
+    "reports.view":      "Reports & end-of-day close",
+    "settings":          "Menu, tables & settings",
+    "staff.manage":      "Manage staff",
+}
+
+
+def role_capabilities() -> dict[str, list[str]]:
+    """Per-role list of what it can reach, inverted from PERMISSIONS, for the
+    staff page's access-level reference. Owner is everything by definition."""
+    caps: dict[str, list[str]] = {r: [] for r in Role.ALL}
+    for perm, label in PERMISSION_LABELS.items():
+        for role in PERMISSIONS.get(perm, set()):
+            caps[role].append(label)
+    return caps
+
 
 def current_staff(request: Request, db: Session = Depends(get_db)) -> Staff:
     """The logged-in staff, from the session cookie set at /login.

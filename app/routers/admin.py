@@ -26,7 +26,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import render, require
+from app.deps import render, require, role_capabilities
 from app.services import settings as settings_svc
 from app.models.oltp import (
     Floor,
@@ -914,6 +914,7 @@ def staff_page(
             p.id: sum(1 for o in live if o.waiter_id == p.id) for p in people
         },
         "roles": Role.ALL,
+        "role_caps": role_capabilities(),
         "title": "Manage staff",
     })
 

@@ -11,6 +11,32 @@
   </div>
 </div>
 
+<div class="card">
+  <strong>Access levels</strong>
+  <p class="sub" style="margin:2px 0 12px">The role you give a person decides which screens they can reach.</p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>Role</th><th>Can access</th></tr></thead>
+    <tbody>
+      {% for r in roles %}
+      <tr>
+        <td style="white-space:nowrap;vertical-align:top;padding-top:10px">
+          <strong style="text-transform:capitalize">{{ r.replace('_',' ') }}</strong>
+        </td>
+        <td>
+          {% if r == 'owner' %}
+          <span class="pill ok">Full access — everything, including staff &amp; settings</span>
+          {% else %}
+          {% for cap in role_caps[r] %}<span class="pill open" style="margin:2px 4px 2px 0;text-transform:none">{{ cap }}</span>{% endfor %}
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+
 <div class="row">
   <div class="card">
     <strong>Add staff</strong>
