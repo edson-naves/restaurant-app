@@ -101,8 +101,14 @@
     </div>
 
     <div class="card" id="book">
-      <h2>Book a reservation</h2>
-      <form method="post" action="/reservations">
+      <div class="between" style="margin-bottom:14px">
+        <h2 style="margin:0">Book a reservation</h2>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <label class="tick" style="margin:0"><input form="bookform" type="checkbox" name="send_confirmation" checked> Send confirmation <span class="sub" style="font-weight:400">— guest gets an SMS</span></label>
+          <button form="bookform" class="btn primary">Add reservation</button>
+        </div>
+      </div>
+      <form method="post" action="/reservations" id="bookform">
         <div class="formline">
           <div class="field" style="flex:2;min-width:150px;margin:0"><label>Guest name</label><input type="text" name="guest_name" placeholder="e.g. John Smith" required></div>
           <div class="field" style="width:140px;margin:0">
@@ -126,10 +132,6 @@
             </select>
           </div>
           <div class="field" style="flex:1;min-width:180px;margin:0"><label>Notes (optional)</label><input type="text" name="notes" placeholder="e.g. window seat, birthday..."></div>
-        </div>
-        <div class="between" style="margin-top:12px">
-          <label class="tick" style="margin:0"><input type="checkbox" name="send_confirmation" checked> Send confirmation <span class="sub" style="font-weight:400">— guest gets an SMS</span></label>
-          <button class="btn primary">Add reservation</button>
         </div>
       </form>
     </div>
