@@ -128,10 +128,15 @@ h2 { font-size: 17px; margin: 0 0 12px; }
 .gt-sub { font-size: 11px; color: var(--muted); margin-top: 6px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 
-input[type=text], input[type=number], input[type=date], select, textarea {
+input[type=text], input[type=number], input[type=date], input[type=time],
+input[type=email], input[type=tel], input[type=search], input[type=datetime-local],
+select, textarea {
   background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
   border-radius: 8px; padding: 9px 12px; font: inherit; min-height: 40px; width: 100%;
 }
+/* Tint the native date/time picker glyphs for the dark theme. */
+input[type=date]::-webkit-calendar-picker-indicator,
+input[type=time]::-webkit-calendar-picker-indicator { filter: invert(0.7); cursor: pointer; }
 label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 4px; font-weight: 600; }
 .field { margin-bottom: 12px; }
 
