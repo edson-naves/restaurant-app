@@ -944,6 +944,13 @@ check(booking is not None and booking.kind == "reservation" and booking.status =
       "a reservation is booked and waiting")
 check(walkin is not None and walkin.kind == "waitlist" and walkin.quoted_minutes == 15,
       "a walk-in joins the waitlist with a quoted wait")
+# Edit a reservation (name, party, time).
+client.post(f"/reservations/{booking.id}/edit",
+            data={"guest_name": "Edson", "party_size": 6, "date": "2026-12-31", "time": "20:15"})
+db.expire_all()
+booking = db.get(Reservation, booking.id)
+check(booking.guest_name == "Edson" and booking.party_size == 6 and booking.at.strftime('%H:%M') == "20:15",
+      "a reservation can be edited")
 # Both appear on the page.
 page = client.get("/reservations").text
 check("Booking Test" in page and "Walkin Test" in page,

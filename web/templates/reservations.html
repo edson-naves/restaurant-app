@@ -1,12 +1,12 @@
 {% extends "base.html" %}
 {% block body %}
 
-{# --- row action buttons (Seat / No-show / Cancel), aligned in one row --- #}
+{# --- row actions: Seat ▾ · edit ✎ · cancel 🗑 --- #}
 {% macro seat_form(r) %}
 <div class="res-actions">
   {% if free_tables %}
   <details class="edit-menu">
-    <summary class="btn sm primary" style="display:inline-block">Seat ▾</summary>
+    <summary class="btn sm" style="display:inline-block">Seat ▾</summary>
     <form method="post" action="/reservations/{{ r.id }}/seat" class="edit-pop">
       <div class="field" style="margin-bottom:8px">
         <label>Open on table</label>
@@ -20,8 +20,28 @@
     </form>
   </details>
   {% endif %}
-  <form method="post" action="/reservations/{{ r.id }}/no-show"><button class="btn sm" title="No-show">No-show</button></form>
-  <form method="post" action="/reservations/{{ r.id }}/cancel"><button class="icon-btn" title="Cancel reservation">🗑</button></form>
+  <details class="edit-menu">
+    <summary class="btn sm" style="display:inline-block" title="Edit">✎</summary>
+    <div class="edit-pop">
+      <form method="post" action="/reservations/{{ r.id }}/edit">
+        <div class="field" style="margin-bottom:8px"><label>Guest name</label><input type="text" name="guest_name" value="{{ r.guest_name }}" required></div>
+        <div class="field" style="margin-bottom:8px"><label>Party size</label><input type="number" name="party_size" value="{{ r.party_size }}" min="1" max="40"></div>
+        {% if r.kind == 'reservation' %}
+        <div class="field" style="margin-bottom:8px"><label>Date</label><input type="date" name="date" value="{{ r.at.strftime('%Y-%m-%d') }}"></div>
+        <div class="field" style="margin-bottom:8px"><label>Time</label><input type="time" name="time" value="{{ r.at.strftime('%H:%M') }}"></div>
+        {% else %}
+        <div class="field" style="margin-bottom:8px"><label>Quoted wait (min)</label><input type="number" name="quoted_minutes" value="{{ r.quoted_minutes }}" min="0" max="240" step="5"></div>
+        {% endif %}
+        <div class="field" style="margin-bottom:8px"><label>Phone</label><input type="text" name="phone" value="{{ r.phone }}"></div>
+        <div class="field" style="margin-bottom:8px"><label>Notes</label><input type="text" name="notes" value="{{ r.notes }}"></div>
+        <button class="btn sm primary" style="width:100%">Save changes</button>
+      </form>
+      <form method="post" action="/reservations/{{ r.id }}/no-show" style="margin-top:6px">
+        <button class="btn sm" style="width:100%">Mark no-show</button>
+      </form>
+    </div>
+  </details>
+  <form method="post" action="/reservations/{{ r.id }}/cancel"><button class="btn sm danger" title="Cancel reservation">🗑</button></form>
 </div>
 {% endmacro %}
 

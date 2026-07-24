@@ -112,6 +112,43 @@ def add_reservation(
     return RedirectResponse("/reservations", status_code=303)
 
 
+@router.post("/reservations/{res_id}/edit")
+def edit_reservation(
+    res_id: int,
+    guest_name: str = Form(...),
+    party_size: int = Form(2),
+    date: str = Form(""),
+    time: str = Form(""),
+    quoted_minutes: int = Form(0),
+    phone: str = Form(""),
+    notes: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("reservations")),
+):
+    """Edit a waiting reservation or walk-in (4.1.5)."""
+    res = db.get(Reservation, res_id)
+    if res is None:
+        raise HTTPException(404, "Reservation not found")
+    if res.status != ReservationStatus.WAITING:
+        raise HTTPException(400, "That party is no longer waiting.")
+    if not guest_name.strip():
+        raise HTTPException(400, "A name is required.")
+    res.guest_name = guest_name.strip()
+    res.party_size = max(1, party_size)
+    res.phone = phone.strip()
+    res.notes = notes.strip()
+    if res.kind == "reservation" and (date or time):
+        stamp = f"{date or res.at.date().isoformat()}T{time or res.at.strftime('%H:%M')}"
+        try:
+            res.at = datetime.fromisoformat(stamp)
+        except ValueError:
+            raise HTTPException(400, "That date and time could not be read.")
+    if res.kind == "waitlist":
+        res.quoted_minutes = max(0, quoted_minutes)
+    db.commit()
+    return RedirectResponse("/reservations", status_code=303)
+
+
 @router.post("/waitlist")
 def add_walkin(
     guest_name: str = Form(...),
