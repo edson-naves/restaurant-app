@@ -106,6 +106,8 @@ h2 { font-size: 17px; margin: 0 0 12px; }
   vertical-align: middle; margin-left: 4px;
 }
 .res-party { white-space: nowrap; }
+/* Form fields laid out on one line, wrapping only when they must. */
+.formline { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
 .accent { color: var(--accent); }
 .grouprow td {
   color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .5px;

@@ -103,9 +103,9 @@
     <div class="card" id="book">
       <h2>Book a reservation</h2>
       <form method="post" action="/reservations">
-        <div class="row">
-          <div class="field"><label>Guest name</label><input type="text" name="guest_name" placeholder="e.g. John Smith" required></div>
-          <div class="field" style="max-width:150px">
+        <div class="formline">
+          <div class="field" style="flex:2;min-width:150px;margin:0"><label>Guest name</label><input type="text" name="guest_name" placeholder="e.g. John Smith" required></div>
+          <div class="field" style="width:140px;margin:0">
             <label>Party size</label>
             <div class="qtystep">
               <button type="button" class="qbtn" onclick="bump('res_party',-1)">−</button>
@@ -113,23 +113,21 @@
               <button type="button" class="qbtn" onclick="bump('res_party',1)">+</button>
             </div>
           </div>
+          <div class="field" style="width:160px;margin:0"><label>Date</label><input type="date" name="date" value="{{ today_str }}"></div>
+          <div class="field" style="width:120px;margin:0"><label>Time</label><input type="time" name="time" value="19:00"></div>
         </div>
-        <div class="row">
-          <div class="field"><label>Date</label><input type="date" name="date" value="{{ today_str }}"></div>
-          <div class="field"><label>Time</label><input type="time" name="time" value="19:00"></div>
-          <div class="field"><label>Phone (optional)</label><input type="text" name="phone" placeholder="e.g. 604-123-4567"></div>
-        </div>
-        <div class="row">
-          <div class="field" style="max-width:220px">
-            <label>Table preference (optional)</label>
+        <div class="formline" style="margin-top:12px">
+          <div class="field" style="width:190px;margin:0"><label>Phone (optional)</label><input type="text" name="phone" placeholder="e.g. 604-123-4567"></div>
+          <div class="field" style="width:170px;margin:0">
+            <label>Table preference</label>
             <select name="table_pref">
               <option value="Any">Any</option>
               {% for t in free_tables %}<option value="Table {{ t.number }}">Table {{ t.number }}</option>{% endfor %}
             </select>
           </div>
-          <div class="field"><label>Notes (optional)</label><input type="text" name="notes" placeholder="e.g. window seat, birthday, high chair..."></div>
+          <div class="field" style="flex:1;min-width:180px;margin:0"><label>Notes (optional)</label><input type="text" name="notes" placeholder="e.g. window seat, birthday..."></div>
         </div>
-        <div class="between">
+        <div class="between" style="margin-top:12px">
           <label class="tick" style="margin:0"><input type="checkbox" name="send_confirmation" checked> Send confirmation <span class="sub" style="font-weight:400">— guest gets an SMS</span></label>
           <button class="btn primary">Add reservation</button>
         </div>
