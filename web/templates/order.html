@@ -112,22 +112,26 @@
       <span><i class="sdot empty"></i>Empty</span>
     </span>
   </div>
+  {# Seat chips navigate (reload) so the chosen seat is server-authoritative:
+     it then flows into the item links and the Add form. Keeps the configured
+     item and category. #}
+  {% set seat_qs = '&category=' ~ active_cat ~ ('&item=' ~ configuring.id if configuring else '') %}
   <div class="seatcards">
     {% for c in seat_cards %}
-    <button type="button" class="seatcard status-{{ c.status }} {{ 'on' if active_seat == c.seat.seat_number else '' }}"
-            style="--sc:{{ c.seat.seat_number|seat_color }}" data-seat="{{ c.seat.seat_number }}" data-color="{{ c.seat.seat_number|seat_color }}"
-            onclick="pickSeat({{ c.seat.seat_number }})" title="Seat {{ c.seat.seat_number }}">
+    <a class="seatcard status-{{ c.status }} {{ 'on' if active_seat == c.seat.seat_number else '' }}"
+       style="--sc:{{ c.seat.seat_number|seat_color }}"
+       href="/orders/{{ order.id }}?seat={{ c.seat.seat_number }}{{ seat_qs }}" title="Seat {{ c.seat.seat_number }}">
       <span class="sc-top"><span class="sc-num">Seat {{ c.seat.seat_number }}</span><i class="sdot {{ c.status }}"></i></span>
       <span class="sc-count">{{ c.count }} item{{ '' if c.count == 1 else 's' }}</span>
-    </button>
+    </a>
     {% endfor %}
     {# 0 = the whole table, for shared items (bread, a bottle of wine) split across the seats. #}
-    <button type="button" class="seatcard shared status-{{ table_card.status }} {{ 'on' if active_seat == 0 else '' }}"
-            style="--sc:{{ 0|seat_color }}" data-seat="0" data-color="{{ 0|seat_color }}"
-            onclick="pickSeat(0)" title="Shared / whole-table item, split across all seats">
+    <a class="seatcard shared status-{{ table_card.status }} {{ 'on' if active_seat == 0 else '' }}"
+       style="--sc:{{ 0|seat_color }}"
+       href="/orders/{{ order.id }}?seat=0{{ seat_qs }}" title="Shared / whole-table item, split across all seats">
       <span class="sc-top"><span class="sc-num">Table</span><i class="sdot {{ table_card.status }}"></i></span>
       <span class="sc-count">{{ table_card.count }} shared</span>
-    </button>
+    </a>
   </div>
 </div>
 {% endif %}
@@ -431,20 +435,7 @@ function stepQty(d) {
   updAddPrice();
 }
 
-// Seat selector: set which seat the next item is added for, and highlight it.
-// The seat holds until the waiter taps another chip.
-function pickSeat(n) {
-  document.getElementById('seatf').value = String(n);
-  var color = null;
-  document.querySelectorAll('.seatcard').forEach(function (b) {
-    var on = b.getAttribute('data-seat') === String(n);
-    b.classList.toggle('on', on);
-    if (on) color = b.getAttribute('data-color');
-  });
-  // Echo the active seat's colour on the panel edge as a confirmation cue.
-  var card = document.getElementById('menucard');
-  if (card && color) card.style.borderLeftColor = color;
-}
+// Seat chips now navigate (server-authoritative active seat), so no JS here.
 // (Outside-click / Escape close for .edit-menu popovers lives in base.html.)
 </script>
 {% endblock %}

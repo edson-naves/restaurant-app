@@ -295,9 +295,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   background: var(--panel-2); border: 1px solid var(--line);
   border-left: 3px solid var(--sc); border-radius: 7px;
   padding: 5px 9px; font: inherit; color: var(--ink); cursor: pointer;
-  text-align: left; line-height: 1.25;
+  text-align: left; line-height: 1.25; text-decoration: none;
 }
-.seatcard:hover { border-color: var(--sc); }
+.seatcard:hover { border-color: var(--sc); text-decoration: none; }
 .seatcard.on { background: color-mix(in srgb, var(--sc) 22%, var(--panel-2)); border-color: var(--sc); }
 .sc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .sc-num { font-weight: 700; font-size: 13px; font-variant-numeric: tabular-nums; }

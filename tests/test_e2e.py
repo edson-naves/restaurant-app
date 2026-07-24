@@ -247,6 +247,14 @@ db.expire_all()
 check(db.get(type(order.items[0]), steak_line.id).allergens == "",
       "clearing the allergen boxes removes them")
 
+# Seat selection is server-authoritative: the order screen for ?seat=2 must
+# render the add form and item links carrying seat 2 (not resetting to seat 1).
+page2 = client.get(f"/orders/{order_id}?seat=2").text
+check('name="seat_number" id="seatf" value="2"' in page2,
+      "the add form carries the selected seat")
+check("&seat=2&" in page2 or "?seat=2" in page2,
+      "item links carry the selected seat, not seat 1")
+
 # Quick-add merges identical pending lines instead of stacking duplicates.
 before = len(db.get(Order, order_id).items)
 for _ in range(3):
