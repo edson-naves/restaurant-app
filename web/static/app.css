@@ -82,6 +82,12 @@ h2 { font-size: 17px; margin: 0 0 12px; }
 /* Reservation row actions, aligned in one tidy row. */
 .res-actions { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
 .res-actions form { margin: 0; }
+/* Bare icon action (no button chrome). */
+.icon-btn {
+  background: none; border: none; cursor: pointer; font: inherit; font-size: 16px;
+  line-height: 1; padding: 6px; opacity: .8;
+}
+.icon-btn:hover { opacity: 1; }
 
 /* ---------- Reservations & waitlist page (4.1.5) ---------- */
 .res-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 16px; align-items: start; }

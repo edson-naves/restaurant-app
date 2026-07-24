@@ -21,7 +21,7 @@
   </details>
   {% endif %}
   <form method="post" action="/reservations/{{ r.id }}/no-show"><button class="btn sm" title="No-show">No-show</button></form>
-  <form method="post" action="/reservations/{{ r.id }}/cancel"><button class="btn sm danger" title="Cancel reservation">🗑</button></form>
+  <form method="post" action="/reservations/{{ r.id }}/cancel"><button class="icon-btn" title="Cancel reservation">🗑</button></form>
 </div>
 {% endmacro %}
 
