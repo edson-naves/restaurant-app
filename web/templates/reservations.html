@@ -9,6 +9,7 @@
 </div>
 
 {% macro seat_form(r) %}
+<div class="res-actions">
   {% if free_tables %}
   <details class="edit-menu">
     <summary class="btn sm primary" style="display:inline-block">Seat ▾</summary>
@@ -27,12 +28,9 @@
   {% else %}
   <span class="sub">No free tables</span>
   {% endif %}
-  <form method="post" action="/reservations/{{ r.id }}/no-show" style="display:inline">
-    <button class="btn sm">No-show</button>
-  </form>
-  <form method="post" action="/reservations/{{ r.id }}/cancel" style="display:inline">
-    <button class="btn sm danger">Cancel</button>
-  </form>
+  <form method="post" action="/reservations/{{ r.id }}/no-show"><button class="btn sm">No-show</button></form>
+  <form method="post" action="/reservations/{{ r.id }}/cancel"><button class="btn sm danger">Cancel</button></form>
+</div>
 {% endmacro %}
 
 <div class="split">

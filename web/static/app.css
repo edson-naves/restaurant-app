@@ -79,6 +79,9 @@ h2 { font-size: 17px; margin: 0 0 12px; }
 .btn.danger { background: var(--ready); border-color: var(--ready); color: #fff; }
 .btn.warn { background: var(--warn); border-color: var(--warn); color: #fff; }
 .btn.sm { padding: 4px 9px; min-height: 28px; font-size: 13px; }
+/* Reservation row actions, aligned in one tidy row. */
+.res-actions { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
+.res-actions form { margin: 0; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 
 input[type=text], input[type=number], input[type=date], select, textarea {
