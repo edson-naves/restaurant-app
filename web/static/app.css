@@ -82,6 +82,14 @@ h2 { font-size: 17px; margin: 0 0 12px; }
 /* Reservation row actions, aligned in one tidy row. */
 .res-actions { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
 .res-actions form { margin: 0; }
+/* Red-outline trash icon button (matches the design). */
+.btn.trash {
+  background: rgba(212,72,59,.12); border-color: rgba(212,72,59,.5);
+  color: var(--ready); padding: 4px 8px;
+}
+.btn.trash:hover { background: rgba(212,72,59,.22); border-color: var(--ready); }
+.btn.trash svg { display: block; }
+
 /* Bare icon action (no button chrome). */
 .icon-btn {
   background: none; border: none; cursor: pointer; font: inherit; font-size: 16px;
