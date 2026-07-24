@@ -70,15 +70,15 @@ h2 { font-size: 17px; margin: 0 0 12px; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
-  border-radius: 8px; padding: 10px 16px; font: inherit; font-weight: 600;
-  cursor: pointer; min-height: 42px; text-decoration: none;
+  border-radius: 8px; padding: 7px 12px; font: inherit; font-weight: 600;
+  cursor: pointer; min-height: 34px; text-decoration: none;
 }
 .btn:hover { border-color: var(--accent); text-decoration: none; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.good { background: var(--ok); border-color: var(--ok); color: #fff; }
 .btn.danger { background: var(--ready); border-color: var(--ready); color: #fff; }
 .btn.warn { background: var(--warn); border-color: var(--warn); color: #fff; }
-.btn.sm { padding: 6px 10px; min-height: 34px; font-size: 13px; }
+.btn.sm { padding: 4px 9px; min-height: 28px; font-size: 13px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 
 input[type=text], input[type=number], input[type=date], select, textarea {
