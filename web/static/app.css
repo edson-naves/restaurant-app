@@ -266,14 +266,17 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .course-adv > summary { cursor: pointer; list-style: none; font-size: 12px; }
 .course-adv > summary::-webkit-details-marker { display: none; }
 
-/* Quantity + Add to order on one row, so the button is always in view. */
-.cfg-addrow { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 14px; }
-.cfg-addrow #addb { flex: 1; min-height: 42px; }
+/* Quantity + Add on one row, so the button is always in view. */
+.cfg-addrow { display: flex; gap: 8px; align-items: flex-end; margin-bottom: 14px; }
+.cfg-addrow #addb {
+  flex: 1; height: 40px; min-height: 40px; padding: 0 10px;
+  white-space: nowrap; font-variant-numeric: tabular-nums;
+}
 
-/* Quantity stepper: [ − ] [ n ] [ + ] */
-.qtystep { display: inline-flex; align-items: stretch; }
+/* Quantity stepper: [ − ] [ n ] [ + ] — compact so the Add button has room. */
+.qtystep { display: inline-flex; align-items: stretch; flex: none; }
 .qtystep .qbtn {
-  width: 42px; min-height: 40px; font-size: 20px; font-weight: 700;
+  width: 34px; min-height: 40px; height: 40px; font-size: 18px; font-weight: 700;
   background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
   cursor: pointer; display: flex; align-items: center; justify-content: center;
 }
@@ -281,8 +284,8 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .qtystep .qbtn:first-child { border-radius: 8px 0 0 8px; }
 .qtystep .qbtn:last-child { border-radius: 0 8px 8px 0; }
 .qtystep input {
-  width: 60px; text-align: center; border-radius: 0; border-left: 0; border-right: 0;
-  -moz-appearance: textfield;
+  width: 44px; text-align: center; border-radius: 0; border-left: 0; border-right: 0;
+  min-height: 40px; height: 40px; -moz-appearance: textfield;
 }
 .qtystep input::-webkit-outer-spin-button,
 .qtystep input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
