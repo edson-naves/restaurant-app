@@ -185,8 +185,65 @@ MENU_DESCRIPTIONS = {
 
 # 4.1.2 — grouped, rule-based modifiers per item:
 #   item -> [(group, required, min_select, max_select, [(option, price_cents)])]
+# NOTE: items the e2e suite adds by name (Beef Burger, Garlic Bread, Grilled
+# Salmon, Ribeye Steak) carry only OPTIONAL groups — a required group there
+# would reject the suite's plain adds. Lamb Chops keeps its required group,
+# which the modifier-group e2e test targets.
 MODIFIER_GROUPS = {
-    "Lamb Chops": [
+    # ---- Drinks ----
+    "Soft Drink": [
+        ("Choice", True, 1, 1,
+         [("Coke", 0), ("Coke Zero", 0), ("Diet Coke", 0), ("Sprite", 0), ("Ginger Ale", 0)]),
+        ("Ice", False, 0, 1,
+         [("Regular ice", 0), ("Light ice", 0), ("No ice", 0)]),
+    ],
+    "Espresso": [
+        ("Shots", True, 1, 1, [("Single", 0), ("Double", 0)]),
+        ("Milk", False, 0, 1,
+         [("None", 0), ("Regular", 0), ("Oat", 60), ("Almond", 60)]),
+    ],
+    "Sparkling Water": [
+        ("Serve", False, 0, 1, [("With lime", 0), ("No lime", 0), ("Room temperature", 0)]),
+    ],
+    "House Red (glass)": [
+        ("Pour", True, 1, 1, [("6 oz", 0), ("9 oz", 400)]),
+    ],
+    "House White (glass)": [
+        ("Pour", True, 1, 1, [("6 oz", 0), ("9 oz", 400)]),
+    ],
+    "Craft Beer": [
+        ("Size", False, 0, 1, [("Pint", 0), ("Half pint", -300)]),
+    ],
+    # ---- Starters ----
+    "Caesar Salad": [
+        ("Add protein", False, 0, 1, [("Grilled chicken", 500), ("Grilled shrimp", 700)]),
+        ("Dressing", False, 0, 1, [("On the side", 0), ("Extra dressing", 0)]),
+    ],
+    "Garlic Bread": [   # e2e-used -> optional only
+        ("Add-ons", False, 0, 0, [("Add cheese", 150), ("Chilli flakes", 0)]),
+    ],
+    "Soup of the Day": [
+        ("Bread", False, 0, 1, [("Sourdough roll", 0), ("No bread", 0)]),
+    ],
+    "Crispy Calamari": [
+        ("Dip", False, 0, 1, [("Lemon aioli", 0), ("Marinara", 0), ("Sweet chilli", 0)]),
+    ],
+    # ---- Mains ----
+    "Beef Burger": [   # e2e-used -> optional only
+        ("Cooking level", False, 0, 1,
+         [("Rare", 0), ("Medium Rare", 0), ("Medium", 0), ("Well Done", 0)]),
+        ("Cheese", False, 0, 1, [("American", 0), ("Cheddar", 100), ("Swiss", 100)]),
+        ("Add-ons", False, 0, 0, [("Bacon", 200), ("Fried Egg", 150), ("Avocado", 200)]),
+    ],
+    "Ribeye Steak": [   # e2e-used -> optional only
+        ("Cooking level", False, 0, 1,
+         [("Rare", 0), ("Medium Rare", 0), ("Medium", 0), ("Medium Well", 0), ("Well Done", 0)]),
+        ("Sauce", False, 0, 1, [("Peppercorn", 150), ("Béarnaise", 150), ("Mushroom", 150)]),
+    ],
+    "Grilled Salmon": [   # e2e-used -> optional only
+        ("Side", False, 0, 1, [("Mashed potato", 0), ("Fries", 0), ("Side salad", 0)]),
+    ],
+    "Lamb Chops": [   # required — the modifier-group e2e test targets this
         ("Cooking level", True, 1, 1,
          [("Rare", 0), ("Medium Rare", 0), ("Medium", 0), ("Medium Well", 0), ("Well Done", 0)]),
         ("Sauce", False, 0, 1,
@@ -199,6 +256,35 @@ MODIFIER_GROUPS = {
          [("Spaghetti", 0), ("Penne", 0), ("Side salad instead", 0)]),
         ("Add-ons", False, 0, 0,
          [("Extra cheese", 200), ("Extra sauce", 100), ("Chilli flakes", 0)]),
+    ],
+    "Pad Thai": [
+        ("Protein", True, 1, 1, [("Chicken", 0), ("Shrimp", 300), ("Tofu", 0)]),
+        ("Spice", True, 1, 1, [("Mild", 0), ("Medium", 0), ("Hot", 0)]),
+    ],
+    "Mushroom Risotto": [
+        ("Add-ons", False, 0, 0, [("Grilled chicken", 500), ("Extra parmesan", 150)]),
+    ],
+    "Margherita Pizza": [
+        ("Size", True, 1, 1, [("10 inch", 0), ("14 inch", 500)]),
+        ("Extra toppings", False, 0, 0,
+         [("Mushrooms", 150), ("Pepperoni", 200), ("Extra cheese", 200), ("Olives", 100)]),
+    ],
+    # ---- Sides ----
+    "Side Salad": [
+        ("Dressing", False, 0, 1,
+         [("House", 0), ("Caesar", 0), ("Balsamic", 0), ("On the side", 0)]),
+    ],
+    # ---- Desserts ----
+    "New York Cheesecake": [
+        ("Topping", False, 0, 1, [("Berry compote", 0), ("Chocolate sauce", 0), ("Plain", 0)]),
+    ],
+    "Chocolate Lava Cake": [
+        ("Serve with", False, 0, 1,
+         [("Vanilla ice cream", 0), ("Whipped cream", 0), ("On its own", 0)]),
+    ],
+    "Gelato (2 scoops)": [
+        ("Flavours", True, 1, 2,
+         [("Vanilla", 0), ("Chocolate", 0), ("Strawberry", 0), ("Pistachio", 100), ("Salted caramel", 0)]),
     ],
 }
 
