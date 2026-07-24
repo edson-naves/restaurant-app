@@ -266,7 +266,22 @@
   {# Column 4 — the order #}
   <div class="pos-order">
     <div class="card">
-      <h2>Order</h2>
+      {# Coursing (4.1.3): fire one held stage at a time, shown by the heading
+         only when more than one course is still un-fired. #}
+      {% set pending_courses = order.items|selectattr('kitchen_status','equalto','pending')|map(attribute='course')|list|unique|sort %}
+      <div class="between" style="margin-bottom:12px">
+        <h2 style="margin:0">Order</h2>
+        {% if can('orders.manage') and pending_courses|length > 1 %}
+        <div class="fire-courses">
+          {% for c in pending_courses %}
+          <form method="post" action="/orders/{{ order.id }}/send" style="display:inline">
+            <input type="hidden" name="course" value="{{ c }}">
+            <button class="btn primary sm" title="Send {{ c|course|lower }} now, hold the rest">🔥 {{ c|course }}</button>
+          </form>
+          {% endfor %}
+        </div>
+        {% endif %}
+      </div>
       {% if not order.items %}
         <p class="empty">No items yet.</p>
       {% else %}
@@ -360,25 +375,6 @@
       </div>{# /ordgroups #}
       {% endif %}
     </div>
-
-    {# Coursing (4.1.3) — fire held courses one at a time. Only shows when a
-       course still has un-fired items and there's more than one course, so a
-       plain single-course order just uses "Send to kitchen" above. #}
-    {% set pending_courses = order.items|selectattr('kitchen_status','equalto','pending')|map(attribute='course')|list|unique|sort %}
-    {% if can('orders.manage') and pending_courses|length > 1 %}
-    <div class="card">
-      <h2>Fire courses</h2>
-      <p class="sub" style="margin:0 0 10px">Send one stage now and hold the rest.</p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        {% for c in pending_courses %}
-        <form method="post" action="/orders/{{ order.id }}/send">
-          <input type="hidden" name="course" value="{{ c }}">
-          <button class="btn primary sm">Fire {{ c|course|lower }}</button>
-        </form>
-        {% endfor %}
-      </div>
-    </div>
-    {% endif %}
 
     <div class="card balance">
       <h2>Running total</h2>

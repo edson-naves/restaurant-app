@@ -235,6 +235,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* "Required" flag on a modifier group. */
 .req { background: rgba(212,72,59,.2); color: #ff9a90; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; padding: 1px 6px; border-radius: 4px; }
 
+/* Fire-course buttons live in the Order heading; wrap if tight. */
+.fire-courses { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+
 /* Order panel grouped by seat (4.1.2), a divider between seats. */
 .ordgroups { display: flex; flex-direction: column; }
 .ordgroup { padding: 4px 0 10px; }
