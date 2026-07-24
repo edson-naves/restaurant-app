@@ -2,36 +2,24 @@
 <div class="note" style="margin-bottom:12px">Receipt sent by {{ sent }}.</div>
 {% endif %}
 
-{# Email / text delivery. No print styling on this block — it's screen only. #}
-<div class="card noprint" style="margin-bottom:14px">
-  <div class="row" style="gap:10px">
-    <form method="post" action="/payments/{{ data.payment_id | default(receipt.payment_id) }}/receipt/send" style="display:flex;gap:8px;align-items:flex-end;margin:0;flex:1;min-width:0">
+{# Email / text delivery — screen only, stacked so nothing overlaps in a
+   narrow modal. #}
+{% set _pid = data.payment_id | default(receipt.payment_id) %}
+<div class="card noprint" style="margin-bottom:12px;padding:12px">
+  <div style="display:flex;flex-direction:column;gap:8px">
+    <form method="post" action="/payments/{{ _pid }}/receipt/send" style="display:flex;gap:6px;margin:0">
       <input type="hidden" name="method" value="email">
-      <div class="field" style="margin:0;flex:1"><label>Email receipt</label>
-        <input type="email" name="destination" placeholder="guest@example.com" required>
-      </div>
-      <button class="btn">Send</button>
+      <input type="email" name="destination" placeholder="Email receipt — guest@example.com" required style="flex:1;min-width:0">
+      <button class="btn sm">Email</button>
     </form>
-    <form method="post" action="/payments/{{ data.payment_id | default(receipt.payment_id) }}/receipt/send" style="display:flex;gap:8px;align-items:flex-end;margin:0;flex:1;min-width:0">
+    <form method="post" action="/payments/{{ _pid }}/receipt/send" style="display:flex;gap:6px;margin:0">
       <input type="hidden" name="method" value="sms">
-      <div class="field" style="margin:0;flex:1"><label>Text receipt</label>
-        <input type="tel" name="destination" placeholder="555-123-4567" required>
-      </div>
-      <button class="btn">Send</button>
+      <input type="tel" name="destination" placeholder="Text receipt — 555-123-4567" required style="flex:1;min-width:0">
+      <button class="btn sm">Text</button>
     </form>
   </div>
   {% if deliveries %}
-  <p class="sub" style="margin:10px 0 4px"><strong>Sent</strong></p>
-  <table>
-    {% for d in deliveries %}
-    <tr>
-      <td style="width:52px">{{ d.method }}</td>
-      <td>{{ d.destination }}</td>
-      <td class="meta">{{ d.sent_at.strftime('%H:%M') }} · {{ d.sent_by.name if d.sent_by else '—' }}</td>
-      <td>{% if d.status == 'sent' %}<span class="pill ok">sent</span>{% else %}<span class="pill ready_to_pay">failed</span>{% endif %}</td>
-    </tr>
-    {% endfor %}
-  </table>
+  <p class="sub" style="margin:8px 0 4px;font-size:11px">Sent: {% for d in deliveries %}{{ d.method }} → {{ d.destination }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
   {% endif %}
 </div>
 
@@ -97,16 +85,19 @@
   <hr>
 
   <div class="c" style="margin:6px 0">Please pay your server</div>
-  <div class="c" style="font-size:11px;color:#555">We would love to hear about your experience.</div>
-  <hr>
 
-  <div class="c b" style="font-size:12px">Tip guide</div>
-  <div class="l" style="font-size:12px"><span>20%</span><span>{{ tip_guide.p20 }}</span></div>
-  <div class="l" style="font-size:12px"><span>18%</span><span>{{ tip_guide.p18 }}</span></div>
-  <div class="l" style="font-size:12px"><span>15%</span><span>{{ tip_guide.p15 }}</span></div>
-  <hr>
-
-  {% if data.gst_number %}<div class="c" style="font-size:10px;color:#555">GST# {{ data.gst_number }}</div>{% endif %}
-  {% if data.pst_number %}<div class="c" style="font-size:10px;color:#555">PST# {{ data.pst_number }}</div>{% endif %}
-  <div class="c" style="margin-top:6px">Thank you!</div>
+  {# The tip guide, notices and thank-you are for the printed guest copy —
+     hidden on screen to keep the modal short, shown when printed. #}
+  <div class="print-only">
+    <div class="c" style="font-size:11px;color:#555;margin-bottom:6px">We would love to hear about your experience.</div>
+    <hr>
+    <div class="c b" style="font-size:12px">Tip guide</div>
+    <div class="l" style="font-size:12px"><span>20%</span><span>{{ tip_guide.p20 }}</span></div>
+    <div class="l" style="font-size:12px"><span>18%</span><span>{{ tip_guide.p18 }}</span></div>
+    <div class="l" style="font-size:12px"><span>15%</span><span>{{ tip_guide.p15 }}</span></div>
+    <hr>
+    {% if data.gst_number %}<div class="c" style="font-size:10px;color:#555">GST# {{ data.gst_number }}</div>{% endif %}
+    {% if data.pst_number %}<div class="c" style="font-size:10px;color:#555">PST# {{ data.pst_number }}</div>{% endif %}
+    <div class="c" style="margin-top:6px">Thank you!</div>
+  </div>
 </div>

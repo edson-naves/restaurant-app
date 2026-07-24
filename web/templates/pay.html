@@ -242,7 +242,7 @@
           </td>
           <td style="white-space:nowrap">
             {% if not p.voided %}
-            <a class="btn sm" href="/payments/{{ p.id }}/receipt">Receipt</a>
+            <a class="btn sm" href="/orders/{{ order.id }}/pay?receipt={{ p.id }}">Receipt</a>
             {% if refunded.get(p.id) %}
             <br><span class="sub" style="font-size:11px">refunded ${{ refunded[p.id]|money }}</span>
             {% endif %}

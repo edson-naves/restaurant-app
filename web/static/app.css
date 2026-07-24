@@ -143,6 +143,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   .modal-backdrop { display: none; }
   .modal-card { position: static; transform: none; box-shadow: none; border: 0; width: auto; max-height: none; }
 }
+/* Printed-copy-only receipt extras (tip guide, notices). */
+.print-only { display: none; }
+@media print { .print-only { display: block; } }
 
 /* ---------- floor plan (4.1.1) ---------- */
 .legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
@@ -381,9 +384,9 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .err { background: rgba(212,72,59,.12); border: 1px solid rgba(212,72,59,.4); color: #ff9a90; padding: 14px; border-radius: 10px; }
 
-.receipt { max-width: 380px; margin: 0 auto; background: #fff; color: #111; border-radius: 8px; padding: 22px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
-.receipt hr { border: none; border-top: 1px dashed #999; margin: 10px 0; }
-.receipt .l { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+.receipt { max-width: 380px; margin: 0 auto; background: #fff; color: #111; border-radius: 8px; padding: 16px 18px; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 12px; line-height: 1.35; }
+.receipt hr { border: none; border-top: 1px dashed #999; margin: 7px 0; }
+.receipt .l { display: flex; justify-content: space-between; gap: 10px; padding: 1px 0; }
 .receipt .c { text-align: center; }
 .receipt .b { font-weight: 700; }
 
