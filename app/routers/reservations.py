@@ -37,19 +37,44 @@ def reservations_page(
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("reservations")),
 ):
-    """Upcoming bookings and the current walk-in waitlist."""
+    """Bookings, the walk-in waitlist, and a live at-a-glance summary."""
+    now = datetime.now()
     free_tables = db.execute(
         select(RestaurantTable).where(
             RestaurantTable.is_active.is_(True),
             RestaurantTable.status == TableStatus.FREE,
         ).order_by(RestaurantTable.number)
     ).scalars().all()
+
+    bookings = _waiting(db, "reservation")
+    waitlist = _waiting(db, "waitlist")
+    today = now.date()
+    today_res = [r for r in bookings if r.at.date() <= today]
+    upcoming_res = [r for r in bookings if r.at.date() > today]
+
+    seated_today = db.execute(
+        select(Reservation).where(
+            Reservation.status == ReservationStatus.SEATED,
+            Reservation.at >= datetime(today.year, today.month, today.day),
+        )
+    ).scalars().all()
+
+    def guests(rs):
+        return sum(r.party_size for r in rs)
+
+    avg_wait = round(sum(r.quoted_minutes for r in waitlist) / len(waitlist)) if waitlist else 0
+    stats = {
+        "res_count": len(bookings), "res_guests": guests(bookings),
+        "wl_count": len(waitlist), "wl_avg": avg_wait,
+        "seated_count": len(seated_today), "seated_guests": guests(seated_today),
+        "upcoming_count": len(upcoming_res), "upcoming_guests": guests(upcoming_res),
+    }
+
     return render(request, "reservations.html", {
         "db": db, "staff": staff,
-        "bookings": _waiting(db, "reservation"),
-        "waitlist": _waiting(db, "waitlist"),
-        "free_tables": free_tables,
-        "now": datetime.now(),
+        "bookings": bookings, "today_res": today_res, "upcoming_res": upcoming_res,
+        "waitlist": waitlist, "free_tables": free_tables,
+        "stats": stats, "now": now, "today_str": now.strftime("%Y-%m-%d"),
         "title": "Reservations & waitlist",
     })
 
@@ -58,23 +83,30 @@ def reservations_page(
 def add_reservation(
     guest_name: str = Form(...),
     party_size: int = Form(2),
+    date: str = Form(""),
+    time: str = Form(""),
     at: str = Form(""),
     phone: str = Form(""),
     notes: str = Form(""),
+    table_pref: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("reservations")),
 ):
     """Book a table for a future time (4.1.5)."""
     if not guest_name.strip():
         raise HTTPException(400, "A name is required.")
+    stamp = at or (f"{date}T{time or '00:00'}" if date else "")
     try:
-        when = datetime.fromisoformat(at) if at else datetime.now()
+        when = datetime.fromisoformat(stamp) if stamp else datetime.now()
     except ValueError:
         raise HTTPException(400, "That date and time could not be read.")
+    note = notes.strip()
+    if table_pref.strip() and table_pref.strip().lower() != "any":
+        note = (f"Table pref: {table_pref.strip()}. " + note).strip()
     db.add(Reservation(
         kind="reservation", guest_name=guest_name.strip(),
         party_size=max(1, party_size), phone=phone.strip(),
-        notes=notes.strip(), at=when,
+        notes=note, at=when,
     ))
     db.commit()
     return RedirectResponse("/reservations", status_code=303)

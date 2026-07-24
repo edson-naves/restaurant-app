@@ -1,13 +1,7 @@
 {% extends "base.html" %}
 {% block body %}
-<div class="between">
-  <div>
-    <h1>Reservations &amp; waitlist</h1>
-    <p class="sub">Book ahead or queue walk-ins, then seat them to a free table</p>
-  </div>
-  <a class="btn" href="/">← Floor</a>
-</div>
 
+{# --- row action buttons (Seat / No-show / Cancel), aligned in one row --- #}
 {% macro seat_form(r) %}
 <div class="res-actions">
   {% if free_tables %}
@@ -25,106 +19,188 @@
       <button class="btn sm primary">Seat party of {{ r.party_size }}</button>
     </form>
   </details>
-  {% else %}
-  <span class="sub">No free tables</span>
   {% endif %}
-  <form method="post" action="/reservations/{{ r.id }}/no-show"><button class="btn sm">No-show</button></form>
-  <form method="post" action="/reservations/{{ r.id }}/cancel"><button class="btn sm danger">Cancel</button></form>
+  <form method="post" action="/reservations/{{ r.id }}/no-show"><button class="btn sm" title="No-show">No-show</button></form>
+  <form method="post" action="/reservations/{{ r.id }}/cancel"><button class="btn sm danger" title="Cancel">✕</button></form>
 </div>
 {% endmacro %}
 
-<div class="split">
-  <!-- reservations -->
+{% macro res_row(r) %}
+<tr>
+  <td style="white-space:nowrap">
+    <strong>{{ r.at.strftime('%H:%M') }}</strong><br>
+    <span class="sub" style="font-size:11px">{{ 'Today' if r.at.date() == now.date() else r.at.strftime('%b %d') }}</span>
+  </td>
+  <td>{{ r.guest_name }}{% if r.phone %}<br><span class="sub" style="font-size:11px">{{ r.phone }}</span>{% endif %}</td>
+  <td><span class="res-party">👥 {{ r.party_size }}</span></td>
+  <td>{% if r.table %}{{ r.table.number }}{% if r.table.floor %}<br><span class="sub" style="font-size:11px">{{ r.table.floor.name }}</span>{% endif %}{% else %}<span class="sub">—</span>{% endif %}</td>
+  <td><span class="pill ok">Confirmed</span></td>
+  <td style="text-align:right">{{ seat_form(r) }}</td>
+</tr>
+{% endmacro %}
+
+<div class="between">
+  <div>
+    <h1>Reservations &amp; waitlist</h1>
+    <p class="sub">Manage bookings and walk-ins</p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a class="btn" href="/">← Floor</a>
+    <a class="btn primary" href="#book">+ New reservation</a>
+  </div>
+</div>
+
+<div class="res-grid">
+  <!-- LEFT: reservations + booking form -->
   <div>
     <div class="card">
-      <h2>Upcoming reservations</h2>
+      <div class="between" style="margin-bottom:10px">
+        <h2 style="margin:0">Upcoming reservations <span class="count-badge">{{ bookings|length }}</span></h2>
+      </div>
       {% if not bookings %}
-        <p class="empty">No reservations booked.</p>
+      <div class="res-empty">
+        <div class="res-empty-ic">🗓️</div>
+        <div><strong>No reservations booked</strong></div>
+        <p class="sub" style="margin:4px 0 0">All set! Add one below.</p>
+      </div>
       {% else %}
       <div class="scroll" style="overflow:visible">
       <table>
-        <thead><tr><th>Time</th><th>Guest</th><th>Party</th><th></th></tr></thead>
+        <thead><tr><th>Time</th><th>Guest</th><th>Party</th><th>Table</th><th>Status</th><th></th></tr></thead>
         <tbody>
-        {% for r in bookings %}
-        <tr>
-          <td style="white-space:nowrap">{{ r.at.strftime('%b %d · %H:%M') }}</td>
-          <td>
-            {{ r.guest_name }}
-            {% if r.phone %}<br><span class="sub" style="font-size:11px">{{ r.phone }}</span>{% endif %}
-            {% if r.notes %}<br><span class="sub" style="font-size:11px">✎ {{ r.notes }}</span>{% endif %}
-          </td>
-          <td>{{ r.party_size }}</td>
-          <td style="white-space:nowrap;text-align:right">{{ seat_form(r) }}</td>
-        </tr>
-        {% endfor %}
+          {% if today_res %}<tr class="grouprow"><td colspan="6">TODAY</td></tr>{% endif %}
+          {% for r in today_res %}{{ res_row(r) }}{% endfor %}
+          {% if upcoming_res %}<tr class="grouprow"><td colspan="6">UPCOMING</td></tr>{% endif %}
+          {% for r in upcoming_res %}{{ res_row(r) }}{% endfor %}
         </tbody>
       </table>
       </div>
       {% endif %}
     </div>
 
-    <div class="card">
+    <div class="card" id="book">
       <h2>Book a reservation</h2>
       <form method="post" action="/reservations">
         <div class="row">
-          <div class="field"><label>Guest name</label><input type="text" name="guest_name" required></div>
-          <div class="field" style="max-width:120px"><label>Party size</label><input type="number" name="party_size" value="2" min="1" max="40"></div>
+          <div class="field"><label>Guest name</label><input type="text" name="guest_name" placeholder="e.g. John Smith" required></div>
+          <div class="field" style="max-width:150px">
+            <label>Party size</label>
+            <div class="qtystep">
+              <button type="button" class="qbtn" onclick="bump('res_party',-1)">−</button>
+              <input type="number" id="res_party" name="party_size" value="2" min="1" max="40">
+              <button type="button" class="qbtn" onclick="bump('res_party',1)">+</button>
+            </div>
+          </div>
         </div>
         <div class="row">
-          <div class="field"><label>Date &amp; time</label><input type="datetime-local" name="at"></div>
-          <div class="field"><label>Phone</label><input type="text" name="phone" placeholder="optional"></div>
+          <div class="field"><label>Date</label><input type="date" name="date" value="{{ today_str }}"></div>
+          <div class="field"><label>Time</label><input type="time" name="time" value="19:00"></div>
+          <div class="field"><label>Phone (optional)</label><input type="text" name="phone" placeholder="e.g. 604-123-4567"></div>
         </div>
-        <div class="field"><label>Notes</label><input type="text" name="notes" placeholder="e.g. window seat, birthday"></div>
-        <button class="btn primary">Add reservation</button>
+        <div class="row">
+          <div class="field" style="max-width:220px">
+            <label>Table preference (optional)</label>
+            <select name="table_pref">
+              <option value="Any">Any</option>
+              {% for t in free_tables %}<option value="Table {{ t.number }}">Table {{ t.number }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field"><label>Notes (optional)</label><input type="text" name="notes" placeholder="e.g. window seat, birthday, high chair..."></div>
+        </div>
+        <div class="between">
+          <label class="tick" style="margin:0"><input type="checkbox" name="send_confirmation" checked> Send confirmation <span class="sub" style="font-weight:400">— guest gets an SMS</span></label>
+          <button class="btn primary">Add reservation</button>
+        </div>
       </form>
     </div>
   </div>
 
-  <!-- waitlist -->
+  <!-- RIGHT: waitlist + add walk-in + at a glance -->
   <div>
     <div class="card">
-      <h2>Walk-in waitlist</h2>
+      <h2>Walk-in waitlist <span class="count-badge">{{ waitlist|length }}</span></h2>
       {% if not waitlist %}
-        <p class="empty">Nobody waiting.</p>
+      <p class="empty">Nobody waiting.</p>
       {% else %}
       <div class="scroll" style="overflow:visible">
       <table>
-        <thead><tr><th>Waiting</th><th>Guest</th><th>Party</th><th></th></tr></thead>
+        <thead><tr><th>Wait time</th><th>Guest</th><th>Party</th><th>Quote</th><th></th></tr></thead>
         <tbody>
         {% for r in waitlist %}
+        {% set waited = ((now - r.at).total_seconds() // 60)|int %}
         <tr>
           <td style="white-space:nowrap">
-            {{ ((now - r.at).total_seconds() // 60)|int }}m
-            {% if r.quoted_minutes %}<br><span class="sub" style="font-size:11px">quoted {{ r.quoted_minutes }}m</span>{% endif %}
+            <strong class="accent">~ {{ waited }} min</strong><br>
+            <span class="sub" style="font-size:11px">joined {{ waited }} min ago</span>
           </td>
-          <td>
-            {{ r.guest_name }}
-            {% if r.phone %}<br><span class="sub" style="font-size:11px">{{ r.phone }}</span>{% endif %}
-          </td>
-          <td>{{ r.party_size }}</td>
-          <td style="white-space:nowrap;text-align:right">{{ seat_form(r) }}</td>
+          <td>{{ r.guest_name }}{% if r.phone %}<br><span class="sub" style="font-size:11px">{{ r.phone }}</span>{% endif %}</td>
+          <td><span class="res-party">👥 {{ r.party_size }}</span></td>
+          <td>{% if r.quoted_minutes %}<span class="accent">{{ r.quoted_minutes }} min</span>{% else %}<span class="sub">—</span>{% endif %}</td>
+          <td style="text-align:right">{{ seat_form(r) }}</td>
         </tr>
         {% endfor %}
         </tbody>
       </table>
       </div>
+      <div class="between" style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px">
+        <span class="sub" style="margin:0">🕐 Average wait time: <strong>{{ stats.wl_avg }} min</strong></span>
+      </div>
       {% endif %}
     </div>
 
     <div class="card">
-      <h2>Add a walk-in</h2>
+      <h2>Add walk-in to waitlist</h2>
       <form method="post" action="/waitlist">
         <div class="row">
-          <div class="field"><label>Guest name</label><input type="text" name="guest_name" required></div>
-          <div class="field" style="max-width:120px"><label>Party size</label><input type="number" name="party_size" value="2" min="1" max="40"></div>
+          <div class="field"><label>Guest name</label><input type="text" name="guest_name" placeholder="e.g. John Smith" required></div>
+          <div class="field" style="max-width:150px">
+            <label>Party size</label>
+            <div class="qtystep">
+              <button type="button" class="qbtn" onclick="bump('wl_party',-1)">−</button>
+              <input type="number" id="wl_party" name="party_size" value="2" min="1" max="40">
+              <button type="button" class="qbtn" onclick="bump('wl_party',1)">+</button>
+            </div>
+          </div>
         </div>
         <div class="row">
-          <div class="field" style="max-width:160px"><label>Quoted wait (min)</label><input type="number" name="quoted_minutes" value="0" min="0" max="240"></div>
-          <div class="field"><label>Phone</label><input type="text" name="phone" placeholder="optional"></div>
+          <div class="field" style="max-width:170px">
+            <label>Quoted wait (min)</label>
+            <div class="qtystep">
+              <button type="button" class="qbtn" onclick="bump('wl_wait',-5)">−</button>
+              <input type="number" id="wl_wait" name="quoted_minutes" value="15" min="0" max="240" step="5">
+              <button type="button" class="qbtn" onclick="bump('wl_wait',5)">+</button>
+            </div>
+          </div>
+          <div class="field"><label>Phone (optional)</label><input type="text" name="phone" placeholder="e.g. 604-123-4567"></div>
         </div>
-        <button class="btn primary">Add to waitlist</button>
+        <div style="text-align:right"><button class="btn primary">Add to waitlist</button></div>
       </form>
+    </div>
+
+    <div class="card">
+      <div class="between" style="margin-bottom:10px">
+        <strong>Today at a glance</strong>
+        {% if can('reports.view') %}<a class="btn sm" href="/reports">View full report →</a>{% endif %}
+      </div>
+      <div class="glance">
+        <div class="glance-tile"><div class="gt-top">🗓️ <b>{{ stats.res_count }}</b></div><div class="gt-lbl">Reservations</div><div class="gt-sub">{{ stats.res_guests }} total guests</div></div>
+        <div class="glance-tile"><div class="gt-top">👥 <b>{{ stats.wl_count }}</b></div><div class="gt-lbl">On waitlist</div><div class="gt-sub">~{{ stats.wl_avg }} min avg wait</div></div>
+        <div class="glance-tile"><div class="gt-top" style="color:var(--ok)">✓ <b>{{ stats.seated_count }}</b></div><div class="gt-lbl">Seated</div><div class="gt-sub">{{ stats.seated_guests }} seated guests</div></div>
+        <div class="glance-tile"><div class="gt-top" style="color:var(--warn)">🕐 <b>{{ stats.upcoming_count }}</b></div><div class="gt-lbl">Upcoming</div><div class="gt-sub">{{ stats.upcoming_guests }} upcoming guests</div></div>
+      </div>
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Generic stepper for the party/quote number fields.
+function bump(id, d) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  var lo = parseInt(el.min || '0', 10), hi = parseInt(el.max || '999', 10);
+  el.value = Math.max(lo, Math.min(hi, (parseInt(el.value, 10) || 0) + d));
+}
+</script>
 {% endblock %}

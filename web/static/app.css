@@ -82,6 +82,34 @@ h2 { font-size: 17px; margin: 0 0 12px; }
 /* Reservation row actions, aligned in one tidy row. */
 .res-actions { display: flex; gap: 6px; justify-content: flex-end; align-items: center; }
 .res-actions form { margin: 0; }
+
+/* ---------- Reservations & waitlist page (4.1.5) ---------- */
+.res-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 16px; align-items: start; }
+@media (max-width: 1000px) { .res-grid { grid-template-columns: 1fr; } }
+.count-badge {
+  display: inline-block; background: var(--accent); color: #fff;
+  border-radius: 999px; padding: 0 8px; font-size: 12px; font-weight: 700;
+  vertical-align: middle; margin-left: 4px;
+}
+.res-party { white-space: nowrap; }
+.accent { color: var(--accent); }
+.grouprow td {
+  color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .5px;
+  text-transform: uppercase; padding: 12px 10px 4px; border: none;
+}
+.res-empty { text-align: center; padding: 30px 10px; color: var(--muted); }
+.res-empty-ic {
+  width: 52px; height: 52px; border-radius: 50%; background: var(--panel-2);
+  display: flex; align-items: center; justify-content: center; font-size: 24px;
+  margin: 0 auto 10px;
+}
+.glance { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+@media (max-width: 560px) { .glance { grid-template-columns: repeat(2, 1fr); } }
+.glance-tile { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
+.gt-top { font-size: 20px; font-weight: 800; }
+.gt-top b { font-variant-numeric: tabular-nums; }
+.gt-lbl { font-size: 12px; color: var(--ink); margin-top: 2px; }
+.gt-sub { font-size: 11px; color: var(--muted); margin-top: 6px; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 
 input[type=text], input[type=number], input[type=date], select, textarea {
