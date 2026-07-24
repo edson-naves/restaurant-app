@@ -951,9 +951,9 @@ db.expire_all()
 booking = db.get(Reservation, booking.id)
 check(booking.guest_name == "Edson" and booking.party_size == 6 and booking.at.strftime('%H:%M') == "20:15",
       "a reservation can be edited")
-# Both appear on the page.
+# Both appear on the page (the booking was just renamed to "Edson").
 page = client.get("/reservations").text
-check("Booking Test" in page and "Walkin Test" in page,
+check("Edson" in page and "Walkin Test" in page,
       "both show on the reservations page")
 # Seat the walk-in onto a free table -> opens an order and links it.
 res_free = db.execute(
