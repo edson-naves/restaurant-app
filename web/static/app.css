@@ -266,6 +266,10 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .course-adv > summary { cursor: pointer; list-style: none; font-size: 12px; }
 .course-adv > summary::-webkit-details-marker { display: none; }
 
+/* Quantity + Add to order on one row, so the button is always in view. */
+.cfg-addrow { display: flex; gap: 10px; align-items: flex-end; margin-bottom: 14px; }
+.cfg-addrow #addb { flex: 1; min-height: 42px; }
+
 /* Quantity stepper: [ − ] [ n ] [ + ] */
 .qtystep { display: inline-flex; align-items: stretch; }
 .qtystep .qbtn {

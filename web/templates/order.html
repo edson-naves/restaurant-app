@@ -177,13 +177,16 @@
       {% if configuring %}
       <input type="hidden" name="menu_item_id" value="{{ configuring.id }}">
       <p class="sub" style="margin:0 0 10px">Configuring <b>{{ configuring.name }}</b> · base ${{ configuring.price_cents|money }}</p>
-      <div class="field">
-        <label>Quantity</label>
-        <div class="qtystep">
-          <button type="button" class="qbtn" onclick="stepQty(-1)" aria-label="Less">−</button>
-          <input type="number" name="quantity" id="qty" value="1" min="1" max="20" oninput="updAddPrice()">
-          <button type="button" class="qbtn" onclick="stepQty(1)" aria-label="More">+</button>
+      <div class="cfg-addrow">
+        <div class="field" style="margin:0">
+          <label>Quantity</label>
+          <div class="qtystep">
+            <button type="button" class="qbtn" onclick="stepQty(-1)" aria-label="Less">−</button>
+            <input type="number" name="quantity" id="qty" value="1" min="1" max="20" oninput="updAddPrice()">
+            <button type="button" class="qbtn" onclick="stepQty(1)" aria-label="More">+</button>
+          </div>
         </div>
+        <button class="btn primary" id="addb">Add to order <span id="addp"></span></button>
       </div>
       {# Course is auto-set from the menu section; the override is tucked away
          since it's rarely needed (coursing: fire starters, then mains). #}
@@ -253,8 +256,6 @@
         <input type="text" name="notes" placeholder="e.g. no ice, birthday">
       </div>
       </div>{# /notes panel #}
-
-      <button class="btn primary" id="addb">Add to order <span id="addp"></span></button>
       {% else %}
       <p class="sub" style="margin:0">Select an item above to configure it.</p>
       {% endif %}
