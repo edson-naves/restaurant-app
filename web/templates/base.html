@@ -58,6 +58,9 @@
       document.querySelectorAll('details.edit-menu[open]').forEach(function (d) {
         d.removeAttribute('open');
       });
+      // Escape also closes an open modal (e.g. the receipt) via its backdrop.
+      var backdrop = document.querySelector('.modal-backdrop');
+      if (backdrop && backdrop.href) window.location.href = backdrop.href;
     }
   });
 </script>

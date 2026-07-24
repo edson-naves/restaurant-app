@@ -130,6 +130,20 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .empty { color: var(--muted); padding: 28px; text-align: center; }
 
+/* Modal overlay (e.g. the receipt). Backdrop is a full-screen link that closes;
+   the card is a separate centered layer, so clicks on it don't dismiss. */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 60; }
+.modal-card {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 61; width: min(440px, 94vw); max-height: 92vh; overflow: auto;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px; padding: 16px; box-shadow: 0 20px 60px rgba(0,0,0,.55);
+}
+@media print {
+  .modal-backdrop { display: none; }
+  .modal-card { position: static; transform: none; box-shadow: none; border: 0; width: auto; max-height: none; }
+}
+
 /* ---------- floor plan (4.1.1) ---------- */
 .legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }

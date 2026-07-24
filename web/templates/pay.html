@@ -275,4 +275,27 @@
     {% endif %}
   </div>
 </div>
+
+{# Receipt modal (4.2.7): pops over the pay screen; clicking the backdrop or
+   Close returns here. The backdrop is a sibling link, so card clicks don't
+   dismiss it. #}
+{% if receipt_view %}
+{% set data = receipt_view.data %}
+{% set receipt = receipt_view.receipt %}
+{% set biz = receipt_view.biz %}
+{% set tip_guide = receipt_view.tip_guide %}
+{% set deliveries = receipt_view.deliveries %}
+{% set sent = receipt_view.sent %}
+<a class="modal-backdrop" href="/orders/{{ order.id }}/pay" aria-label="Close receipt"></a>
+<div class="modal-card">
+  <div class="between noprint" style="margin-bottom:10px">
+    <strong>{{ receipt.kind }} receipt</strong>
+    <div style="display:flex;gap:8px">
+      <button class="btn sm primary" onclick="window.print()">Print</button>
+      <a class="btn sm" href="/orders/{{ order.id }}/pay">Close ✕</a>
+    </div>
+  </div>
+  {% include "_receipt_body.html" %}
+</div>
+{% endif %}
 {% endblock %}

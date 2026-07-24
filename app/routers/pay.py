@@ -49,6 +49,34 @@ def _load(db: Session, order_id: int) -> Order:
     return order
 
 
+def _receipt_ctx(db: Session, payment_id: int) -> dict | None:
+    """Everything a receipt render needs (chit + tip guide + deliveries), or
+    None if no receipt was issued. Shared by the standalone page and the modal.
+    """
+    receipt = db.execute(
+        select(Receipt).where(Receipt.payment_id == payment_id)
+    ).scalars().first()
+    if receipt is None:
+        return None
+    data = json.loads(receipt.payload_json)
+    subtotal_cents = round(float(data["subtotal"].replace(",", "")) * 100)
+    cfg = settings_svc.all_settings(db)
+    deliveries = db.execute(
+        select(ReceiptDelivery).where(ReceiptDelivery.receipt_id == receipt.id)
+        .order_by(ReceiptDelivery.sent_at.desc())
+    ).scalars().all()
+    return {
+        "receipt": receipt, "data": data, "deliveries": deliveries,
+        "tip_guide": {
+            "p20": money(pct(subtotal_cents, 20)),
+            "p18": money(pct(subtotal_cents, 18)),
+            "p15": money(pct(subtotal_cents, 15)),
+        },
+        "biz": {"name": cfg["biz_name"], "addr": cfg["biz_address"],
+                "postal": cfg["biz_postal"], "phone": cfg["biz_phone"]},
+    }
+
+
 def _tip_for(db: Session, tip_mode: str, tip_custom: str, base: int) -> int:
     """Resolve the tip in cents from the chosen mode (4.2.6).
 
@@ -72,6 +100,8 @@ def _tip_for(db: Session, tip_mode: str, tip_custom: str, base: int) -> int:
 def payment_screen(
     order_id: int,
     request: Request,
+    receipt: int | None = None,
+    sent: str = "",
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("payments.take")),
 ):
@@ -79,6 +109,13 @@ def payment_screen(
     order = _load(db, order_id)
     ledgers, unassigned = build_ledgers(db, order)
     panel = balance_panel(db, order)
+
+    # ?receipt=N pops the just-issued receipt as a modal over this screen.
+    receipt_view = None
+    if receipt:
+        rc = _receipt_ctx(db, receipt)
+        if rc is not None:
+            receipt_view = {**rc, "sent": sent}
 
     instruments = db.execute(
         select(PaymentInstrument).order_by(PaymentInstrument.id)
@@ -111,6 +148,7 @@ def payment_screen(
         "auto_gratuity": settings_svc.gratuity_config(db).applies(order.guest_count),
         # 4.2.6 — mandatory service charge rate (0 = none), shown on the screen.
         "service_charge_rate": settings_svc.service_charge_rate(db),
+        "receipt_view": receipt_view,
         "title": f"Payment · {order.code}",
     })
 
@@ -286,9 +324,11 @@ def take_seat_payment(
         raise HTTPException(400, str(e))
 
     db.commit()
-    # Straight to the receipt: it is what the guest is handed, and it carries
-    # the Print button. A back link returns to the pay screen for the next seat.
-    return RedirectResponse(f"/payments/{payment.id}/receipt", status_code=303)
+    # Pop the receipt as a modal over the pay screen (closing it returns here
+    # for the next seat), rather than a full-page redirect away.
+    return RedirectResponse(
+        f"/orders/{order.id}/pay?receipt={payment.id}", status_code=303
+    )
 
 
 @router.post("/orders/{order_id}/pay-all")
@@ -330,7 +370,9 @@ def take_full_payment(
         raise HTTPException(400, str(e))
 
     db.commit()
-    return RedirectResponse(f"/payments/{payment.id}/receipt", status_code=303)
+    return RedirectResponse(
+        f"/orders/{order.id}/pay?receipt={payment.id}", status_code=303
+    )
 
 
 @router.post("/payments/{payment_id}/void")
@@ -402,33 +444,11 @@ def view_receipt(
     Keyed by payment: a receipt is issued per tender, so the seat that paid
     early (4.2.5) gets its own document immediately.
     """
-    receipt = db.execute(
-        select(Receipt).where(Receipt.payment_id == payment_id)
-    ).scalars().first()
-    if receipt is None:
+    ctx = _receipt_ctx(db, payment_id)
+    if ctx is None:
         raise HTTPException(404, "No receipt was issued for that payment.")
-    data = json.loads(receipt.payload_json)
-
-    # Tip guide is figured on the pre-tax subtotal (the convention), parsed back
-    # from the stored display string so the receipt stays a pure render of the
-    # saved payload.
-    subtotal_cents = round(float(data["subtotal"].replace(",", "")) * 100)
-    tip_guide = {
-        "p20": money(pct(subtotal_cents, 20)),
-        "p18": money(pct(subtotal_cents, 18)),
-        "p15": money(pct(subtotal_cents, 15)),
-    }
-    cfg = settings_svc.all_settings(db)
-    deliveries = db.execute(
-        select(ReceiptDelivery).where(ReceiptDelivery.receipt_id == receipt.id)
-        .order_by(ReceiptDelivery.sent_at.desc())
-    ).scalars().all()
     return render(request, "receipt.html", {
-        "db": db, "staff": staff, "receipt": receipt, "data": data,
-        "tip_guide": tip_guide, "deliveries": deliveries, "sent": sent,
-        "biz": {"name": cfg["biz_name"], "addr": cfg["biz_address"],
-                "postal": cfg["biz_postal"], "phone": cfg["biz_phone"]},
-        "title": "Receipt",
+        "db": db, "staff": staff, "sent": sent, "title": "Receipt", **ctx,
     })
 
 
@@ -450,6 +470,8 @@ def send_receipt(
         receipt_delivery.send(db, receipt, method, destination, staff)
     except receipt_delivery.DeliveryError as e:
         raise HTTPException(400, str(e))
+    # Stay in the receipt modal over the pay screen.
     return RedirectResponse(
-        f"/payments/{payment_id}/receipt?sent={method.lower()}", status_code=303
+        f"/orders/{receipt.order_id}/pay?receipt={payment_id}&sent={method.lower()}",
+        status_code=303,
     )
