@@ -265,33 +265,31 @@
       {% if not order.items %}
         <p class="empty">No items yet.</p>
       {% else %}
-      <div class="scroll" style="overflow:visible">
-      <table>
-        <thead><tr><th>Item</th><th>Seat</th><th class="num">Total</th><th></th></tr></thead>
-        <tbody>
-        {% for i in order.items %}
-        <tr>
-          <td>
-            {{ i.quantity }}× {{ i.menu_item.name }}
-            <span class="pill {{ 'ok' if i.kitchen_status == 'ready' else ('warn' if i.kitchen_status == 'preparing' else 'open') }}">{{ i.kitchen_status }}</span>
-            <span class="sub" style="font-size:11px">· {{ i.course|course }}</span>
-            {# A settled line can't be edited or removed (it'd break the total),
-               so mark it "paid" to explain the missing ✎/✕ buttons. #}
-            {% if i.allocations %}<span class="pill paid" title="Already paid — can't be changed or removed">paid ✓</span>{% endif %}
-            {# Provenance (4.1.1): this line arrived from another table via merge. #}
-            {% if i.merged_from_order and i.merged_from_order.table %}<span class="pill open" title="Merged in from {{ i.merged_from_order.code }}">⤷ from Table {{ i.merged_from_order.table.number }}</span>{% endif %}
-            {% for o in i.options %}<br><span class="sub" style="font-size:11px">+ {{ o.label }}{% if o.price_delta_cents %} (+${{ o.price_delta_cents|money }}){% endif %}</span>{% endfor %}
-            {% for m in i.modifiers %}<br><span class="sub" style="font-size:11px">+ {{ m.modifier.name }}</span>{% endfor %}
-            {% if i.allergens %}<br><span class="pill allergy" title="Allergy — flag to the kitchen">⚠ {{ i.allergens }}</span>{% endif %}
-            {% if i.notes %}<br><span style="color:#f2c46b;font-size:11px">✎ {{ i.notes }}</span>{% endif %}
-          </td>
-          <td>
-            {% if i.is_shared %}<span class="pill open">shared</span>
-            {% elif i.seat %}{{ i.seat.seat_number }}
-            {% else %}<span class="sub">—</span>{% endif %}
-          </td>
-          <td class="num">${{ i.line_total_cents|money }}</td>
-          <td style="white-space:nowrap">
+      <div class="ordgroups">
+        {% for g in line_groups %}
+        <div class="ordgroup">
+          <div class="ordgroup-head">
+            <span class="seat-sq" style="background:{{ g.num|seat_color }}">{% if g.num %}{{ g.num }}{% elif g.num == 0 %}T{% else %}·{% endif %}</span>
+            <strong>{{ g.label }}</strong>
+            <span class="sub" style="margin:0">{{ g.count }} item{{ '' if g.count == 1 else 's' }}</span>
+          </div>
+          {% for i in g.lines %}
+          <div class="ordline">
+            <div class="ordline-main">
+              <div>
+                {{ i.quantity }}× {{ i.menu_item.name }}
+                <span class="pill {{ 'ok' if i.kitchen_status == 'ready' else ('warn' if i.kitchen_status == 'preparing' else 'open') }}">{{ i.kitchen_status }}</span>
+                <span class="sub" style="font-size:11px">· {{ i.course|course }}</span>
+                {% if i.allocations %}<span class="pill paid" title="Already paid — can't be changed or removed">paid ✓</span>{% endif %}
+                {% if i.merged_from_order and i.merged_from_order.table %}<span class="pill open" title="Merged in from {{ i.merged_from_order.code }}">⤷ from Table {{ i.merged_from_order.table.number }}</span>{% endif %}
+              </div>
+              {% for o in i.options %}<span class="sub" style="font-size:11px">+ {{ o.label }}{% if o.price_delta_cents %} (+${{ o.price_delta_cents|money }}){% endif %}</span>{% endfor %}
+              {% for m in i.modifiers %}<span class="sub" style="font-size:11px">+ {{ m.modifier.name }}</span>{% endfor %}
+              {% if i.allergens %}<span class="pill allergy" title="Allergy — flag to the kitchen">⚠ {{ i.allergens }}</span>{% endif %}
+              {% if i.notes %}<span style="color:#f2c46b;font-size:11px">✎ {{ i.notes }}</span>{% endif %}
+            </div>
+            <div class="ordline-total">${{ i.line_total_cents|money }}</div>
+            <div class="ordline-actions">
             {% if can('orders.manage') and not i.allocations and order.status not in ('paid','closed','cancelled') %}
             <details class="edit-menu" style="display:inline-block">
               <summary class="btn sm" style="display:inline-block" title="Edit">✎</summary>
@@ -349,12 +347,12 @@
               <button class="btn sm primary" title="Fire just this item to the kitchen now">Fire</button>
             </form>
             {% endif %}
-          </td>
-        </tr>
+            </div>{# /ordline-actions #}
+          </div>{# /ordline #}
+          {% endfor %}
+        </div>{# /ordgroup #}
         {% endfor %}
-        </tbody>
-      </table>
-      </div>
+      </div>{# /ordgroups #}
       {% endif %}
     </div>
 

@@ -498,6 +498,24 @@ def order_screen(
         "status": _seat_status(shared_items),
     }
 
+    # Order lines grouped by seat for the order panel, in seat order, then the
+    # shared/table items, then anything still unassigned.
+    # 'lines' not 'items': in Jinja, group.items would resolve to the dict's
+    # built-in .items() method, not this list.
+    line_groups = []
+    for s in order.seats:
+        its = [i for i in order.items if i.seat_id == s.id and not i.is_shared]
+        if its:
+            line_groups.append({"label": f"Seat {s.seat_number}", "num": s.seat_number,
+                                "count": sum(i.quantity for i in its), "lines": its})
+    if shared_items:
+        line_groups.append({"label": "Table", "num": 0,
+                            "count": sum(i.quantity for i in shared_items), "lines": shared_items})
+    unassigned = [i for i in order.items if i.seat_id is None and not i.is_shared]
+    if unassigned:
+        line_groups.append({"label": "Unassigned", "num": None,
+                            "count": sum(i.quantity for i in unassigned), "lines": unassigned})
+
     # Free tables this party could be moved to, and other occupied tables it
     # could be merged with (4.1.1). Both only when this order is on a table,
     # still open, and hasn't taken any payment.
@@ -536,6 +554,7 @@ def order_screen(
         "free_tables": free_tables, "mergeable_tables": mergeable_tables,
         "active_seat": active_seat,
         "seat_cards": seat_cards, "table_card": table_card,
+        "line_groups": line_groups,
         "configuring": configuring,
         "title": f"Order {order.code}",
     })
