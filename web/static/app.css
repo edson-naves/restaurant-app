@@ -119,6 +119,21 @@ h2 { font-size: 17px; margin: 0 0 12px; }
   display: flex; align-items: center; justify-content: center; font-size: 24px;
   margin: 0 auto 10px;
 }
+/* Compact "Today at a glance" strip in the page header. */
+.glance-mini { padding: 8px 10px; }
+.glance-mini-row { display: flex; gap: 8px; }
+.gm {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 9px; padding: 6px 10px;
+  flex: 1 1 0; min-width: 0; white-space: nowrap;
+}
+.gm b { font-size: 17px; font-variant-numeric: tabular-nums; }
+.gm-t { display: flex; flex-direction: column; line-height: 1.15; overflow: hidden; }
+.gm-t span { font-size: 10px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; }
+.gm-t small { font-size: 9px; color: var(--muted); }
+@media (max-width: 720px) { .glance-mini { display: none; } }
+
 .glance { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 @media (max-width: 560px) { .glance { grid-template-columns: repeat(2, 1fr); } }
 .glance-tile { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; }
@@ -206,6 +221,18 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .dot.occupied { background: var(--occupied); }
 .dot.ready_to_pay { background: var(--ready); }
 
+/* Menu admin: item photo thumbnail + upload/remove controls. */
+.menu-thumb {
+  width: 48px; height: 48px; border-radius: 8px; overflow: hidden;
+  background: var(--panel-2); border: 1px solid var(--line);
+  display: flex; align-items: center; justify-content: center;
+}
+.menu-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.menu-thumb .mt-emoji { font-size: 24px; line-height: 1; }
+.menu-thumb-acts { display: flex; gap: 4px; margin-top: 5px; }
+.menu-thumb-acts form { margin: 0; }
+
+.floor-head { margin: 0 0 10px; font-size: 15px; color: var(--muted); }
 .floor {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px;
 }
@@ -273,6 +300,37 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 860px) {
   .pos-grid { grid-template-columns: 1fr; }
   .pos-order { grid-column: auto; }
+  /* Stacked: the category rail becomes a horizontal, swipeable strip so it
+     doesn't eat a full screen of height before the menu. */
+  .pos-cats .catrail {
+    flex-direction: row; overflow-x: auto; gap: 8px;
+    padding-bottom: 4px; -webkit-overflow-scrolling: touch;
+  }
+  .pos-cats .catrail-item { white-space: nowrap; flex: 0 0 auto; }
+}
+
+/* Tablet / touch tuning — applies only to touch devices (coarse pointer), so
+   the laptop (mouse/trackpad) keeps its denser, unchanged layout. The target
+   is comfortable ~44px tap areas on the screens waiters live in. */
+@media (pointer: coarse) {
+  .btn { min-height: 44px; padding: 9px 16px; }
+  .btn.sm { min-height: 40px; padding: 8px 13px; font-size: 14px; }
+  input[type=text], input[type=number], input[type=date], input[type=time],
+  input[type=email], input[type=tel], input[type=search], input[type=datetime-local],
+  select, textarea { min-height: 46px; }
+  .tabs a { padding: 11px 18px; }
+  .catrail-item { padding: 14px 14px; }
+  .mi-row { padding: 12px 14px; }
+  .seatcard { min-width: 84px; padding: 9px 12px; }
+  .qtystep .qbtn { min-width: 40px; min-height: 40px; }
+  /* Payment / split screen: the tip pills, item ticks and share checkboxes are
+     the fiddliest taps in service — make each a comfortable target. The custom
+     tip field carries an inline 28px height, so it needs !important to grow. */
+  .tipset label, .pos-cfg .tipset label { padding: 10px 16px; font-size: 14px; }
+  .tipset input[type=text] { min-height: 40px !important; padding: 6px 10px !important; width: 92px !important; }
+  .tick { min-height: 40px; padding: 8px 0; font-size: 14px; }
+  .seat .lines { font-size: 14px; }
+  .seat .lines li { padding: 6px 0; }
 }
 .menu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 /* Item list rows (4.1.2): thumbnail · name/description · price · add. */
@@ -378,6 +436,14 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 .seatcard:hover { border-color: var(--sc); text-decoration: none; }
 .seatcard.on { background: color-mix(in srgb, var(--sc) 22%, var(--panel-2)); border-color: var(--sc); }
+/* The add-seat form is a plain wrapper — let its button sit in the seat row. */
+.seat-add-form { display: contents; }
+.seatcard.seat-add {
+  border: 1px dashed var(--line); border-left: 1px dashed var(--line);
+  background: transparent; color: var(--muted); justify-content: center;
+}
+.seatcard.seat-add:hover { border-color: var(--accent); color: var(--ink); }
+.seatcard.seat-add .sc-num { color: inherit; }
 .sc-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .sc-num { font-weight: 700; font-size: 13px; font-variant-numeric: tabular-nums; }
 .sc-count { font-size: 11px; color: var(--muted); }
@@ -504,10 +570,11 @@ tr.dim:hover > td { opacity: 1; }
 .chip .meta { color: var(--muted); font-size: 11px; }
 .chip.dragging { opacity: .4; }
 
-/* Zone marker. The chip's left border already carries table status, so the
-   zone gets its own channel rather than competing for the same one. */
-.chip { position: relative; }
-.chip .zdot {
+/* Zone marker. The card's left border already carries table status, so the
+   zone gets its own channel (a corner dot) rather than competing for it. Shared
+   by the admin layout chips and the operational floor-plan cards. */
+.chip, .tbl { position: relative; }
+.chip .zdot, .tbl .zdot {
   position: absolute; top: 7px; right: 7px;
   width: 9px; height: 9px; border-radius: 50%;
   box-shadow: 0 0 0 2px var(--panel);
@@ -527,6 +594,9 @@ tr.dim:hover > td { opacity: 1; }
   flex: 1; max-width: 460px; min-height: 0; padding: 9px 12px;
   border-radius: 10px;
 }
+/* Header tools: the search bar sits beside the status filters, top-right. */
+.hdr-tools { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; justify-content: flex-end; }
+.hdr-tools .findbar { flex: 1 1 240px; min-width: 220px; }
 /* A hidden card must not keep its grid slot, or filtering leaves gaps. */
 .tbl[hidden], section[hidden] { display: none !important; }
 

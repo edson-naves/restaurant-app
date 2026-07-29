@@ -1,0 +1,21 @@
+# Production-only dependencies. Install alongside the base set:
+#     pip install -r requirements.txt -r requirements-prod.txt
+#
+# Kept separate so local development and the test suites run on SQLite with no
+# Postgres driver or C build tooling required.
+
+-r requirements.txt
+
+# PostgreSQL driver (psycopg 3). Use the DSN form:
+#   DATABASE_URL=postgresql+psycopg://user:password@host:5432/restaurant
+psycopg[binary]==3.2.3
+
+# Production ASGI server / process manager. Uvicorn runs the app; gunicorn
+# supervises a pool of uvicorn workers across CPU cores:
+#   gunicorn app.main:app -k uvicorn.workers.UvicornWorker -w 4 -b 0.0.0.0:8000
+gunicorn==23.0.0
+
+# Image processing — downscales menu photos on upload so the tablet stays
+# snappy. Optional at runtime: app.services.images falls back to a raw copy if
+# it is not installed (keeps SQLite dev + tests dependency-free).
+Pillow==11.0.0

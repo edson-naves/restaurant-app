@@ -1,0 +1,30 @@
+# HTTPS on the local network with Caddy's built-in internal CA — no public
+# domain or internet needed. Tablets reach the app at https://<box-ip>/.
+#
+# The first time, install Caddy's root certificate on each tablet so it trusts
+# the connection without a warning (see DEPLOY.md → "Trust the certificate"):
+#   docker compose exec caddy cat /data/caddy/pki/authorities/local/root.crt
+
+{
+	# The box's LAN hostname/IP isn't known at build time, so Caddy issues an
+	# internal-CA certificate on demand for whatever address a tablet uses.
+	# It asks this endpoint before issuing and proceeds only on a 200; the
+	# app's health check returns 200 for any host — i.e. "trust any client on
+	# this LAN". The only issuer is the local internal CA (no public ACME, no
+	# rate limits), so on-demand is safe here.
+	on_demand_tls {
+		ask http://app:8000/healthz
+	}
+}
+
+:443 {
+	tls internal {
+		on_demand
+	}
+	reverse_proxy app:8000
+}
+
+# Send plain HTTP straight to HTTPS.
+:80 {
+	redir https://{host}{uri} permanent
+}

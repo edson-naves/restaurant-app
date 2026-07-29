@@ -86,11 +86,15 @@ def build_allergens(selected: list[str], other: str = "") -> str:
 def category_emoji(category_name: str) -> str:
     """A representative emoji for a menu category (icons + item thumbnails)."""
     n = (category_name or "").strip().lower()
+    # Order matters: check specific keys before generic ones. "tea" is left out
+    # of the coffee row on purpose — it is a substring of "steaks".
     table = [
-        (("start", "appet"), "🥟"), (("salad",), "🥗"), (("burger",), "🍔"),
-        (("sandwich",), "🥪"), (("pasta",), "🍝"), (("side",), "🍟"),
-        (("dessert", "sweet"), "🍰"), (("beer",), "🍺"), (("wine",), "🍷"),
-        (("hot drink", "coffee", "tea"), "☕"), (("drink", "soft", "beverage"), "🥤"),
+        (("start", "appet"), "🥟"), (("soup",), "🍲"), (("salad",), "🥗"),
+        (("burger",), "🍔"), (("sandwich", "wrap"), "🥪"), (("pasta",), "🍝"),
+        (("pizza",), "🍕"), (("steak", "grill"), "🥩"), (("seafood", "fish"), "🐟"),
+        (("chicken",), "🍗"), (("side",), "🍟"), (("dessert", "sweet"), "🍰"),
+        (("beer",), "🍺"), (("wine",), "🍷"), (("cocktail",), "🍸"),
+        (("coffee", "hot drink"), "☕"), (("drink", "soft", "beverage"), "🥤"),
         (("main", "entr"), "🍽️"), (("fav",), "⭐"),
     ]
     for keys, emoji in table:
@@ -109,9 +113,9 @@ def course_for_category(category_name: str) -> int:
     the mains. The waiter can always override per line.
     """
     n = (category_name or "").strip().lower()
-    if "start" in n or "appet" in n:
+    if "start" in n or "appet" in n or "salad" in n or "soup" in n:
         return 1
-    if "dessert" in n or "sweet" in n:
+    if "dessert" in n or "sweet" in n or "coffee" in n:
         return 3
     return 2
 

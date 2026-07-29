@@ -109,6 +109,33 @@
         Add table
       </button>
     </form>
+
+    <div style="border-top:1px solid var(--line);margin:18px 0 14px"></div>
+
+    <strong>Assign a waiter to a zone</strong>
+    <p class="sub" style="margin:2px 0 10px">
+      Hand a whole section to one server — sets the covering waiter for every
+      active table in the zone at once. Any open orders on those tables move
+      with it. Pick <em>unassigned</em> to clear the zone.
+    </p>
+    <form method="post" action="/admin/tables/assign-zone-waiter">
+      <div class="field">
+        <label>Zone on {{ current_floor.name if current_floor else 'this floor' }}</label>
+        <select name="zone_id" id="zoneWaiterZone" required>
+          {% for z in floor_zones %}<option value="{{ z.id }}">{{ z.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Waiter</label>
+        <select name="waiter_id" id="zoneWaiterPick">
+          <option value="0">— unassigned —</option>
+          {% for w in waiters %}<option value="{{ w.id }}">{{ w.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <button class="btn primary" style="width:100%" {{ 'disabled' if not floor_zones else '' }}>
+        Assign to zone
+      </button>
+    </form>
   </div>
 
   <div class="card" style="flex:3">
@@ -255,6 +282,19 @@
 
 {% block scripts %}
 <script>
+// "Assign a waiter to a zone" picker: show the waiter already covering the
+// chosen zone (rather than always "unassigned"), so it reflects reality and an
+// accidental submit doesn't clear the zone. Syncs on load and on zone change.
+(function () {
+  const zoneWaiter = {{ zone_waiter|tojson }};
+  const zoneSel = document.getElementById('zoneWaiterZone');
+  const pick = document.getElementById('zoneWaiterPick');
+  if (!zoneSel || !pick) return;
+  function sync() { pick.value = String(zoneWaiter[zoneSel.value] || 0); }
+  zoneSel.addEventListener('change', sync);
+  sync();
+})();
+
 // Bulk selection. Buttons stay disabled until something is ticked, so a bulk
 // action can never fire against an empty selection.
 (function () {

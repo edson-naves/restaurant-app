@@ -125,6 +125,15 @@
       <span class="sc-count">{{ c.count }} item{{ '' if c.count == 1 else 's' }}</span>
     </a>
     {% endfor %}
+    {# Add the next seat when a guest joins — capped at the table's capacity. #}
+    {% if order.table and order.seats|length < order.table.capacity %}
+    <form method="post" action="/orders/{{ order.id }}/seats/add" class="seat-add-form">
+      <button class="seatcard seat-add" title="Add a seat — a guest joined (up to {{ order.table.capacity }})">
+        <span class="sc-top"><span class="sc-num">+ Seat</span></span>
+        <span class="sc-count">add guest</span>
+      </button>
+    </form>
+    {% endif %}
     {# 0 = the whole table, for shared items (bread, a bottle of wine) split across the seats. #}
     <a class="seatcard shared status-{{ table_card.status }} {{ 'on' if active_seat == 0 else '' }}"
        style="--sc:{{ 0|seat_color }}"

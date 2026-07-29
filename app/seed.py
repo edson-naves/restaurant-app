@@ -14,7 +14,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.database import Base, SessionLocal, engine
+from app import migrate
+from app.menu_data import MENU, DESCRIPTIONS, modifier_groups_for
+from app.menu_images import IMAGE_URLS
 from app.models.oltp import (
+    Floor,
+    Zone,
     Channel,
     DeliveryOrder,
     DeliveryStatus,
@@ -100,47 +105,11 @@ STAFF = [
     ("Nina Petrova", Role.DELIVERY_COORDINATOR, "5003"),    # own driver
 ]
 
-# (name, price_cents, shareable, popularity weight)
-MENU = {
-    "Starters": [
-        ("Garlic Bread", 795, True, 9),
-        ("Bruschetta", 950, True, 6),
-        ("Crispy Calamari", 1450, True, 7),
-        ("Soup of the Day", 850, False, 4),
-        ("Caesar Salad", 1250, False, 6),
-    ],
-    "Mains": [
-        ("Ribeye Steak", 3450, False, 8),
-        ("Grilled Salmon", 2790, False, 7),
-        ("Chicken Parmesan", 2350, False, 8),
-        ("Margherita Pizza", 1850, True, 9),
-        ("Mushroom Risotto", 2100, False, 5),
-        ("Beef Burger", 1950, False, 10),
-        ("Pad Thai", 1990, False, 5),
-        ("Lamb Chops", 3200, False, 4),
-    ],
-    "Sides": [
-        ("Truffle Fries", 850, True, 8),
-        ("Mashed Potatoes", 650, False, 4),
-        ("Seasonal Vegetables", 700, False, 3),
-        ("Side Salad", 600, False, 3),
-    ],
-    "Desserts": [
-        ("Tiramisu", 950, False, 6),
-        ("New York Cheesecake", 900, False, 5),
-        ("Chocolate Lava Cake", 1050, False, 6),
-        ("Gelato (2 scoops)", 700, False, 4),
-    ],
-    "Drinks": [
-        ("House Red (glass)", 1100, False, 8),
-        ("House White (glass)", 1100, False, 7),
-        ("Craft Beer", 900, False, 8),
-        ("Soft Drink", 450, False, 9),
-        ("Espresso", 400, False, 6),
-        ("Sparkling Water", 500, False, 5),
-    ],
-}
+# The menu (categories, items, ingredients, modifiers) lives in app/menu_data.py
+# and is imported above: MENU, DESCRIPTIONS, modifier_groups_for().
 
+# Generic line-note modifiers, attached at random to history items so the
+# reports and receipts show a realistic sprinkling of "extra sauce" etc.
 MODIFIERS = [
     ("Extra cheese", 200),
     ("No onions", 0),
@@ -151,142 +120,6 @@ MODIFIERS = [
     ("Side of aioli", 100),
     ("Spicy", 0),
 ]
-
-# Short menu-item descriptions shown under the name in the item list (4.1.2).
-MENU_DESCRIPTIONS = {
-    "Beef Burger": "Lettuce, tomato, onion, pickles",
-    "Bruschetta": "Grilled bread, tomato, basil",
-    "Caesar Salad": "Romaine, parmesan, croutons",
-    "Chicken Parmesan": "Breaded chicken, marinara, mozzarella",
-    "Chocolate Lava Cake": "Warm centre, vanilla ice cream",
-    "Craft Beer": "Local IPA, on tap",
-    "Crispy Calamari": "Lightly fried, lemon aioli",
-    "Espresso": "Double shot",
-    "Garlic Bread": "Toasted, garlic butter, herbs",
-    "Gelato (2 scoops)": "Ask your server for flavours",
-    "Grilled Salmon": "Atlantic salmon, seasonal greens",
-    "House Red (glass)": "Cabernet blend",
-    "House White (glass)": "Crisp Sauvignon Blanc",
-    "Lamb Chops": "Herb-crusted, red wine jus",
-    "Margherita Pizza": "Tomato, mozzarella, basil",
-    "Mashed Potatoes": "Buttery, creamy",
-    "Mushroom Risotto": "Arborio rice, wild mushrooms",
-    "New York Cheesecake": "Classic, berry compote",
-    "Pad Thai": "Rice noodles, peanuts, lime",
-    "Ribeye Steak": "10oz, hand-cut, chimichurri",
-    "Seasonal Vegetables": "Chef's daily selection",
-    "Side Salad": "Mixed greens, house dressing",
-    "Soft Drink": "Coke, Sprite, or ginger ale",
-    "Soup of the Day": "Ask your server",
-    "Sparkling Water": "500ml bottle",
-    "Tiramisu": "Espresso, mascarpone, cocoa",
-    "Truffle Fries": "Parmesan, truffle oil",
-}
-
-# 4.1.2 — grouped, rule-based modifiers per item:
-#   item -> [(group, required, min_select, max_select, [(option, price_cents)])]
-# NOTE: items the e2e suite adds by name (Beef Burger, Garlic Bread, Grilled
-# Salmon, Ribeye Steak) carry only OPTIONAL groups — a required group there
-# would reject the suite's plain adds. Lamb Chops keeps its required group,
-# which the modifier-group e2e test targets.
-MODIFIER_GROUPS = {
-    # ---- Drinks ----
-    "Soft Drink": [
-        ("Choice", True, 1, 1,
-         [("Coke", 0), ("Coke Zero", 0), ("Diet Coke", 0), ("Sprite", 0), ("Ginger Ale", 0)]),
-        ("Ice", False, 0, 1,
-         [("Regular ice", 0), ("Light ice", 0), ("No ice", 0)]),
-    ],
-    "Espresso": [
-        ("Shots", True, 1, 1, [("Single", 0), ("Double", 0)]),
-        ("Milk", False, 0, 1,
-         [("None", 0), ("Regular", 0), ("Oat", 60), ("Almond", 60)]),
-    ],
-    "Sparkling Water": [
-        ("Serve", False, 0, 1, [("With lime", 0), ("No lime", 0), ("Room temperature", 0)]),
-    ],
-    "House Red (glass)": [
-        ("Pour", True, 1, 1, [("6 oz", 0), ("9 oz", 400)]),
-    ],
-    "House White (glass)": [
-        ("Pour", True, 1, 1, [("6 oz", 0), ("9 oz", 400)]),
-    ],
-    "Craft Beer": [
-        ("Size", False, 0, 1, [("Pint", 0), ("Half pint", -300)]),
-    ],
-    # ---- Starters ----
-    "Caesar Salad": [
-        ("Add protein", False, 0, 1, [("Grilled chicken", 500), ("Grilled shrimp", 700)]),
-        ("Dressing", False, 0, 1, [("On the side", 0), ("Extra dressing", 0)]),
-    ],
-    "Garlic Bread": [   # e2e-used -> optional only
-        ("Add-ons", False, 0, 0, [("Add cheese", 150), ("Chilli flakes", 0)]),
-    ],
-    "Soup of the Day": [
-        ("Bread", False, 0, 1, [("Sourdough roll", 0), ("No bread", 0)]),
-    ],
-    "Crispy Calamari": [
-        ("Dip", False, 0, 1, [("Lemon aioli", 0), ("Marinara", 0), ("Sweet chilli", 0)]),
-    ],
-    # ---- Mains ----
-    "Beef Burger": [   # e2e-used -> optional only
-        ("Cooking level", False, 0, 1,
-         [("Rare", 0), ("Medium Rare", 0), ("Medium", 0), ("Well Done", 0)]),
-        ("Cheese", False, 0, 1, [("American", 0), ("Cheddar", 100), ("Swiss", 100)]),
-        ("Add-ons", False, 0, 0, [("Bacon", 200), ("Fried Egg", 150), ("Avocado", 200)]),
-    ],
-    "Ribeye Steak": [   # e2e-used -> optional only
-        ("Cooking level", False, 0, 1,
-         [("Rare", 0), ("Medium Rare", 0), ("Medium", 0), ("Medium Well", 0), ("Well Done", 0)]),
-        ("Sauce", False, 0, 1, [("Peppercorn", 150), ("Béarnaise", 150), ("Mushroom", 150)]),
-    ],
-    "Grilled Salmon": [   # e2e-used -> optional only
-        ("Side", False, 0, 1, [("Mashed potato", 0), ("Fries", 0), ("Side salad", 0)]),
-    ],
-    "Lamb Chops": [   # required — the modifier-group e2e test targets this
-        ("Cooking level", True, 1, 1,
-         [("Rare", 0), ("Medium Rare", 0), ("Medium", 0), ("Medium Well", 0), ("Well Done", 0)]),
-        ("Sauce", False, 0, 1,
-         [("None", 0), ("Peppercorn", 150), ("Béarnaise", 150), ("Mint jelly", 0)]),
-        ("Add-ons", False, 0, 0,
-         [("Extra chop", 600), ("Grilled mushrooms", 200), ("Truffle butter", 250)]),
-    ],
-    "Chicken Parmesan": [
-        ("Pasta side", True, 1, 1,
-         [("Spaghetti", 0), ("Penne", 0), ("Side salad instead", 0)]),
-        ("Add-ons", False, 0, 0,
-         [("Extra cheese", 200), ("Extra sauce", 100), ("Chilli flakes", 0)]),
-    ],
-    "Pad Thai": [
-        ("Protein", True, 1, 1, [("Chicken", 0), ("Shrimp", 300), ("Tofu", 0)]),
-        ("Spice", True, 1, 1, [("Mild", 0), ("Medium", 0), ("Hot", 0)]),
-    ],
-    "Mushroom Risotto": [
-        ("Add-ons", False, 0, 0, [("Grilled chicken", 500), ("Extra parmesan", 150)]),
-    ],
-    "Margherita Pizza": [
-        ("Size", True, 1, 1, [("10 inch", 0), ("14 inch", 500)]),
-        ("Extra toppings", False, 0, 0,
-         [("Mushrooms", 150), ("Pepperoni", 200), ("Extra cheese", 200), ("Olives", 100)]),
-    ],
-    # ---- Sides ----
-    "Side Salad": [
-        ("Dressing", False, 0, 1,
-         [("House", 0), ("Caesar", 0), ("Balsamic", 0), ("On the side", 0)]),
-    ],
-    # ---- Desserts ----
-    "New York Cheesecake": [
-        ("Topping", False, 0, 1, [("Berry compote", 0), ("Chocolate sauce", 0), ("Plain", 0)]),
-    ],
-    "Chocolate Lava Cake": [
-        ("Serve with", False, 0, 1,
-         [("Vanilla ice cream", 0), ("Whipped cream", 0), ("On its own", 0)]),
-    ],
-    "Gelato (2 scoops)": [
-        ("Flavours", True, 1, 2,
-         [("Vanilla", 0), ("Chocolate", 0), ("Strawberry", 0), ("Pistachio", 100), ("Salted caramel", 0)]),
-    ],
-}
 
 SPECIAL_NOTES = [
     "", "", "", "", "",
@@ -312,7 +145,11 @@ def reset_database() -> None:
     Base.metadata.create_all(engine)
 
 
-def seed_reference(db: Session) -> dict:
+def seed_reference(db: Session, staff_list: list | None = None) -> dict:
+    """Seed the reference data (channels, instruments, staff, floor/zones,
+    tables, menu, modifiers). ``staff_list`` overrides the demo roster — the
+    production bootstrap passes a single owner so no default-PIN accounts exist
+    on a live system."""
     channels = {}
     for code, name, ctype, third in CHANNELS:
         c = Channel(code=code, name=name, channel_type=ctype, is_third_party=third)
@@ -329,60 +166,80 @@ def seed_reference(db: Session) -> dict:
         instruments[code] = i
 
     staff = []
-    for name, role, pin in STAFF:
+    for name, role, pin in (staff_list if staff_list is not None else STAFF):
         s = Staff(name=name, role=role, pin_code=pin, is_active=True)
         db.add(s)
         staff.append(s)
 
+    # A default floor and its zones, so every table has a real home on any
+    # database. This used to be done by the SQLite-only migrate backfill;
+    # creating it here makes seeding correct on Postgres too (where migrate is a
+    # no-op). zone_id is the source of truth; the legacy `zone` string is kept
+    # in step for the floor-plan ETL. On SQLite the backfill now finds no
+    # orphans and does nothing.
+    floor = Floor(name=migrate.DEFAULT_FLOOR, sort_order=0, is_active=True)
+    db.add(floor)
+    db.flush()
+    zones_by_name: dict[str, Zone] = {}
+    for i, zname in enumerate(ZONES):
+        z = Zone(floor_id=floor.id, name=zname, sort_order=i)
+        db.add(z)
+        db.flush()
+        zones_by_name[zname] = z
+
     tables = []
     for n in range(1, N_TABLES + 1):
-        zone = ZONES[(n - 1) // 10] if (n - 1) // 10 < len(ZONES) else "Main"
+        zname = ZONES[(n - 1) // 10] if (n - 1) // 10 < len(ZONES) else "Main"
         capacity = rng.choice([2, 2, 4, 4, 4, 6, 8])
         tables.append(
             RestaurantTable(
-                number=n, zone=zone, capacity=capacity,
-                status=TableStatus.FREE,
+                number=n, zone=zname, zone_id=zones_by_name[zname].id,
+                capacity=capacity, status=TableStatus.FREE,
                 pos_x=(n - 1) % 8, pos_y=(n - 1) // 8,
             )
         )
         db.add(tables[-1])
 
+    # Build the menu. Item names are keys elsewhere (descriptions, modifiers,
+    # the e2e suite's scalar_one lookups), so a name is kept only once — later
+    # cross-listings (e.g. Garlic Bread as a side) are skipped. Each item gets
+    # its modifier groups by type (4.1.2), with per-item overrides folded in.
     items = []
+    seen: set[str] = set()
     for sort_order, (cat_name, entries) in enumerate(MENU.items()):
         cat = MenuCategory(name=cat_name, sort_order=sort_order)
         db.add(cat)
         db.flush()
         for item_name, price, shareable, weight in entries:
+            if item_name in seen:
+                continue
+            seen.add(item_name)
             mi = MenuItem(
                 category_id=cat.id, name=item_name,
-                description=MENU_DESCRIPTIONS.get(item_name, ""),
+                description=DESCRIPTIONS.get(item_name, ""),
                 price_cents=price, is_shareable=shareable, is_active=True,
+                image_url=IMAGE_URLS.get(item_name, ""),
             )
             db.add(mi)
             db.flush()
             items.append((mi, weight))
+
+            for gi, (gname, req, mn, mx, opts) in enumerate(
+                modifier_groups_for(item_name, cat_name)
+            ):
+                g = ModifierGroup(menu_item_id=mi.id, name=gname, required=req,
+                                  min_select=mn, max_select=mx, sort_order=gi)
+                db.add(g)
+                db.flush()
+                for oi, (oname, oprice) in enumerate(opts):
+                    db.add(ModifierOption(group_id=g.id, name=oname,
+                                          price_delta_cents=oprice, sort_order=oi))
 
     modifiers = []
     for name, delta in MODIFIERS:
         m = Modifier(name=name, price_delta_cents=delta)
         db.add(m)
         modifiers.append(m)
-
-    # 4.1.2 — grouped, rule-based modifiers on a couple of demo items. Kept off
-    # the items the e2e suite orders, which add them without options.
-    by_name = {mi.name: mi for mi, _ in items}
-    for item_name, groups in MODIFIER_GROUPS.items():
-        mi = by_name.get(item_name)
-        if mi is None:
-            continue
-        for gi, (gname, req, mn, mx, opts) in enumerate(groups):
-            g = ModifierGroup(menu_item_id=mi.id, name=gname, required=req,
-                              min_select=mn, max_select=mx, sort_order=gi)
-            db.add(g)
-            db.flush()
-            for oi, (oname, price) in enumerate(opts):
-                db.add(ModifierOption(group_id=g.id, name=oname,
-                                      price_delta_cents=price, sort_order=oi))
 
     db.flush()
     return {

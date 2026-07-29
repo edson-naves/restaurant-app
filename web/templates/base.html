@@ -15,8 +15,12 @@
     {% if can('reservations') %}
     <a href="/reservations" class="{{ 'on' if request.url.path.startswith('/reservations') or request.url.path.startswith('/waitlist') else '' }}">Reservations</a>
     {% endif %}
+    {% if can('kitchen.view') %}
     <a href="/kitchen" class="{{ 'on' if request.url.path.startswith('/kitchen') else '' }}">Kitchen</a>
+    {% endif %}
+    {% if can('delivery.view') %}
     <a href="/delivery" class="{{ 'on' if request.url.path.startswith('/delivery') else '' }}">Delivery</a>
+    {% endif %}
     {% if can('menu.availability') %}
     <a href="/availability" class="{{ 'on' if request.url.path.startswith('/availability') else '' }}">86</a>
     {% endif %}

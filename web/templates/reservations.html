@@ -61,14 +61,24 @@
 </tr>
 {% endmacro %}
 
-<div class="between">
+<div class="res-grid" style="margin-bottom:16px">
   <div>
-    <h1>Reservations &amp; waitlist</h1>
-    <p class="sub">Manage bookings and walk-ins</p>
+    <h1 style="margin:0">Reservations &amp; waitlist</h1>
+    <p class="sub" style="margin:2px 0 0">Manage bookings and walk-ins</p>
   </div>
-  <div style="display:flex;gap:8px">
-    <a class="btn" href="/">← Floor</a>
-    <a class="btn primary" href="#book">+ New reservation</a>
+  <div>
+    <div class="card glance-mini" style="margin:0">
+      <div class="between" style="margin-bottom:4px;gap:16px">
+        <strong style="font-size:10px">Today at a glance</strong>
+        {% if can('reports.view') %}<a class="spec" href="/reports" style="font-size:9px">View full report →</a>{% endif %}
+      </div>
+      <div class="glance-mini-row">
+        <div class="gm"><b>🗓️ {{ stats.expected_count }}</b><div class="gm-t"><span>Today</span><small>{{ stats.expected_guests }} guests</small></div></div>
+        <div class="gm"><b style="color:var(--warn)">🕐 {{ stats.soon_count }}</b><div class="gm-t"><span>Next hour</span><small>{{ stats.soon_guests }} guests</small></div></div>
+        <div class="gm"><b>👥 {{ stats.wl_count }}</b><div class="gm-t"><span>On waitlist</span><small>~{{ stats.wl_avg }} min</small></div></div>
+        <div class="gm"><b style="color:var(--ok)">✓ {{ stats.seated_count }}</b><div class="gm-t"><span>Seated</span><small>{{ stats.seated_guests }} guests</small></div></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -199,19 +209,6 @@
           <div class="field" style="flex:1;min-width:160px;margin:0"><label>Phone (optional)</label><input type="text" name="phone" placeholder="e.g. 604-123-4567"></div>
         </div>
       </form>
-    </div>
-
-    <div class="card">
-      <div class="between" style="margin-bottom:10px">
-        <strong>Today at a glance</strong>
-        {% if can('reports.view') %}<a class="btn sm" href="/reports">View full report →</a>{% endif %}
-      </div>
-      <div class="glance">
-        <div class="glance-tile"><div class="gt-top">🗓️ <b>{{ stats.res_count }}</b></div><div class="gt-lbl">Reservations</div><div class="gt-sub">{{ stats.res_guests }} total guests</div></div>
-        <div class="glance-tile"><div class="gt-top">👥 <b>{{ stats.wl_count }}</b></div><div class="gt-lbl">On waitlist</div><div class="gt-sub">~{{ stats.wl_avg }} min avg wait</div></div>
-        <div class="glance-tile"><div class="gt-top" style="color:var(--ok)">✓ <b>{{ stats.seated_count }}</b></div><div class="gt-lbl">Seated</div><div class="gt-sub">{{ stats.seated_guests }} seated guests</div></div>
-        <div class="glance-tile"><div class="gt-top" style="color:var(--warn)">🕐 <b>{{ stats.upcoming_count }}</b></div><div class="gt-lbl">Upcoming</div><div class="gt-sub">{{ stats.upcoming_guests }} upcoming guests</div></div>
-      </div>
     </div>
   </div>
 </div>

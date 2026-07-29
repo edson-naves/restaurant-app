@@ -21,3 +21,12 @@ db/*.db-wal
 Thumbs.db
 desktop.ini
 outbox/
+
+# Local secrets — never commit
+.env
+
+# Cloud Run secrets
+env.yaml
+
+# Local image-upload staging (source images; linked copies live in web/static/img/menu)
+mvp_menu_upload/

@@ -1,0 +1,60 @@
+# On-prem stack for the restaurant floor: Postgres + the app + a Caddy reverse
+# proxy that terminates HTTPS on the local network. Runs on any box with Docker
+# (a mini-PC in the restaurant, or your laptop on the same wi-fi to start).
+#
+#   1. cp .env.example .env   and set POSTGRES_PASSWORD (and OWNER_PIN)
+#   2. docker compose up -d --build
+#   3. docker compose run --rm app python -m app.bootstrap   # one-time seed
+#
+# Tablets then browse to https://<this-box-ip>/ over the restaurant wi-fi.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rms}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-restaurant}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rms} -d ${POSTGRES_DB:-restaurant}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-rms}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-restaurant}
+      # Used only to seed the owner on a brand-new database (idempotent).
+      OWNER_PIN: ${OWNER_PIN:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    expose:
+      - "8000"
+    # Menu photos live on the host so they can be added/changed without a
+    # rebuild; the app serves them at /static/img/menu/<file>.
+    volumes:
+      - ./web/static/img/menu:/app/web/static/img/menu
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  caddydata:
+  caddyconfig:

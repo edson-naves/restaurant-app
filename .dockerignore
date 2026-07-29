@@ -1,0 +1,19 @@
+# Keep the build context small and never ship dev/local state into the image.
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+.git
+.gitignore
+db
+outbox
+backups
+.env
+tests
+*.md
+Dockerfile
+docker-compose.yml
+Caddyfile
+scripts
+env.yaml

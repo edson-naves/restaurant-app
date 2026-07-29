@@ -56,7 +56,16 @@ DEFAULT_FLOOR = "1st floor"
 
 
 def run(engine: Engine) -> list[str]:
-    """Apply any missing columns, then backfill. Returns what changed."""
+    """Apply any missing columns, then backfill. Returns what changed.
+
+    These additive migrations exist to evolve an *existing* SQLite development
+    database whose schema predates a column, and they introspect with SQLite's
+    PRAGMA. A fresh Postgres (or any non-SQLite) gets the full, current schema
+    from Base.metadata.create_all() and seeds its floors/zones in seed_reference,
+    so there is nothing to migrate — skip cleanly rather than run PRAGMA there.
+    """
+    if engine.dialect.name != "sqlite":
+        return []
     applied: list[str] = []
     with engine.begin() as conn:
         for table, column, ddl in ADDED_COLUMNS:

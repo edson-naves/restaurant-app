@@ -197,9 +197,9 @@ check(len(order.seats) == 3, "a seat was created per guest (4.2.4)", f"{len(orde
 # Step 3: add items, one per seat + a shared starter.
 from app.models.oltp import MenuItem  # noqa: E402
 
-steak = db.execute(select(MenuItem).where(MenuItem.name == "Ribeye Steak")).scalar_one()
+steak = db.execute(select(MenuItem).where(MenuItem.name == "Ribeye")).scalar_one()
 salmon = db.execute(select(MenuItem).where(MenuItem.name == "Grilled Salmon")).scalar_one()
-burger = db.execute(select(MenuItem).where(MenuItem.name == "Beef Burger")).scalar_one()
+burger = db.execute(select(MenuItem).where(MenuItem.name == "Classic Burger")).scalar_one()
 bread = db.execute(select(MenuItem).where(MenuItem.name == "Garlic Bread")).scalar_one()
 
 client.post(f"/orders/{order_id}/items", data={"menu_item_id": steak.id, "seat_number": 1, "quantity": 1, "notes": "Medium rare"})
@@ -1110,7 +1110,7 @@ check("86" in client.get("/availability").text, "the availability board shows it
 # It drops off the order screen at once.
 client.cookies.set("staff_id", str(waiter.id))
 scr = client.get(f"/orders/{order2_id}?category={burger.category_id}").text
-check("Beef Burger" not in scr, "an 86'd item leaves the order screen")
+check("Classic Burger" not in scr, "an 86'd item leaves the order screen")
 # And a stale page cannot still order it.
 r = client.post(f"/orders/{order2_id}/items", data={"menu_item_id": burger.id, "seat_number": 2})
 check(r.status_code == 400, "adding an 86'd item is refused")

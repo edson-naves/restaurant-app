@@ -51,7 +51,7 @@ def _next_code(db: Session) -> str:
 # --------------------------------------------------------------------------
 
 @router.get("/")
-def floor_plan(request: Request, db: Session = Depends(get_db), staff: Staff = Depends(current_staff)):
+def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db), staff: Staff = Depends(current_staff)):
     # Retired tables (admin) keep their history but leave the floor.
     tables = db.execute(
         select(RestaurantTable)
@@ -100,18 +100,53 @@ def floor_plan(request: Request, db: Session = Depends(get_db), staff: Staff = D
     # One section per floor rather than one grid of everything: a waiter works a
     # floor, and 50+ cards from three storeys interleaved cannot be scanned.
     # Sections, not tabs — nothing is hidden behind a click mid-service.
+    def zones_of(group):
+        # Distinct zones present in the section, ordered as on the floor plan —
+        # for the colour key. zone_ref carries the swatch each card is dotted with.
+        seen: dict[int, object] = {}
+        for c in group:
+            z = c["table"].zone_ref
+            if z and z.id not in seen:
+                seen[z.id] = z
+        return sorted(seen.values(), key=lambda z: (z.sort_order or 0, z.name))
+
     sections = []
-    for floor in sorted(
+    for fl in sorted(
         {c["table"].floor for c in cards if c["table"].floor},
         key=lambda f: (f.sort_order, f.name),
     ):
-        group = [c for c in cards if c["table"].floor_id == floor.id]
-        sections.append({"floor": floor, "cards": group, "counts": tally(group)})
+        group = [c for c in cards if c["table"].floor_id == fl.id]
+        sections.append({"floor": fl, "cards": group, "counts": tally(group),
+                         "zones": zones_of(group)})
 
     # A table whose zone was removed would otherwise vanish from the floor.
     homeless = [c for c in cards if not c["table"].floor]
     if homeless:
-        sections.append({"floor": None, "cards": homeless, "counts": tally(homeless)})
+        sections.append({"floor": None, "cards": homeless, "counts": tally(homeless),
+                         "zones": zones_of(homeless)})
+
+    # Floors are tabs, not stacked sections (mirrors Manage): a waiter works one
+    # floor, and the ?floor= tab picks which. The rest is a tap away, so the
+    # heading and the old per-floor filter don't both compete for the same job.
+    floor_tabs = [{"id": s["floor"].id if s["floor"] else 0,
+                   "name": s["floor"].name if s["floor"] else "No floor"}
+                  for s in sections]
+    # ?floor=all shows every floor at once; otherwise a numeric id picks one
+    # (default: the first). Kept as a string so "all" and ids share one param.
+    show_all = floor == "all"
+    try:
+        sel = int(floor) if floor and not show_all else 0
+    except ValueError:
+        sel = 0
+    current = next((s for s in sections
+                    if (s["floor"].id if s["floor"] else 0) == sel),
+                   sections[0] if sections else None)
+    current_floor_id = current["floor"].id if current and current["floor"] else 0
+    # Every floor is rendered (so the search can reach any table); the page shows
+    # one at a time via tabs, or all at once. Header/status counts start on the
+    # shown scope and the client keeps them in step as you switch or search.
+    counts = tally(cards) if show_all else (
+        current["counts"] if current else {"free": 0, "occupied": 0, "ready": 0})
 
     delivery_pending = db.execute(
         select(func.count()).select_from(DeliveryOrder).where(
@@ -122,6 +157,9 @@ def floor_plan(request: Request, db: Session = Depends(get_db), staff: Staff = D
     return render(request, "floor.html", {
         "db": db, "staff": staff, "cards": cards, "counts": counts,
         "sections": sections,
+        "floor_tabs": floor_tabs, "current_floor_id": current_floor_id,
+        "show_all": show_all,
+        "floor_card_count": len(cards) if show_all else (len(current["cards"]) if current else 0),
         "delivery_pending": delivery_pending, "title": "Floor plan",
     })
 
@@ -558,6 +596,41 @@ def order_screen(
         "configuring": configuring,
         "title": f"Order {order.code}",
     })
+
+
+@router.post("/orders/{order_id}/seats/add")
+def add_seat(
+    order_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("orders.manage")),
+):
+    """Add the next seat to a live dine-in order — a guest joined the table.
+
+    Party size is fixed when the table is opened, but parties grow. This adds
+    seat N+1 without a move/merge, capped at the table's capacity (raise it in
+    Manage tables to seat more). guest_count moves with it so the header, the
+    floor card's "N guests" and the covers in reports stay in step, and the new
+    seat is selected so the next item added lands on it.
+    """
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(404, "Order not found")
+    if order.status in (OrderStatus.PAID, OrderStatus.CLOSED):
+        raise HTTPException(400, "This order is closed.")
+    if order.table is None:
+        raise HTTPException(400, "Only dine-in table orders have seats.")
+
+    next_n = max((s.seat_number for s in order.seats), default=0) + 1
+    if next_n > order.table.capacity:
+        raise HTTPException(
+            400,
+            f"Table {order.table.number} seats {order.table.capacity}. Raise its "
+            "capacity in Manage tables before adding another seat.",
+        )
+    db.add(Seat(order_id=order.id, seat_number=next_n, label=f"Seat {next_n}"))
+    order.guest_count = max(order.guest_count, next_n)
+    db.commit()
+    return RedirectResponse(f"/orders/{order_id}?seat={next_n}", status_code=303)
 
 
 @router.post("/orders/{order_id}/items")

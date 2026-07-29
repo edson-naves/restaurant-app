@@ -1,7 +1,7 @@
 """Reservations & waitlist — section 4.1.5 (front of house)."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -63,11 +63,15 @@ def reservations_page(
         return sum(r.party_size for r in rs)
 
     avg_wait = round(sum(r.quoted_minutes for r in waitlist) / len(waitlist)) if waitlist else 0
+    # Arrivals due within the next hour — the host's "what's imminent" cue.
+    soon = now + timedelta(hours=1)
+    next_hour = [r for r in bookings if now <= r.at <= soon]
     stats = {
-        "res_count": len(bookings), "res_guests": guests(bookings),
+        # Status-based, mutually exclusive tiles (no double-counting):
+        "expected_count": len(today_res), "expected_guests": guests(today_res),
         "wl_count": len(waitlist), "wl_avg": avg_wait,
         "seated_count": len(seated_today), "seated_guests": guests(seated_today),
-        "upcoming_count": len(upcoming_res), "upcoming_guests": guests(upcoming_res),
+        "soon_count": len(next_hour), "soon_guests": guests(next_hour),
     }
 
     return render(request, "reservations.html", {

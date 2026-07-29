@@ -3,49 +3,68 @@
 <div class="between">
   <div>
     <h1>Floor plan</h1>
-    <p class="sub">{{ cards|length }} tables</p>
+    <p class="sub">{{ floor_card_count }} tables{% if cards|length != floor_card_count %} · {{ cards|length }} across all floors{% endif %}</p>
   </div>
-  <div class="legend">
-    {# Buttons, not labels: clicking a status filters the plan to it. #}
-    <button type="button" class="legend-btn" data-status="free">
-      <i class="dot free"></i>Free {{ counts.free }}
-    </button>
-    <button type="button" class="legend-btn" data-status="occupied">
-      <i class="dot occupied"></i>Occupied {{ counts.occupied }}
-    </button>
-    <button type="button" class="legend-btn" data-status="ready_to_pay">
-      <i class="dot ready_to_pay"></i>Ready to pay {{ counts.ready }}
-    </button>
-    {% if delivery_pending %}<span>· <a href="/delivery">{{ delivery_pending }} delivery in queue</a></span>{% endif %}
+  {# Search sits right next to the status filters, top-right. #}
+  <div class="hdr-tools">
+    <div class="findbar" style="margin:0">
+      <input type="search" id="tableFind" autocomplete="off"
+             placeholder="Find tables — e.g. 12, 21, 30  ·  or  sofia ready">
+      <span class="meta" id="findCount"></span>
+      <button type="button" class="btn sm" id="findClear" hidden>Clear</button>
+    </div>
+    <div class="legend">
+      {# Buttons, not labels: clicking a status filters the plan to it. Counts are
+         kept current for the shown scope by the script. #}
+      <button type="button" class="legend-btn" data-status="free">
+        <i class="dot free"></i>Free <span data-count="free">{{ counts.free }}</span>
+      </button>
+      <button type="button" class="legend-btn" data-status="occupied">
+        <i class="dot occupied"></i>Occupied <span data-count="occupied">{{ counts.occupied }}</span>
+      </button>
+      <button type="button" class="legend-btn" data-status="ready_to_pay">
+        <i class="dot ready_to_pay"></i>Ready to pay <span data-count="ready_to_pay">{{ counts.ready }}</span>
+      </button>
+      {% if delivery_pending %}<span>· <a href="/delivery">{{ delivery_pending }} delivery in queue</a></span>{% endif %}
+    </div>
   </div>
 </div>
-
-{# Filters in the page rather than round-tripping the server: mid-service the
-   answer has to be instant, and reloading would collapse any open seat form. #}
-<div class="findbar">
-  <input type="search" id="tableFind" autocomplete="off"
-         placeholder="Find tables — e.g. 12, 21, 30  ·  or  sofia ready">
-  <span class="meta" id="findCount"></span>
-  <button type="button" class="btn sm" id="findClear" hidden>Clear</button>
-</div>
-<p class="sub" style="margin:-8px 0 16px">
-  Separate with commas to look for several at once; words without a comma
-  narrow the search. Matches number, zone, floor, waiter, status or order code.
+<p class="sub" style="margin:6px 0 14px">
+  Separate with commas to look for several at once; words without a comma narrow
+  the search. Matches number, zone, floor, waiter, status or order code —
+  <strong>across every floor</strong>, whichever tab you're on.
 </p>
+
+{# Floor tabs — one floor at a time, like the Manage page. The href is a no-JS
+   fallback (server renders that floor); the script switches instantly instead. #}
+{% if floor_tabs | length > 1 %}
+<nav class="subtabs" id="floorTabs" style="margin:0 0 14px">
+  <a href="/?floor=all" data-floor="" class="{{ 'on' if show_all else '' }}">All tables</a>
+  {% for f in floor_tabs %}
+  <a href="/?floor={{ f.id }}" data-floor="{{ f.id }}" class="{{ 'on' if not show_all and f.id == current_floor_id else '' }}">{{ f.name }}</a>
+  {% endfor %}
+</nav>
+{% endif %}
+
 <p class="empty" id="findNone" hidden>No table matches that.</p>
 
-{# 'sec', not 's' — the seat-guests form below already loops `s` over staff. #}
+{# 'sec', not 's' — the seat-guests form below already loops `s` over staff.
+   All floors are rendered so search can reach any table; non-active floors start
+   hidden (a no-JS fallback that the script then manages for instant switching). #}
 {% for sec in sections %}
-<section style="margin-bottom:26px">
-  {% if sections|length > 1 %}
-  <div class="between" style="margin-bottom:10px">
-    <h2 style="margin:0;font-size:16px">{{ sec.floor.name if sec.floor else 'No floor assigned' }}</h2>
-    <div class="legend">
-      <span><i class="dot free"></i>{{ sec.counts.free }}</span>
-      <span><i class="dot occupied"></i>{{ sec.counts.occupied }}</span>
-      <span><i class="dot ready_to_pay"></i>{{ sec.counts.ready }}</span>
-      <span class="meta">{{ sec.cards|length }} tables</span>
-    </div>
+{% set sec_floor_id = sec.floor.id if sec.floor else 0 %}
+<section style="margin-bottom:26px" data-floor="{{ sec_floor_id }}"
+         {% if not show_all and sec_floor_id != current_floor_id %}hidden{% endif %}>
+  {# Only meaningful when several floors show at once (All, or a cross-floor
+     search); the script shows/hides it. A single floor is named by its tab. #}
+  <h3 class="floor-head" {% if not show_all %}hidden{% endif %}>{{ sec.floor.name if sec.floor else 'No floor assigned' }}</h3>
+  {% if sec.zones %}
+  <div class="legend" style="margin:0 0 12px">
+    {% for z in sec.zones %}
+    <button type="button" class="legend-btn zone-btn" data-zone="{{ z.id }}">
+      <i class="dot" style="background: {{ z.swatch }}"></i>{{ z.name }}
+    </button>
+    {% endfor %}
   </div>
   {% endif %}
 
@@ -62,8 +81,10 @@
        )|lower %}
     {% if c.order %}
       <a class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
-         data-status="{{ c.table.status }}"
+         data-status="{{ c.table.status }}" data-floor="{{ sec_floor_id }}"
+         data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
          href="/orders/{{ c.order.id }}">
+        {% if c.table.zone_ref %}<i class="zdot" style="background: {{ c.table.zone_ref.swatch }}" title="{{ c.table.zone }}"></i>{% endif %}
         <span class="n">Table {{ c.table.number }}</span>
         <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes|duration }}</span>
         <span class="meta">{{ c.waiter or '—' }}</span>
@@ -72,7 +93,9 @@
       </a>
     {% else %}
       <details class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
-         data-status="{{ c.table.status }}">
+         data-status="{{ c.table.status }}" data-floor="{{ sec_floor_id }}"
+         data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}">
+        {% if c.table.zone_ref %}<i class="zdot" style="background: {{ c.table.zone_ref.swatch }}" title="{{ c.table.zone }}"></i>{% endif %}
         <summary style="cursor:pointer;list-style:none">
           <span class="n">Table {{ c.table.number }}</span><br>
           <span class="meta">{{ c.table.zone }} · seats {{ c.table.capacity }}</span><br>
@@ -86,9 +109,14 @@
           </div>
           <div class="field">
             <label>Waiter</label>
+            {# Default to the table's covering waiter (set per zone/table under
+               Manage); fall back to whoever is signed in if the table has none. #}
+            {% set default_waiter = c.table.current_waiter_id
+                 if (c.table.current_waiter and c.table.current_waiter.is_active)
+                 else staff.id %}
             <select name="waiter_id">
               {% for s in all_staff if s.role == 'waiter' %}
-              <option value="{{ s.id }}" {{ 'selected' if s.id == staff.id else '' }}>{{ s.name }}</option>
+              <option value="{{ s.id }}" {{ 'selected' if s.id == default_waiter else '' }}>{{ s.name }}</option>
               {% endfor %}
             </select>
           </div>
@@ -116,7 +144,7 @@
 
   const cards = Array.from(document.querySelectorAll('.tbl[data-find]'));
   const sections = Array.from(document.querySelectorAll('section'));
-  const statusBtns = Array.from(document.querySelectorAll('.legend-btn'));
+  const statusBtns = Array.from(document.querySelectorAll('.legend-btn[data-status]'));
 
   // Two levels, so one box covers both questions a waiter asks:
   //   "table 12 in the Sun zone"  -> "12 sun"    words narrow (AND)
@@ -144,40 +172,62 @@
     });
   }
 
-  // Status is its own filter rather than words typed into the box: it ANDs
-  // with the text, so "moon" plus Free answers "which Moon tables are free".
-  function passesStatus(cardStatus, wanted) {
-    return !wanted || cardStatus === wanted;
-  }
+  // Status and zone are their own filters that AND with the text. The floor tab
+  // picks the default floor to show, but a TEXT SEARCH reaches every floor (so
+  // "table 45" finds it wherever it is), and picking a zone jumps to it too.
+  const zoneBtns = Array.from(document.querySelectorAll('.legend-btn[data-zone]'));
+  const floorTabs = Array.from(document.querySelectorAll('#floorTabs a[data-floor]'));
+  const countSpans = Array.from(document.querySelectorAll('[data-count]'));
 
   let statusFilter = null;
+  let zoneFilter = null;
+  const firstTab = document.querySelector('#floorTabs a.on') ||
+                   document.querySelector('#floorTabs a[data-floor]');
+  let activeFloor = firstTab ? firstTab.dataset.floor : null;
 
   function apply() {
-    const groups = parse(box.value);
+    const searching = parse(box.value).length > 0;
+    // A text search or a zone pick reaches across floors; otherwise the active
+    // floor tab scopes the view.
+    const floorFree = searching || zoneFilter !== null;
+    const avail = { free: 0, occupied: 0, ready_to_pay: 0 };
     let shown = 0;
 
     cards.forEach(function (card) {
-      const hit =
-        cardMatches(card.dataset.find, card.dataset.number, box.value) &&
-        passesStatus(card.dataset.status, statusFilter);
+      const textOk = cardMatches(card.dataset.find, card.dataset.number, box.value);
+      const zoneOk = !zoneFilter || card.dataset.zone === zoneFilter;
+      const floorOk = floorFree || !activeFloor || card.dataset.floor === activeFloor;
+      const scopeOk = textOk && zoneOk && floorOk;   // everything but status
+      if (scopeOk && avail.hasOwnProperty(card.dataset.status)) avail[card.dataset.status]++;
+      const hit = scopeOk && (!statusFilter || card.dataset.status === statusFilter);
       card.hidden = !hit;
       if (hit) shown++;
     });
 
-    statusBtns.forEach(function (btn) {
-      btn.classList.toggle('on', btn.dataset.status === statusFilter);
-    });
+    // Counts reflect what is selectable in the current scope (floor / search).
+    countSpans.forEach(function (s) { s.textContent = avail[s.dataset.count] || 0; });
+    statusBtns.forEach(function (b) { b.classList.toggle('on', b.dataset.status === statusFilter); });
+    zoneBtns.forEach(function (b) { b.classList.toggle('on', b.dataset.zone === zoneFilter); });
+    floorTabs.forEach(function (a) { a.classList.toggle('on', a.dataset.floor === activeFloor); });
 
-    // A floor with nothing left to show would otherwise leave a stray heading.
-    const searching = groups.length > 0 || statusFilter !== null;
-
+    // Hide any floor section with nothing to show. Floor headings appear only
+    // when more than one floor is on screen at once (All, or a cross-floor
+    // search) — a single floor is already named by its active tab.
+    const visibleSecs = [];
     sections.forEach(function (sec) {
-      const any = sec.querySelector('.tbl[data-find]:not([hidden])');
-      sec.hidden = searching && !any;
+      sec.hidden = !sec.querySelector('.tbl[data-find]:not([hidden])');
+      if (!sec.hidden) visibleSecs.push(sec);
     });
-    countEl.textContent = searching ? shown + ' of ' + cards.length : '';
-    clearBtn.hidden = !searching;
-    noneEl.hidden = !(searching && shown === 0);
+    const multiFloor = visibleSecs.length > 1;
+    sections.forEach(function (sec) {
+      const head = sec.querySelector('.floor-head');
+      if (head) head.hidden = sec.hidden || !multiFloor;
+    });
+
+    const filtering = searching || statusFilter !== null || zoneFilter !== null;
+    countEl.textContent = filtering ? shown + ' of ' + cards.length : '';
+    clearBtn.hidden = !filtering;
+    noneEl.hidden = !(filtering && shown === 0);
   }
 
   statusBtns.forEach(function (btn) {
@@ -188,9 +238,31 @@
     });
   });
 
+  zoneBtns.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      zoneFilter = (zoneFilter === btn.dataset.zone) ? null : btn.dataset.zone;
+      // A zone belongs to a floor — align the tab so clearing returns there.
+      if (zoneFilter) {
+        const z = document.querySelector('.tbl[data-zone="' + zoneFilter + '"]');
+        if (z) activeFloor = z.dataset.floor;
+      }
+      apply();
+    });
+  });
+
+  floorTabs.forEach(function (tab) {
+    tab.addEventListener('click', function (e) {
+      e.preventDefault();                 // switch instantly instead of reloading
+      activeFloor = tab.dataset.floor;
+      zoneFilter = null;                  // zones are floor-specific
+      apply();
+    });
+  });
+
   function reset() {
     box.value = '';
     statusFilter = null;
+    zoneFilter = null;
     apply();
   }
 

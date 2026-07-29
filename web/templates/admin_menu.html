@@ -57,13 +57,32 @@
     <table>
       <thead>
         <tr>
-          <th>Item</th><th>Description</th><th class="num">Price</th>
+          <th>Photo</th><th>Item</th><th>Description</th><th class="num">Price</th>
           <th>Category</th><th>Shareable</th><th></th>
         </tr>
       </thead>
       <tbody>
       {% for i in by_cat.get(c.id, []) %}
         <tr class="{{ '' if i.is_active else 'dim' }}">
+          <td>
+            <div class="menu-thumb">
+              {% if i.image_url %}<img src="{{ i.image_url }}" alt="{{ i.name }}">
+              {% else %}<span class="mt-emoji">{{ i.thumb_emoji }}</span>{% endif %}
+            </div>
+            <div class="menu-thumb-acts">
+              {# Label wraps a hidden file input; picking a file auto-submits. #}
+              <form method="post" action="/admin/menu/items/{{ i.id }}/image" enctype="multipart/form-data">
+                <label class="btn sm" style="margin:0;cursor:pointer">{{ 'Change' if i.image_url else 'Upload' }}
+                  <input type="file" name="image" accept="image/*" onchange="this.form.submit()" hidden>
+                </label>
+              </form>
+              {% if i.image_url %}
+              <form method="post" action="/admin/menu/items/{{ i.id }}/image/clear">
+                <button class="btn sm" title="Remove photo (revert to emoji)">✕</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
           <td>
             <input form="if{{ i.id }}" type="text" name="name" value="{{ i.name }}" style="width:180px">
             {% if not i.is_active %}<span class="pill open">off menu</span>{% endif %}
@@ -104,7 +123,7 @@
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="6" class="empty">Nothing in this category yet.</td></tr>
+        <tr><td colspan="7" class="empty">Nothing in this category yet.</td></tr>
       {% endfor %}
       </tbody>
     </table>

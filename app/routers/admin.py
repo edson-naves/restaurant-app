@@ -19,15 +19,17 @@ managers from settings explicitly).
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.deps import render, require, role_capabilities
+from app.deps import WEB_DIR, render, require, role_capabilities
 from app.services import settings as settings_svc
+from app.services.images import save_image
 from app.models.oltp import (
     Floor,
     MenuCategory,
@@ -269,6 +271,16 @@ def tables_page(
         select(Zone).where(Zone.is_active.is_(True)).order_by(Zone.floor_id, Zone.sort_order)
     ).scalars().all()
 
+    # For the "assign a waiter to a zone" picker: the waiter currently covering
+    # each zone on this floor, so the dropdown can pre-select it. A zone's waiter
+    # is well-defined only when its active tables all agree; a mix (or none) maps
+    # to 0 (unassigned). Keys are zone ids, values are staff ids.
+    zone_waiter: dict[int, int] = {}
+    for z in [zz for zz in zones if current and zz.floor_id == current.id]:
+        covering = {t.current_waiter_id for t in active
+                    if t.zone_id == z.id and t.current_waiter_id}
+        zone_waiter[z.id] = next(iter(covering)) if len(covering) == 1 else 0
+
     return render(request, "admin_tables.html", {
         "db": db, "staff": staff,
         "tables": tables,
@@ -293,6 +305,7 @@ def tables_page(
             z for z in zones if current and z.floor_id == current.id
         ],
         "waiters": waiters,
+        "zone_waiter": zone_waiter,
         "seats_total": sum(t.capacity for t in active),
         "done": done, "created": created,
         "skipped": [s for s in skipped.split(",") if s],
@@ -563,6 +576,35 @@ def bulk_tables(
     db.commit()
     return RedirectResponse(
         f"/admin/tables?done={done}&skipped={','.join(skipped)}", status_code=303
+    )
+
+
+@router.post("/tables/assign-zone-waiter")
+def assign_zone_waiter(
+    zone_id: int = Form(...),
+    waiter_id: int = Form(0),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Set (or clear) the covering waiter for every active table in a zone.
+
+    A shift-start shortcut: hand a whole section to one server instead of
+    setting each table by hand. Live orders on those tables move with the
+    waiter, exactly as the per-table assignment does (see _assign_waiter).
+    An invalid or inactive waiter rejects the whole batch before any change.
+    """
+    zone = _zone_or_400(db, zone_id)
+    tables = db.execute(
+        select(RestaurantTable).where(
+            RestaurantTable.zone_id == zone.id,
+            RestaurantTable.is_active.is_(True),
+        ).order_by(RestaurantTable.number)
+    ).scalars().all()
+    for table in tables:
+        _assign_waiter(db, table, waiter_id)
+    db.commit()
+    return RedirectResponse(
+        f"/admin/tables?floor={zone.floor_id}&done={len(tables)}", status_code=303
     )
 
 
@@ -1268,6 +1310,58 @@ def toggle_item(
     if item is None:
         raise HTTPException(404, "Menu item not found")
     item.is_active = bool(active)
+    db.commit()
+    return RedirectResponse("/admin/menu", status_code=303)
+
+
+# Menu photos are written under web/static and served at /static/img/menu/.
+# In the container this directory is bind-mounted to the host, so uploads
+# survive rebuilds and can be managed from the host too.
+MENU_IMG_DIR = WEB_DIR / "static" / "img" / "menu"
+_ALLOWED_IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+@router.post("/menu/items/{item_id}/image")
+def upload_item_image(
+    item_id: int,
+    image: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Attach a photo to a menu item (4.1.2). Falls back to the category emoji
+    whenever image_url is empty, so removing a photo just clears the field."""
+    item = db.get(MenuItem, item_id)
+    if item is None:
+        raise HTTPException(404, "Menu item not found")
+
+    ext = Path(image.filename or "").suffix.lower()
+    if ext not in _ALLOWED_IMG_EXT:
+        raise HTTPException(400, "Please upload a JPG, PNG, WEBP or GIF image.")
+
+    MENU_IMG_DIR.mkdir(parents=True, exist_ok=True)
+    # Deterministic name per item so re-uploads overwrite rather than pile up.
+    slug = re.sub(r"[^a-z0-9]+", "-", item.name.lower()).strip("-") or f"item{item.id}"
+    fname = f"{slug}-{item.id}{ext}"
+    # Downscale on the way in so a phone photo doesn't become a multi-MB thumb.
+    save_image(image.file, MENU_IMG_DIR / fname)
+
+    item.image_url = f"/static/img/menu/{fname}"
+    db.commit()
+    return RedirectResponse("/admin/menu", status_code=303)
+
+
+@router.post("/menu/items/{item_id}/image/clear")
+def clear_item_image(
+    item_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Drop a photo back to the category emoji. The file is left on disk (it may
+    be shared or re-linked); only the reference is cleared."""
+    item = db.get(MenuItem, item_id)
+    if item is None:
+        raise HTTPException(404, "Menu item not found")
+    item.image_url = ""
     db.commit()
     return RedirectResponse("/admin/menu", status_code=303)
 
