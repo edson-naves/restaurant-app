@@ -114,8 +114,12 @@
             {% set default_waiter = c.table.current_waiter_id
                  if (c.table.current_waiter and c.table.current_waiter.is_active)
                  else staff.id %}
+            {% set waiter_list = all_staff | selectattr('role', 'equalto', 'waiter') | list %}
             <select name="waiter_id">
-              {% for s in all_staff if s.role == 'waiter' %}
+              {# No waiters set up yet -> allow seating unassigned rather than
+                 submitting an empty field (which the server rejects). #}
+              {% if not waiter_list %}<option value="0">— unassigned —</option>{% endif %}
+              {% for s in waiter_list %}
               <option value="{{ s.id }}" {{ 'selected' if s.id == default_waiter else '' }}>{{ s.name }}</option>
               {% endfor %}
             </select>

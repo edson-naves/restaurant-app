@@ -168,7 +168,9 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
 def open_table(
     table_id: int,
     guests: int = Form(2),
-    waiter_id: int = Form(...),
+    # Optional: a restaurant with no waiters yet (or a host seating before
+    # assignment) can still open the table; 0 means "unassigned".
+    waiter_id: int = Form(0),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("orders.manage")),
 ):
@@ -190,12 +192,13 @@ def open_order_on_table(db: Session, table: RestaurantTable, guests: int, waiter
     Shared by the floor "open table" action and seating a reservation, so both
     paths create the order, its seats and the table state identically.
     """
+    wid = waiter_id or None                  # 0 / unset -> no waiter assigned
     channel = db.execute(select(Channel).where(Channel.code == "dine_in")).scalar_one()
     order = Order(
         code=_next_code(db),
         table_id=table.id,
         channel_id=channel.id,
-        waiter_id=waiter_id,
+        waiter_id=wid,
         status=OrderStatus.OPEN,
         guest_count=guests,
         opened_at=datetime.now(),
@@ -205,7 +208,7 @@ def open_order_on_table(db: Session, table: RestaurantTable, guests: int, waiter
 
     ensure_seats(db, order, guests)          # 4.2.4 — a payer per seat
     table.status = TableStatus.OCCUPIED      # system response: Occupied
-    table.current_waiter_id = waiter_id
+    table.current_waiter_id = wid
     return order
 
 
