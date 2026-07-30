@@ -66,7 +66,7 @@
         <tr class="{{ '' if i.is_active else 'dim' }}">
           <td>
             <div class="menu-thumb">
-              {% if i.image_url %}<img src="{{ i.image_url }}" alt="{{ i.name }}">
+              {% if i.image_url %}<img src="{{ i.image_url }}" alt="{{ i.name }}" loading="lazy" decoding="async">
               {% else %}<span class="mt-emoji">{{ i.thumb_emoji }}</span>{% endif %}
             </div>
             <div class="menu-thumb-acts">

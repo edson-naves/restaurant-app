@@ -165,7 +165,7 @@
          — no separate + needed. #}
       <a class="mi-row {{ 'on' if configuring and configuring.id == mi.id else '' }}"
          href="/orders/{{ order.id }}?item={{ mi.id }}&seat={{ active_seat }}&category={{ active_cat }}">
-        <span class="mi-thumb">{% if mi.image_url %}<img src="{{ mi.image_url }}" alt="">{% else %}{{ mi.thumb_emoji }}{% endif %}</span>
+        <span class="mi-thumb">{% if mi.image_url %}<img src="{{ mi.image_url }}" alt="" width="42" height="42" loading="lazy" decoding="async">{% else %}{{ mi.thumb_emoji }}{% endif %}</span>
         <span class="mi-body">
           <span class="mi-name">{{ mi.name }}{% if mi.modifier_groups %} <span class="spec">options</span>{% endif %}{% if mi.is_shareable %} <span class="spec">shareable</span>{% endif %}</span>
           {% if mi.description %}<span class="mi-desc">{{ mi.description }}</span>{% endif %}

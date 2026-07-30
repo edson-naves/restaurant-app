@@ -6,7 +6,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.deps import can, current_staff, render, require
@@ -27,6 +27,7 @@ from app.models.oltp import (
     OrderItemModifier,
     OrderItemOption,
     OrderStatus,
+    Payment,
     build_allergens,
     RestaurantTable,
     Role,
@@ -559,7 +560,22 @@ def order_screen(
     db: Session = Depends(get_db),
     staff: Staff = Depends(current_staff),
 ):
-    order = db.get(Order, order_id)
+    # Load the whole order graph up front. Without this, rendering the screen
+    # lazy-loads each item's modifiers/options/shares one row at a time — cheap
+    # on local SQLite but dozens of network round-trips against remote Postgres,
+    # which is what made this page crawl in production. selectinload collapses
+    # it to a handful of batched queries regardless of how many items there are.
+    order = db.execute(
+        select(Order)
+        .where(Order.id == order_id)
+        .options(
+            selectinload(Order.items).selectinload(OrderItem.modifiers),
+            selectinload(Order.items).selectinload(OrderItem.options),
+            selectinload(Order.items).selectinload(OrderItem.shares),
+            selectinload(Order.seats),
+            selectinload(Order.payments).selectinload(Payment.allocations),
+        )
+    ).scalar_one_or_none()
     if order is None:
         raise HTTPException(404, "Order not found")
 
