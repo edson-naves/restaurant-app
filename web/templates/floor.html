@@ -101,6 +101,15 @@
           <span class="meta">{{ c.table.zone }} · seats {{ c.table.capacity }}</span><br>
           {% if c.waiter %}<span class="meta">{{ c.waiter }}</span><br>{% endif %}
           <span class="pill free">free</span>
+          {% if can('settings') %}
+          {# Trash on the card corner: click, confirm, retired. Stops the click
+             from also toggling the card open. Nothing is deleted — the table is
+             kept and can be restored from Manage → Tables. #}
+          <button type="button" class="tbl-del" title="Retire Table {{ c.table.number }}"
+                  onclick="event.preventDefault();event.stopPropagation();if(confirm('Retire Table {{ c.table.number }}? It leaves the floor but stays under Manage → Tables, where you can restore it.'))document.getElementById('del-{{ c.table.id }}').submit();">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M10 11v6M14 11v6"/></svg>
+          </button>
+          {% endif %}
         </summary>
         {% if can('orders.manage') %}
         <form method="post" action="/tables/{{ c.table.id }}/open" style="margin-top:10px">
@@ -130,6 +139,9 @@
         {% else %}
           <p class="meta" style="margin-top:8px">No permission to open tables.</p>
         {% endif %}
+        {% if can('settings') %}
+        <form id="del-{{ c.table.id }}" method="post" action="/tables/{{ c.table.id }}/remove" hidden></form>
+        {% endif %}
       </details>
     {% endif %}
   {% endfor %}
@@ -139,16 +151,24 @@
 
 {# Quick "Add table" to the shown floor. Number is auto-assigned; the new table
    inherits the waiter already covering the chosen zone. Owner/settings only. #}
-{% if can('settings') and current_zones %}
+{% if can('settings') and all_zones %}
 <details class="edit-menu add-table-fab">
   <summary class="btn primary"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> Add New Table</summary>
   <form class="edit-pop" method="post" action="/tables/create">
     <strong style="display:block;margin-bottom:10px">Add a table</strong>
-    <input type="hidden" name="floor_id" value="{{ current_floor_id }}">
+    {# Floor + Zone are always here; the script hides the Floor row when a single
+       floor tab is active (it's implied) and shows it on "All tables". The zone
+       list always narrows to the chosen floor. #}
+    <div class="field" id="addFloorField" style="margin-bottom:10px">
+      <label>Floor</label>
+      <select name="floor_id" id="addFloor" required>
+        {% for f in floor_tabs if f.id %}<option value="{{ f.id }}" {{ 'selected' if not show_all and f.id == current_floor_id else '' }}>{{ f.name }}</option>{% endfor %}
+      </select>
+    </div>
     <div class="field" style="margin-bottom:10px">
       <label>Zone</label>
-      <select name="zone_id" required>
-        {% for z in current_zones %}<option value="{{ z.id }}">{{ z.name }}</option>{% endfor %}
+      <select name="zone_id" id="addZone" required>
+        {% for z in all_zones %}<option value="{{ z.id }}" data-floor="{{ z.floor_id }}">{{ z.name }}</option>{% endfor %}
       </select>
     </div>
     <div class="field" style="margin-bottom:10px">
@@ -214,6 +234,36 @@
                    document.querySelector('#floorTabs a[data-floor]');
   let activeFloor = firstTab ? firstTab.dataset.floor : null;
 
+  // "Add table" popover. Floor row shows only on All-tables (activeFloor ""); on
+  // a single floor it's hidden and locked to that floor. The zone list always
+  // narrows to the chosen floor, so the picks can never disagree.
+  const addFloor = document.getElementById('addFloor');
+  const addZone = document.getElementById('addZone');
+  const addFloorField = document.getElementById('addFloorField');
+  const zoneOpts = addZone
+    ? Array.from(addZone.options).map(function (o) {
+        return { value: o.value, floor: o.dataset.floor, text: o.textContent };
+      })
+    : [];
+  function fillZones() {
+    if (!addZone) return;
+    const f = addFloor.value;
+    addZone.innerHTML = '';
+    zoneOpts.filter(function (o) { return o.floor === f; }).forEach(function (o) {
+      const el = document.createElement('option');
+      el.value = o.value; el.textContent = o.text;
+      addZone.appendChild(el);
+    });
+  }
+  function syncAddForm() {
+    if (!addFloor) return;
+    const single = (activeFloor !== null && activeFloor !== '') || addFloor.options.length <= 1;
+    if (addFloorField) addFloorField.hidden = single;
+    if (single && activeFloor) addFloor.value = activeFloor;
+    fillZones();
+  }
+  if (addFloor) addFloor.addEventListener('change', fillZones);
+
   function apply() {
     const searching = parse(box.value).length > 0;
     // A text search or a zone pick reaches across floors; otherwise the active
@@ -257,6 +307,8 @@
     countEl.textContent = filtering ? shown + ' of ' + cards.length : '';
     clearBtn.hidden = !filtering;
     noneEl.hidden = !(filtering && shown === 0);
+
+    syncAddForm();   // keep the "Add table" floor/zone in step with the shown floor
   }
 
   statusBtns.forEach(function (btn) {
@@ -303,6 +355,19 @@
     reset();
     box.focus();
   });
+
+  // Deep link from the sidebar overview (/#occupied, /#free, /#ready_to_pay):
+  // land already filtered to that status, across every floor.
+  function applyHash() {
+    const h = (location.hash || '').replace('#', '');
+    if (['free', 'occupied', 'ready_to_pay'].indexOf(h) !== -1) {
+      statusFilter = h;
+      activeFloor = '';        // show that status on every floor
+      apply();
+    }
+  }
+  window.addEventListener('hashchange', applyHash);
+  applyHash();
   apply();
 })();
 </script>

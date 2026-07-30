@@ -23,7 +23,8 @@ from app.models.oltp import Role, Staff
 router = APIRouter()
 
 COOKIE = "staff_id"
-MAX_AGE = 60 * 60 * 12   # a 12-hour shift
+MAX_AGE = 60 * 60 * 12          # a 12-hour shift (the default)
+REMEMBER_AGE = 60 * 60 * 24 * 30  # "Remember me on this device" — 30 days
 
 
 def _active_staff(db: Session) -> list[Staff]:
@@ -43,6 +44,7 @@ def login_page(request: Request, error: str = "", db: Session = Depends(get_db))
 def do_login(
     staff_id: int = Form(...),
     pin: str = Form(...),
+    remember: str = Form(""),
     db: Session = Depends(get_db),
 ):
     person = db.get(Staff, staff_id)
@@ -50,7 +52,10 @@ def do_login(
     if not ok:
         return RedirectResponse("/login?error=1", status_code=303)
     resp = RedirectResponse("/", status_code=303)
-    resp.set_cookie(COOKIE, str(person.id), max_age=MAX_AGE, httponly=True, samesite="lax")
+    # "Remember me on this device" keeps the session for 30 days; otherwise it
+    # lasts a single 12-hour shift.
+    max_age = REMEMBER_AGE if remember else MAX_AGE
+    resp.set_cookie(COOKIE, str(person.id), max_age=max_age, httponly=True, samesite="lax")
     return resp
 
 

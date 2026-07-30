@@ -29,21 +29,22 @@
         <td class="num">${{ (o.items|sum(attribute='line_total_cents'))|money }}</td>
         <td>
           {% if can('delivery.update') %}
+          {# No Update button — changing a dropdown commits on the spot. #}
           <form method="post" action="/delivery/{{ d.id }}/update" style="display:flex;gap:6px">
-            <select name="status" style="min-width:120px">
+            <select name="status" style="min-width:120px" onchange="this.form.submit()">
               {% for s in statuses %}
               <option value="{{ s }}" {{ 'selected' if s == d.status else '' }}>{{ s.replace('_',' ') }}</option>
               {% endfor %}
             </select>
             {% if not o.channel.is_third_party %}
-            <select name="driver_id" style="min-width:120px">
+            <select name="driver_id" style="min-width:120px" onchange="this.form.submit()">
               <option value="">— driver —</option>
               {% for dr in drivers %}
               <option value="{{ dr.id }}" {{ 'selected' if d.driver_id == dr.id else '' }}>{{ dr.name }}</option>
               {% endfor %}
             </select>
             {% endif %}
-            <button class="btn sm primary">Update</button>
+            <noscript><button class="btn sm primary">Update</button></noscript>
           </form>
           {% endif %}
         </td>

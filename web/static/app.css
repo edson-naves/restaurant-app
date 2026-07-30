@@ -18,14 +18,67 @@
   --late: #ef4444;
   --radius: 12px;
   --shadow: rgba(15, 23, 42, 0.08);
+  /* Veil drawn over the site-wide background photo so content stays legible,
+     and the photo itself — a lighter shot for light mode. */
+  --bg-veil: rgba(248, 250, 252, 0.80);
+  --bg-image: url("/static/img/light.jpg");
   --serif: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
+
+/* ---- Dark theme --------------------------------------------------- *
+ * Same tokens, dark values. Toggled by data-theme="dark" on <html>    *
+ * (sidebar toggle + a no-flash script in base.html). The whole app    *
+ * reads these tokens, so flipping them re-skins everything; the few    *
+ * places that hardcoded a light tint + dark text get brighter text    *
+ * below so they stay legible on dark.                                 *
+ * ------------------------------------------------------------------- */
+:root[data-theme="dark"] {
+  --bg: #0e131b;
+  --panel: #171e28;
+  --panel-2: #212b38;
+  --line: #2b3644;
+  --ink: #e6ebf2;
+  --muted: #93a2b5;
+  --accent: #3b82f6;
+  --accent-hover: #60a5fa;
+  --free: #10b981;
+  --occupied: #f59e0b;
+  --ready: #f87171;
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --late: #f87171;
+  --shadow: rgba(0, 0, 0, 0.5);
+  --bg-veil: rgba(11, 15, 22, 0.82);
+  --bg-image: url("/static/img/login-bg.jpg");
+}
+:root[data-theme="dark"] .pill.free,
+:root[data-theme="dark"] .pill.ok,
+:root[data-theme="dark"] .ticket .note,
+:root[data-theme="dark"] .collected,
+:root[data-theme="dark"] .note { color: #34d399; }
+:root[data-theme="dark"] .pill.occupied,
+:root[data-theme="dark"] .pill.warn,
+:root[data-theme="dark"] .pill.paid_partial,
+:root[data-theme="dark"] .ticket.warn .elapsed { color: #fbbf24; }
+:root[data-theme="dark"] .pill.ready_to_pay,
+:root[data-theme="dark"] .pill.late,
+:root[data-theme="dark"] .pill.allergy,
+:root[data-theme="dark"] .req,
+:root[data-theme="dark"] .err { color: #fca5a5; }
+:root[data-theme="dark"] .pill.paid { color: #93c5fd; }
+:root[data-theme="dark"] .ordline + .ordline { border-top-color: rgba(255, 255, 255, .08); }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
-  background: var(--bg);
+  /* Site-wide restaurant photo, held still on scroll, dimmed by a theme veil so
+     cards and text stay readable. Falls back to the flat --bg if the image is
+     missing. */
+  background:
+    linear-gradient(var(--bg-veil), var(--bg-veil)),
+    var(--bg-image) center center / cover no-repeat fixed,
+    var(--bg);
   color: var(--ink);
   font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
@@ -66,7 +119,14 @@ a:hover { text-decoration: underline; }
 .side-ov-head { display: flex; flex-direction: column; margin-bottom: 6px; }
 .side-ov-head strong { font-size: 13px; }
 .side-ov-head span { color: var(--muted); font-size: 11px; }
-.side-ov-row { display: flex; align-items: center; gap: 9px; padding: 5px 0; }
+.side-ov-row {
+  display: flex; align-items: center; gap: 9px;
+  padding: 5px 6px; margin: 0 -6px; border-radius: 8px;
+  color: inherit; text-decoration: none;
+}
+/* Only rows that carry an href (the role can reach that page) act as links. */
+a.side-ov-row[href] { cursor: pointer; }
+a.side-ov-row[href]:hover { background: var(--panel-2); text-decoration: none; }
 .side-ov-ic {
   width: 30px; height: 30px; border-radius: 8px; flex: none;
   display: flex; align-items: center; justify-content: center;
@@ -82,7 +142,10 @@ a:hover { text-decoration: underline; }
 .app-shell { display: flex; align-items: flex-start; min-height: 100vh; }
 .sidebar {
   width: 216px; flex: none; align-self: stretch;
-  background: var(--panel); border-right: 1px solid var(--line);
+  /* Glass, so the background photo reads faintly behind the nav too. */
+  background: color-mix(in srgb, var(--panel) 86%, transparent);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  border-right: 1px solid var(--line);
   display: flex; flex-direction: column; gap: 4px; padding: 14px 12px;
   position: sticky; top: 0; height: 100vh;
 }
@@ -110,6 +173,17 @@ a:hover { text-decoration: underline; }
 .side-user-txt { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .side-user-txt b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
 .side-user-txt small { color: var(--muted); font-size: 11px; text-transform: capitalize; }
+/* Light/dark toggle in the sidebar foot. Shows the theme you'd switch TO. */
+.side-theme {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; margin-bottom: 8px;
+}
+.side-theme svg { width: 16px; height: 16px; }
+.side-theme .ic-sun, .side-theme .th-light { display: none; }
+:root[data-theme="dark"] .side-theme .ic-moon,
+:root[data-theme="dark"] .side-theme .th-dark { display: none; }
+:root[data-theme="dark"] .side-theme .ic-sun,
+:root[data-theme="dark"] .side-theme .th-light { display: inline; }
 .main-area { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 100vh; }
 
 /* On phones/small tablets the sidebar becomes a scrollable top strip. */
@@ -346,7 +420,15 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .ticket.late { border-top-color: var(--late); }
 .ticket ul { margin: 10px 0; padding-left: 18px; }
 .ticket li { margin-bottom: 4px; }
-.ticket .note { color: #b45309; font-size: 12px; }
+/* On a kitchen chit the note is a small inline chip, not the big callout box
+   the base .note draws — a dense ticket has several and they can't each take a
+   full padded row. */
+.ticket .note {
+  display: inline-block;
+  background: rgba(47,158,94,.10); border: 1px solid rgba(47,158,94,.35);
+  color: #047857; font-size: 11px; font-weight: 600;
+  padding: 1px 7px; border-radius: 6px; margin-top: 3px; line-height: 1.55;
+}
 .chit-meta {
   display: flex; justify-content: space-between; gap: 10px;
   font-size: 12px; color: var(--muted);
@@ -602,8 +684,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
    when you are deep in it editing zones. */
 .subtabs {
   display: flex; gap: 6px; margin-bottom: 18px; flex-wrap: wrap;
-  position: sticky; top: 0; z-index: 5;
-  padding: 10px 0; background: var(--bg);
 }
 /* The floor picker inside a card is not the page nav — keep it in place. */
 .card .subtabs { position: static; padding: 0; background: none; }
@@ -663,6 +743,22 @@ tr.dim:hover > td { opacity: 1; }
    zone gets its own channel (a corner dot) rather than competing for it. Shared
    by the admin layout chips and the operational floor-plan cards. */
 .chip, .tbl { position: relative; }
+/* Trash on a free table card's corner: click, confirm, gone. Muted until
+   hovered so it doesn't shout, and it sits above the summary so the whole card
+   stays tappable. */
+.tbl-del {
+  position: absolute; top: 8px; right: 8px; z-index: 2;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0; line-height: 0;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); color: var(--muted); cursor: pointer;
+  transition: color .12s, border-color .12s, background .12s;
+}
+.tbl-del:hover {
+  color: var(--ready); border-color: var(--ready);
+  background: color-mix(in srgb, var(--ready) 12%, var(--panel));
+}
+.tbl-del svg { display: block; }
 .chip .zdot, .tbl .zdot {
   position: absolute; top: 7px; right: 7px;
   width: 9px; height: 9px; border-radius: 50%;
@@ -724,4 +820,105 @@ td.pending { color: var(--accent); font-weight: 700; }
   display: flex; justify-content: space-between; align-items: center;
   font-size: 11px; font-weight: 700; text-transform: uppercase;
   letter-spacing: .4px; color: var(--muted); margin-top: 4px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Sign-in page (Option 3) — a full-screen restaurant photo with a    *
+ * dark glass card floating on top. Drop the photo at                 *
+ *   web/static/img/login-bg.jpg                                       *
+ * and it appears automatically; until then the dark gradient shows.  *
+ * All rules are namespaced .login-* so nothing leaks into the app.   *
+ * ------------------------------------------------------------------ */
+.login-body {
+  margin: 0; min-height: 100vh;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+  background-color: #0b0f16;
+  background-image:
+    linear-gradient(rgba(8, 11, 18, .58), rgba(8, 11, 18, .74)),
+    url("/static/img/login-bg.jpg");
+  background-size: cover; background-position: center; background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+.login-center { width: 100%; max-width: 392px; }
+
+.login-brand { text-align: center; margin-bottom: 20px; }
+.login-mark { width: 40px; height: 40px; }
+.login-logo { font-size: 33px; font-weight: 800; letter-spacing: 1px; color: #fff; margin-top: 4px; }
+.login-tag { color: rgba(255, 255, 255, .82); font-size: 12.5px; margin: 4px 0 0; }
+
+.login-card {
+  background: rgba(17, 24, 39, .72);
+  border: 1px solid rgba(255, 255, 255, .10);
+  border-radius: 20px; padding: 28px 26px 22px; color: #e5e7eb;
+  box-shadow: 0 30px 80px -20px rgba(0, 0, 0, .6);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+  backdrop-filter: blur(16px) saturate(120%);
+}
+.login-card h1 { margin: 0; font-size: 23px; color: #fff; }
+.login-sub { color: rgba(255, 255, 255, .62); margin: 5px 0 20px; font-size: 14px; }
+
+.login-err {
+  margin-bottom: 16px; color: #fecaca;
+  background: rgba(239, 68, 68, .16); border: 1px solid rgba(239, 68, 68, .4);
+}
+
+.login-field { margin-bottom: 14px; }
+.login-label { display: block; font-size: 12px; font-weight: 600; color: rgba(255, 255, 255, .72); margin: 0 0 6px; }
+
+.login-input-wrap { position: relative; display: flex; align-items: center; }
+.login-input-wrap .lead {
+  position: absolute; left: 13px; width: 17px; height: 17px;
+  color: rgba(255, 255, 255, .5); pointer-events: none;
+}
+.login-input-wrap select,
+.login-input-wrap input {
+  width: 100%; padding: 12px 40px; border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, .14); background: rgba(255, 255, 255, .06);
+  color: #fff; font-size: 15px; -webkit-appearance: none; appearance: none;
+}
+/* the native option list renders on a white menu — keep it readable */
+.login-input-wrap select option { color: #111; }
+.login-input-wrap select:focus,
+.login-input-wrap input:focus {
+  outline: none; border-color: var(--accent); background: rgba(255, 255, 255, .1);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, .35);
+}
+.login-input-wrap input::placeholder { color: rgba(255, 255, 255, .38); }
+.login-input-wrap .chev {
+  position: absolute; right: 13px; width: 17px; height: 17px;
+  color: rgba(255, 255, 255, .5); pointer-events: none;
+}
+.login-eye {
+  position: absolute; right: 8px; padding: 6px; border: none; background: none;
+  color: rgba(255, 255, 255, .55); cursor: pointer;
+}
+.login-eye:hover { color: #fff; }
+.login-eye svg { width: 17px; height: 17px; display: block; }
+
+.login-hint { font-size: 12px; color: rgba(255, 255, 255, .6); margin: -4px 0 12px; }
+
+.login-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin: 8px 0 18px;
+}
+.login-remember {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 12.5px; color: rgba(255, 255, 255, .78); cursor: pointer;
+}
+.login-remember input { width: 15px; height: 15px; accent-color: var(--accent); }
+.login-link { color: #60a5fa; font-weight: 600; font-size: 12.5px; text-decoration: none; }
+.login-link:hover { text-decoration: underline; }
+
+.login-btn {
+  width: 100%; padding: 13px; font-size: 15px; border-radius: 12px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+}
+
+.login-foot {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  color: rgba(255, 255, 255, .58); font-size: 12px; margin: 18px 0 2px;
+}
+
+@media (max-width: 480px) {
+  .login-card { padding: 24px 18px 20px; }
 }

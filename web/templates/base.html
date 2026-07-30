@@ -6,6 +6,18 @@
   <title>{{ title }} · RMS</title>
   <link rel="stylesheet" href="/static/app.css?v={{ asset_v() }}">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🍽️</text></svg>">
+  <script>
+    // Apply the saved (or system) colour theme before first paint — no flash.
+    (function () {
+      try {
+        var t = localStorage.getItem('rms-theme');
+        if (t !== 'dark' && t !== 'light') {
+          t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
 <div class="app-shell">
@@ -36,10 +48,16 @@
     {% if sidebar_ov %}
     <div class="side-ov">
       <div class="side-ov-head"><strong>Today's Overview</strong><span>{{ sidebar_ov.date_str }}</span></div>
-      <div class="side-ov-row"><span class="side-ov-ic" style="--c:var(--accent)"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span><span class="side-ov-txt"><small>Reservations</small><b>{{ sidebar_ov.reservations }}</b></span></div>
-      <div class="side-ov-row"><span class="side-ov-ic" style="--c:var(--occupied)"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span><span class="side-ov-txt"><small>Occupied</small><b>{{ sidebar_ov.occupied }}</b></span></div>
-      <div class="side-ov-row"><span class="side-ov-ic" style="--c:var(--free)"><svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg></span><span class="side-ov-txt"><small>Free Tables</small><b>{{ sidebar_ov.free }}</b></span></div>
-      <div class="side-ov-row"><span class="side-ov-ic" style="--c:#16a34a"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span><span class="side-ov-txt"><small>Revenue</small><b>${{ sidebar_ov.revenue_cents|money }}</b></span></div>
+      {# Each stat links to where it lives — bookings to Reservations, table
+         states to the floor plan pre-filtered by status, takings to Reports.
+         Gated ones drop their href (and so stop being links) when the role
+         can't reach that page. #}
+      <a class="side-ov-row" {% if can('reservations') %}href="/reservations"{% endif %}><span class="side-ov-ic" style="--c:var(--accent)"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span><span class="side-ov-txt"><small>Reservations</small><b>{{ sidebar_ov.reservations }}</b></span></a>
+      <a class="side-ov-row" {% if can('reservations') %}href="/reservations"{% endif %}><span class="side-ov-ic" style="--c:#8b5cf6"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span class="side-ov-txt"><small>Waitlist</small><b>{{ sidebar_ov.waitlist }}</b></span></a>
+      <a class="side-ov-row" href="/#occupied"><span class="side-ov-ic" style="--c:var(--occupied)"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span><span class="side-ov-txt"><small>Occupied</small><b>{{ sidebar_ov.occupied }}</b></span></a>
+      <a class="side-ov-row" href="/#ready_to_pay"><span class="side-ov-ic" style="--c:var(--ready)"><svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg></span><span class="side-ov-txt"><small>Ready to pay</small><b>{{ sidebar_ov.ready_to_pay }}</b></span></a>
+      <a class="side-ov-row" href="/#free"><span class="side-ov-ic" style="--c:var(--free)"><svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg></span><span class="side-ov-txt"><small>Free Tables</small><b>{{ sidebar_ov.free }}</b></span></a>
+      <a class="side-ov-row" {% if can('reports.view') %}href="/reports"{% endif %}><span class="side-ov-ic" style="--c:#16a34a"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span><span class="side-ov-txt"><small>Revenue</small><b>${{ sidebar_ov.revenue_cents|money }}</b></span></a>
       {% if can('reports.view') %}<a class="btn sm side-ov-btn" href="/reports">View Reports</a>{% endif %}
     </div>
     {% endif %}
@@ -48,6 +66,11 @@
         <span class="side-avatar">{{ staff.name[0]|upper }}</span>
         <span class="side-user-txt"><b>{{ staff.name }}</b><small>{{ staff.role.replace('_', ' ') }}</small></span>
       </div>
+      <button type="button" class="btn sm side-theme" onclick="toggleTheme()">
+        <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <span class="th-dark">Dark mode</span><span class="th-light">Light mode</span>
+      </button>
       <a class="btn sm" href="/logout" style="width:100%">Sign out</a>
     </div>
   </aside>
@@ -63,6 +86,14 @@
   </div>
 </div>
 <script>
+  // Flip light/dark and remember it. The <head> script applies it before paint
+  // on the next load, so there's no flash.
+  function toggleTheme() {
+    var next = document.documentElement.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('rms-theme', next); } catch (e) {}
+  }
+
   // Any <details class="edit-menu"> popover (seat/move/merge/split/edit menus)
   // closes when you click outside it or press Escape — a native <details> only
   // toggles from its own summary. Shared here so every page gets it.

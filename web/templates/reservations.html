@@ -85,31 +85,6 @@
 <div class="res-grid">
   <!-- LEFT: reservations + booking form -->
   <div>
-    <div class="card">
-      <div class="between" style="margin-bottom:10px">
-        <h2 style="margin:0">Upcoming reservations <span class="count-badge">{{ bookings|length }}</span></h2>
-      </div>
-      {% if not bookings %}
-      <div class="res-empty">
-        <div class="res-empty-ic">🗓️</div>
-        <div><strong>No reservations booked</strong></div>
-        <p class="sub" style="margin:4px 0 0">All set! Add one below.</p>
-      </div>
-      {% else %}
-      <div class="scroll" style="overflow:visible">
-      <table>
-        <thead><tr><th>Time</th><th>Guest</th><th>Party</th><th>Table</th><th>Status</th><th></th></tr></thead>
-        <tbody>
-          {% if today_res %}<tr class="grouprow"><td colspan="6">TODAY</td></tr>{% endif %}
-          {% for r in today_res %}{{ res_row(r) }}{% endfor %}
-          {% if upcoming_res %}<tr class="grouprow"><td colspan="6">UPCOMING</td></tr>{% endif %}
-          {% for r in upcoming_res %}{{ res_row(r) }}{% endfor %}
-        </tbody>
-      </table>
-      </div>
-      {% endif %}
-    </div>
-
     <div class="card" id="book">
       <div class="between" style="margin-bottom:14px">
         <h2 style="margin:0">Book a reservation</h2>
@@ -145,41 +120,35 @@
         </div>
       </form>
     </div>
+
+    <div class="card">
+      <div class="between" style="margin-bottom:10px">
+        <h2 style="margin:0">Upcoming reservations <span class="count-badge">{{ bookings|length }}</span></h2>
+      </div>
+      {% if not bookings %}
+      <div class="res-empty">
+        <div class="res-empty-ic">🗓️</div>
+        <div><strong>No reservations booked</strong></div>
+        <p class="sub" style="margin:4px 0 0">All set! Add one above.</p>
+      </div>
+      {% else %}
+      <div class="scroll" style="overflow:visible">
+      <table>
+        <thead><tr><th>Time</th><th>Guest</th><th>Party</th><th>Table</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% if today_res %}<tr class="grouprow"><td colspan="6">TODAY</td></tr>{% endif %}
+          {% for r in today_res %}{{ res_row(r) }}{% endfor %}
+          {% if upcoming_res %}<tr class="grouprow"><td colspan="6">UPCOMING</td></tr>{% endif %}
+          {% for r in upcoming_res %}{{ res_row(r) }}{% endfor %}
+        </tbody>
+      </table>
+      </div>
+      {% endif %}
+    </div>
   </div>
 
   <!-- RIGHT: waitlist + add walk-in + at a glance -->
   <div>
-    <div class="card">
-      <h2>Walk-in waitlist <span class="count-badge">{{ waitlist|length }}</span></h2>
-      {% if not waitlist %}
-      <p class="empty">Nobody waiting.</p>
-      {% else %}
-      <div class="scroll" style="overflow:visible">
-      <table>
-        <thead><tr><th>Wait time</th><th>Guest</th><th>Party</th><th>Quote</th><th></th></tr></thead>
-        <tbody>
-        {% for r in waitlist %}
-        {% set waited = ((now - r.at).total_seconds() // 60)|int %}
-        <tr>
-          <td style="white-space:nowrap">
-            <strong class="accent">~ {{ waited }} min</strong><br>
-            <span class="sub" style="font-size:11px">joined {{ waited }} min ago</span>
-          </td>
-          <td>{{ r.guest_name }}{% if r.phone %}<br><span class="sub" style="font-size:11px">{{ r.phone }}</span>{% endif %}</td>
-          <td><span class="res-party">👥 {{ r.party_size }}</span></td>
-          <td>{% if r.quoted_minutes %}<span class="accent">{{ r.quoted_minutes }} min</span>{% else %}<span class="sub">—</span>{% endif %}</td>
-          <td style="text-align:right">{{ seat_form(r) }}</td>
-        </tr>
-        {% endfor %}
-        </tbody>
-      </table>
-      </div>
-      <div class="between" style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px">
-        <span class="sub" style="margin:0">🕐 Average wait time: <strong>{{ stats.wl_avg }} min</strong></span>
-      </div>
-      {% endif %}
-    </div>
-
     <div class="card">
       <div class="between" style="margin-bottom:14px">
         <h2 style="margin:0">Add walk-in to waitlist</h2>
@@ -209,6 +178,37 @@
           <div class="field" style="flex:1;min-width:160px;margin:0"><label>Phone (optional)</label><input type="text" name="phone" placeholder="e.g. 604-123-4567"></div>
         </div>
       </form>
+    </div>
+
+    <div class="card">
+      <h2>Walk-in waitlist <span class="count-badge">{{ waitlist|length }}</span></h2>
+      {% if not waitlist %}
+      <p class="empty">Nobody waiting.</p>
+      {% else %}
+      <div class="scroll" style="overflow:visible">
+      <table>
+        <thead><tr><th>Wait time</th><th>Guest</th><th>Party</th><th>Quote</th><th></th></tr></thead>
+        <tbody>
+        {% for r in waitlist %}
+        {% set waited = ((now - r.at).total_seconds() // 60)|int %}
+        <tr>
+          <td style="white-space:nowrap">
+            <strong class="accent">~ {{ waited }} min</strong><br>
+            <span class="sub" style="font-size:11px">joined {{ waited }} min ago</span>
+          </td>
+          <td>{{ r.guest_name }}{% if r.phone %}<br><span class="sub" style="font-size:11px">{{ r.phone }}</span>{% endif %}</td>
+          <td><span class="res-party">👥 {{ r.party_size }}</span></td>
+          <td>{% if r.quoted_minutes %}<span class="accent">{{ r.quoted_minutes }} min</span>{% else %}<span class="sub">—</span>{% endif %}</td>
+          <td style="text-align:right">{{ seat_form(r) }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      </div>
+      <div class="between" style="border-top:1px solid var(--line);margin-top:10px;padding-top:10px">
+        <span class="sub" style="margin:0">🕐 Average wait time: <strong>{{ stats.wl_avg }} min</strong></span>
+      </div>
+      {% endif %}
     </div>
   </div>
 </div>

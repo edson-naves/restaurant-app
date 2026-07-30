@@ -160,12 +160,18 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
         select(Zone).where(Zone.floor_id == current_floor_id, Zone.is_active.is_(True))
         .order_by(Zone.sort_order, Zone.name)
     ).scalars().all() if current_floor_id else []
+    # Every zone, floor and all — the "Add table" form needs the full set on the
+    # "All tables" view, where there's no single current floor to imply one.
+    all_zones = db.execute(
+        select(Zone).where(Zone.is_active.is_(True))
+        .order_by(Zone.floor_id, Zone.sort_order, Zone.name)
+    ).scalars().all()
 
     return render(request, "floor.html", {
         "db": db, "staff": staff, "cards": cards, "counts": counts,
         "sections": sections,
         "floor_tabs": floor_tabs, "current_floor_id": current_floor_id,
-        "current_zones": current_zones,
+        "current_zones": current_zones, "all_zones": all_zones,
         "show_all": show_all,
         "floor_card_count": len(cards) if show_all else (len(current["cards"]) if current else 0),
         "delivery_pending": delivery_pending,
@@ -209,6 +215,29 @@ def create_table_from_floor(
         select(RestaurantTable).where(RestaurantTable.number == number)
     ).scalar_one()
     new_table.current_waiter_id = zone_waiter
+    db.commit()
+    return RedirectResponse(f"/?floor={floor_id}", status_code=303)
+
+
+@router.post("/tables/{table_id}/remove")
+def remove_table_from_floor(
+    table_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Retire a table off the floor. Nothing is deleted — the table is kept with
+    all its info and history and simply marked inactive, so it drops off the
+    floor plan but still lists under Manage → Tables (Retired), where it can be
+    restored. A table in service can't be pulled out from under a party."""
+    table = db.get(RestaurantTable, table_id)
+    if table is None:
+        raise HTTPException(404, "Table not found.")
+    if table.status != TableStatus.FREE:
+        raise HTTPException(400, "Free the table before retiring it.")
+    floor_id = table.floor_id or 0
+
+    table.current_waiter_id = None       # same as the Manage retire path
+    table.is_active = False
     db.commit()
     return RedirectResponse(f"/?floor={floor_id}", status_code=303)
 

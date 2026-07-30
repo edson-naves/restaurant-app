@@ -151,8 +151,18 @@ def sidebar_overview(db: Session) -> dict:
                 Reservation.at >= day_start, Reservation.at < day_end,
             )
         ).scalar_one(),
-        "occupied": count(active, RestaurantTable.status.in_(
-            (TableStatus.OCCUPIED, TableStatus.READY_TO_PAY))),
+        # The walk-in queue is "who's waiting right now", not date-bound — same
+        # as the waitlist page counts it.
+        "waitlist": db.execute(
+            select(func.count()).select_from(Reservation).where(
+                Reservation.kind == "waitlist",
+                Reservation.status == ReservationStatus.WAITING,
+            )
+        ).scalar_one(),
+        # Non-overlapping, so they read like the floor-plan legend: strictly
+        # occupied, then those waiting on the bill, then free.
+        "occupied": count(active, RestaurantTable.status == TableStatus.OCCUPIED),
+        "ready_to_pay": count(active, RestaurantTable.status == TableStatus.READY_TO_PAY),
         "free": count(active, RestaurantTable.status == TableStatus.FREE),
         "revenue_cents": db.execute(
             select(func.coalesce(func.sum(Payment.total_cents), 0)).where(
