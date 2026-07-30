@@ -1125,8 +1125,13 @@ def kitchen_display(
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("kitchen.view")),
 ):
-    """Real-time feed with colour-coded urgency by elapsed time."""
-    KITCHEN_STATES = (KitchenStatus.PENDING, KitchenStatus.PREPARING, KitchenStatus.READY)
+    """Real-time feed with colour-coded urgency by elapsed time.
+
+    Only orders that have actually been fired to the kitchen appear here — an
+    order with nothing sent (kitchen_status PENDING, e.g. a waiter still building
+    it) would render as an empty card, so it's left off the board entirely.
+    """
+    KITCHEN_STATES = (KitchenStatus.PREPARING, KitchenStatus.READY)
     if kstatus != "all" and kstatus not in KITCHEN_STATES:
         kstatus = "all"
 
@@ -1141,7 +1146,7 @@ def kitchen_display(
     # zero just because a different status is currently selected.
     now = datetime.now()
     tickets = []
-    status_counts = {KitchenStatus.PENDING: 0, KitchenStatus.PREPARING: 0, KitchenStatus.READY: 0}
+    status_counts = {KitchenStatus.PREPARING: 0, KitchenStatus.READY: 0}
     for o in orders:
         is_delivery = o.channel.channel_type == "delivery"
         if view == "dine_in" and is_delivery:

@@ -17,8 +17,6 @@
 <div class="catbar" style="margin:0 0 18px">
   <a class="btn sm {{ 'primary' if kstatus == 'all' else '' }}"
      href="/kitchen?view={{ view }}&kstatus=all">All statuses</a>
-  <a class="btn sm {{ 'primary' if kstatus == 'pending' else '' }}"
-     href="/kitchen?view={{ view }}&kstatus=pending">Pending {{ status_counts.pending }}</a>
   <a class="btn sm {{ 'primary' if kstatus == 'preparing' else '' }}"
      href="/kitchen?view={{ view }}&kstatus=preparing">Preparing {{ status_counts.preparing }}</a>
   <a class="btn sm {{ 'primary' if kstatus == 'ready' else '' }}"
