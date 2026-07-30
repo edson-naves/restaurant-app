@@ -286,10 +286,10 @@ def staff_performance(
 ) -> list[dict]:
     """Orders, revenue and tips per staff member, filterable by date and shift.
 
-    Revenue and orders come from the header fact; tips come from the payment
-    fact, because a tip belongs to whoever took the payment. Two facts at two
-    grains, joined only at the presentation layer — summing tips from the
-    header fact while joining the payment fact would multiply rows.
+    All three come from the header fact, keyed by the order's server: the tip
+    belongs to whoever served the table, not whoever happened to run the card.
+    Each order's tips are already rolled up onto its header row (tip_cents), so
+    a server who took the order but had a manager close it still gets the tip.
     """
     hq = (
         select(
@@ -299,6 +299,7 @@ def staff_performance(
             func.count(FactOrderHeader.order_sk).label("orders"),
             func.coalesce(func.sum(FactOrderHeader.total_cents), 0).label("revenue"),
             func.coalesce(func.sum(FactOrderHeader.guest_count), 0).label("guests"),
+            func.coalesce(func.sum(FactOrderHeader.tip_cents), 0).label("tips"),
         )
         .join(DimStaff, DimStaff.staff_key == FactOrderHeader.staff_key)
         .join(DimTime, DimTime.time_key == FactOrderHeader.time_key)
@@ -311,42 +312,18 @@ def staff_performance(
     if shift:
         hq = hq.where(DimTime.shift == shift)
 
-    headers = {r.staff_key: r for r in db.execute(hq).all()}
-
-    tq = (
-        select(
-            DimStaff.staff_key,
-            func.coalesce(func.sum(FactPayment.tip_cents), 0).label("tips"),
-            func.count(func.distinct(FactPayment.payment_id)).label("payments"),
-        )
-        .join(DimStaff, DimStaff.staff_key == FactPayment.staff_key)
-        .join(DimTime, DimTime.time_key == FactPayment.time_key)
-        .where(
-            FactPayment.date_key.between(dkey(start), dkey(end)),
-            DimStaff.staff_key != -1,
-        )
-        .group_by(DimStaff.staff_key)
-    )
-    if shift:
-        tq = tq.where(DimTime.shift == shift)
-
-    tips = {r.staff_key: r for r in db.execute(tq).all()}
-
-    out = []
-    for key, h in headers.items():
-        t = tips.get(key)
-        out.append(
-            {
-                "name": h.name,
-                "role": h.role,
-                "orders": h.orders,
-                "revenue_cents": h.revenue,
-                "guests": h.guests,
-                "tips_cents": t.tips if t else 0,
-                "payments": t.payments if t else 0,
-                "avg_ticket_cents": (h.revenue // h.orders) if h.orders else 0,
-            }
-        )
+    out = [
+        {
+            "name": h.name,
+            "role": h.role,
+            "orders": h.orders,
+            "revenue_cents": h.revenue,
+            "guests": h.guests,
+            "tips_cents": h.tips,
+            "avg_ticket_cents": (h.revenue // h.orders) if h.orders else 0,
+        }
+        for h in db.execute(hq).all()
+    ]
     out.sort(key=lambda r: r["revenue_cents"], reverse=True)
     return out
 
