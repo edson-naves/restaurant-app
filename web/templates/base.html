@@ -8,46 +8,60 @@
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🍽️</text></svg>">
 </head>
 <body>
-<header class="topbar">
-  <a class="brand" href="/">🍽️ <span>RMS</span></a>
-  <nav class="tabs">
-    <a href="/" class="{{ 'on' if request.url.path == '/' else '' }}">Floor</a>
-    {% if can('reservations') %}
-    <a href="/reservations" class="{{ 'on' if request.url.path.startswith('/reservations') or request.url.path.startswith('/waitlist') else '' }}">Reservations</a>
+<div class="app-shell">
+  {% if staff %}
+  <aside class="sidebar">
+    <a class="brand" href="/">🍽️ <span>RMS</span></a>
+    <nav class="side-nav">
+      <a href="/" class="{{ 'on' if request.url.path == '/' else '' }}"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg><span>Floor plan</span></a>
+      {% if can('reservations') %}
+      <a href="/reservations" class="{{ 'on' if request.url.path.startswith('/reservations') or request.url.path.startswith('/waitlist') else '' }}"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg><span>Reservations</span></a>
+      {% endif %}
+      {% if can('kitchen.view') %}
+      <a href="/kitchen" class="{{ 'on' if request.url.path.startswith('/kitchen') else '' }}"><svg viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h6"/></svg><span>Kitchen</span></a>
+      {% endif %}
+      {% if can('delivery.view') %}
+      <a href="/delivery" class="{{ 'on' if request.url.path.startswith('/delivery') else '' }}"><svg viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 3v5h-7z"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="18.5" r="2"/></svg><span>Delivery</span></a>
+      {% endif %}
+      {% if can('menu.availability') %}
+      <a href="/availability" class="{{ 'on' if request.url.path.startswith('/availability') else '' }}"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/></svg><span>86 board</span></a>
+      {% endif %}
+      {% if can('reports.view') %}
+      <a href="/reports" class="{{ 'on' if request.url.path.startswith('/reports') else '' }}"><svg viewBox="0 0 24 24"><path d="M12 20V10M18 20V4M6 20v-4"/></svg><span>Reports</span></a>
+      {% endif %}
+      {% if can('settings') or can('staff.manage') %}
+      <a href="/admin/tables" class="{{ 'on' if request.url.path.startswith('/admin') else '' }}"><svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg><span>Manage</span></a>
+      {% endif %}
+    </nav>
+    {% if sidebar_ov %}
+    <div class="side-ov">
+      <div class="side-ov-head"><strong>Today's Overview</strong><span>{{ sidebar_ov.date_str }}</span></div>
+      <div class="side-ov-row"><span class="side-ov-ic" style="--c:var(--accent)"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span><span class="side-ov-txt"><small>Reservations</small><b>{{ sidebar_ov.reservations }}</b></span></div>
+      <div class="side-ov-row"><span class="side-ov-ic" style="--c:var(--occupied)"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span><span class="side-ov-txt"><small>Occupied</small><b>{{ sidebar_ov.occupied }}</b></span></div>
+      <div class="side-ov-row"><span class="side-ov-ic" style="--c:var(--free)"><svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><path d="M22 4 12 14.01l-3-3"/></svg></span><span class="side-ov-txt"><small>Free Tables</small><b>{{ sidebar_ov.free }}</b></span></div>
+      <div class="side-ov-row"><span class="side-ov-ic" style="--c:#16a34a"><svg viewBox="0 0 24 24"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span><span class="side-ov-txt"><small>Revenue</small><b>${{ sidebar_ov.revenue_cents|money }}</b></span></div>
+      {% if can('reports.view') %}<a class="btn sm side-ov-btn" href="/reports">View Reports</a>{% endif %}
+    </div>
     {% endif %}
-    {% if can('kitchen.view') %}
-    <a href="/kitchen" class="{{ 'on' if request.url.path.startswith('/kitchen') else '' }}">Kitchen</a>
-    {% endif %}
-    {% if can('delivery.view') %}
-    <a href="/delivery" class="{{ 'on' if request.url.path.startswith('/delivery') else '' }}">Delivery</a>
-    {% endif %}
-    {% if can('menu.availability') %}
-    <a href="/availability" class="{{ 'on' if request.url.path.startswith('/availability') else '' }}">86</a>
-    {% endif %}
-    {% if can('reports.view') %}
-    <a href="/reports" class="{{ 'on' if request.url.path.startswith('/reports') else '' }}">Reports</a>
-    {% endif %}
-    {% if can('settings') or can('staff.manage') %}
-    <a href="/admin/tables" class="{{ 'on' if request.url.path.startswith('/admin') else '' }}">Manage</a>
-    {% endif %}
-  </nav>
-  <div class="whoami" style="display:flex;align-items:center;gap:10px">
-    {% if staff %}
-    <span class="meta" style="color:var(--muted);font-size:13px">
-      {{ staff.name }} · {{ staff.role.replace('_', ' ') }}
-    </span>
-    <a class="btn sm" href="/logout">Sign out</a>
-    {% endif %}
+    <div class="side-foot">
+      <div class="side-user">
+        <span class="side-avatar">{{ staff.name[0]|upper }}</span>
+        <span class="side-user-txt"><b>{{ staff.name }}</b><small>{{ staff.role.replace('_', ' ') }}</small></span>
+      </div>
+      <a class="btn sm" href="/logout" style="width:100%">Sign out</a>
+    </div>
+  </aside>
+  {% endif %}
+
+  <div class="main-area">
+    <main class="wrap">
+      {% block body %}{% endblock %}
+    </main>
+    <footer class="foot">
+      Restaurant Management System v1.0 · built to the requirements specification (June 2026)
+    </footer>
   </div>
-</header>
-
-<main class="wrap">
-  {% block body %}{% endblock %}
-</main>
-
-<footer class="foot">
-  Restaurant Management System v1.0 · built to the requirements specification (June 2026)
-</footer>
+</div>
 <script>
   // Any <details class="edit-menu"> popover (seat/move/merge/split/edit menus)
   // closes when you click outside it or press Escape — a native <details> only

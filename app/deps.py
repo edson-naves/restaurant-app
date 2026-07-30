@@ -9,15 +9,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from datetime import date, datetime, timedelta
+
 from fastapi import Depends, HTTPException, Request
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.oltp import Role, Staff
 from app.models.oltp import (
     ALLERGEN_OPTIONS, COURSE_LABELS, category_emoji, course_label, seat_color,
+    Payment, Reservation, ReservationStatus, RestaurantTable, TableStatus,
 )
 from app.services.money import duration, money
 
@@ -128,6 +131,39 @@ def require(permission: str):
     return _guard
 
 
+def sidebar_overview(db: Session) -> dict:
+    """Whole-restaurant "today" numbers for the sidebar panel: waiting bookings
+    for today, tables in use, free tables, and today's takings."""
+    day_start = datetime.combine(date.today(), datetime.min.time())
+    day_end = day_start + timedelta(days=1)
+
+    def count(*where):
+        return db.execute(
+            select(func.count()).select_from(RestaurantTable).where(*where)
+        ).scalar_one()
+
+    active = RestaurantTable.is_active.is_(True)
+    return {
+        "reservations": db.execute(
+            select(func.count()).select_from(Reservation).where(
+                Reservation.kind == "reservation",
+                Reservation.status == ReservationStatus.WAITING,
+                Reservation.at >= day_start, Reservation.at < day_end,
+            )
+        ).scalar_one(),
+        "occupied": count(active, RestaurantTable.status.in_(
+            (TableStatus.OCCUPIED, TableStatus.READY_TO_PAY))),
+        "free": count(active, RestaurantTable.status == TableStatus.FREE),
+        "revenue_cents": db.execute(
+            select(func.coalesce(func.sum(Payment.total_cents), 0)).where(
+                Payment.voided.is_(False),
+                Payment.created_at >= day_start, Payment.created_at < day_end,
+            )
+        ).scalar_one(),
+        "date_str": date.today().strftime("%b %d, %Y"),
+    }
+
+
 def render(request: Request, template: str, ctx: dict):
     """Render with the globals every page needs.
 
@@ -145,6 +181,10 @@ def render(request: Request, template: str, ctx: dict):
         base["all_staff"] = db.execute(
             select(Staff).where(Staff.is_active.is_(True)).order_by(Staff.id)
         ).scalars().all()
+        # Sidebar "Today's Overview" — computed once per page for the signed-in
+        # shell. Cheap COUNT/SUM queries; skipped when there's no session.
+        if staff is not None:
+            base["sidebar_ov"] = sidebar_overview(db)
     base.update(ctx)
     base.pop("db", None)
     return templates.TemplateResponse(request, template, base)

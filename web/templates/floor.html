@@ -83,8 +83,8 @@
       <a class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
          data-status="{{ c.table.status }}" data-floor="{{ sec_floor_id }}"
          data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
+         {% if c.table.zone_ref %}style="border-left-color: {{ c.table.zone_ref.swatch }}"{% endif %}
          href="/orders/{{ c.order.id }}">
-        {% if c.table.zone_ref %}<i class="zdot" style="background: {{ c.table.zone_ref.swatch }}" title="{{ c.table.zone }}"></i>{% endif %}
         <span class="n">Table {{ c.table.number }}</span>
         <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes|duration }}</span>
         <span class="meta">{{ c.waiter or '—' }}</span>
@@ -94,11 +94,12 @@
     {% else %}
       <details class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
          data-status="{{ c.table.status }}" data-floor="{{ sec_floor_id }}"
-         data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}">
-        {% if c.table.zone_ref %}<i class="zdot" style="background: {{ c.table.zone_ref.swatch }}" title="{{ c.table.zone }}"></i>{% endif %}
+         data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
+         {% if c.table.zone_ref %}style="border-left-color: {{ c.table.zone_ref.swatch }}"{% endif %}>
         <summary style="cursor:pointer;list-style:none">
           <span class="n">Table {{ c.table.number }}</span><br>
           <span class="meta">{{ c.table.zone }} · seats {{ c.table.capacity }}</span><br>
+          {% if c.waiter %}<span class="meta">{{ c.waiter }}</span><br>{% endif %}
           <span class="pill free">free</span>
         </summary>
         {% if can('orders.manage') %}
@@ -135,6 +136,30 @@
 </div>
 </section>
 {% endfor %}
+
+{# Quick "Add table" to the shown floor. Number is auto-assigned; the new table
+   inherits the waiter already covering the chosen zone. Owner/settings only. #}
+{% if can('settings') and current_zones %}
+<details class="edit-menu add-table-fab">
+  <summary class="btn primary"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg> Add New Table</summary>
+  <form class="edit-pop" method="post" action="/tables/create">
+    <strong style="display:block;margin-bottom:10px">Add a table</strong>
+    <input type="hidden" name="floor_id" value="{{ current_floor_id }}">
+    <div class="field" style="margin-bottom:10px">
+      <label>Zone</label>
+      <select name="zone_id" required>
+        {% for z in current_zones %}<option value="{{ z.id }}">{{ z.name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field" style="margin-bottom:10px">
+      <label>Seats</label>
+      <input type="number" name="capacity" value="4" min="1" max="20">
+    </div>
+    <button class="btn primary sm" style="width:100%">Add table</button>
+    <p class="sub" style="margin:8px 0 0;font-size:11px">Number is assigned automatically. The table inherits the zone's waiter.</p>
+  </form>
+</details>
+{% endif %}
 {% endblock %}
 
 {% block scripts %}

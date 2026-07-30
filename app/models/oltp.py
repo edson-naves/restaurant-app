@@ -185,15 +185,17 @@ class Floor(Base):
 
 # Distinct on the dark floor plan and distinguishable from the free/occupied/
 # ready status colours, which the chip's border already uses.
+# Zone colours deliberately avoid the status hues (green=free, amber=occupied,
+# red=ready) and the blue accent, so a zone is never mistaken for a status.
 ZONE_PALETTE = (
-    "#e2a03f",  # amber
-    "#4f8cff",  # blue
-    "#2f9e5e",  # green
-    "#9b6dff",  # purple
-    "#28b3b3",  # teal
-    "#e06c9f",  # pink
-    "#d4834b",  # clay
-    "#8a9bb0",  # slate
+    "#eab308",  # Main   -> yellow
+    "#3b82f6",  # Window -> blue
+    "#111827",  # Patio  -> black
+    "#ec4899",  # Bar    -> pink
+    "#0d9488",  # teal   (further zones, e.g. Live Music)
+    "#a855f7",  # purple (e.g. Meeting)
+    "#f472b6",  # rose
+    "#64748b",  # slate
 )
 
 

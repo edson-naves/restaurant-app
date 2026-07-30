@@ -35,6 +35,7 @@ from app.models.oltp import (
     SharedItemShare,
     Staff,
     TableStatus,
+    Zone,
 )
 from app.services.payments import balance_panel, ensure_seats, set_shared_item_shares
 
@@ -154,14 +155,62 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
         )
     ).scalar_one()
 
+    # Zones on the shown floor — for the "Add table" quick form.
+    current_zones = db.execute(
+        select(Zone).where(Zone.floor_id == current_floor_id, Zone.is_active.is_(True))
+        .order_by(Zone.sort_order, Zone.name)
+    ).scalars().all() if current_floor_id else []
+
     return render(request, "floor.html", {
         "db": db, "staff": staff, "cards": cards, "counts": counts,
         "sections": sections,
         "floor_tabs": floor_tabs, "current_floor_id": current_floor_id,
+        "current_zones": current_zones,
         "show_all": show_all,
         "floor_card_count": len(cards) if show_all else (len(current["cards"]) if current else 0),
-        "delivery_pending": delivery_pending, "title": "Floor plan",
+        "delivery_pending": delivery_pending,
+        "title": "Floor plan",
     })
+
+
+@router.post("/tables/create")
+def create_table_from_floor(
+    floor_id: int = Form(...),
+    zone_id: int = Form(...),
+    capacity: int = Form(4),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Quick "Add table" from the floor plan: the number is assigned
+    automatically, and the new table inherits the waiter already covering its
+    zone (so a zone handed to one server keeps new tables on that server)."""
+    from app.routers.admin import _add_tables   # lazy: admin imports from here
+
+    zone = db.get(Zone, zone_id)
+    if zone is None or zone.floor_id != floor_id:
+        raise HTTPException(400, "Choose a zone on this floor.")
+    if not 1 <= capacity <= 20:
+        raise HTTPException(400, "Seats must be between 1 and 20.")
+
+    # The waiter covering this zone, if its active tables agree on one.
+    covering = {
+        t.current_waiter_id for t in db.execute(
+            select(RestaurantTable).where(
+                RestaurantTable.zone_id == zone.id,
+                RestaurantTable.is_active.is_(True),
+            )
+        ).scalars().all() if t.current_waiter_id
+    }
+    zone_waiter = next(iter(covering)) if len(covering) == 1 else None
+
+    number = _add_tables(db, zone, 1, capacity)[0]
+    db.flush()   # autoflush is off; make the new row visible to the query below
+    new_table = db.execute(
+        select(RestaurantTable).where(RestaurantTable.number == number)
+    ).scalar_one()
+    new_table.current_waiter_id = zone_waiter
+    db.commit()
+    return RedirectResponse(f"/?floor={floor_id}", status_code=303)
 
 
 @router.post("/tables/{table_id}/open")
