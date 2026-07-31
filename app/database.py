@@ -42,6 +42,9 @@ else:
     engine = create_engine(
         DATABASE_URL,
         pool_pre_ping=True,
+        # Recycle connections well before Neon's serverless idle timeout so a
+        # stale socket is retired proactively, not discovered mid-request.
+        pool_recycle=int(os.environ.get("DB_POOL_RECYCLE", "280")),
         pool_size=int(os.environ.get("DB_POOL_SIZE", "10")),
         max_overflow=int(os.environ.get("DB_MAX_OVERFLOW", "20")),
         future=True,
