@@ -443,6 +443,18 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .ticket.late { border-top-color: var(--late); }
 .ticket ul { margin: 10px 0; padding-left: 18px; }
 .ticket li { margin-bottom: 4px; }
+/* A line added after the order was already fired — highlighted so the cook
+   spots a late addition among items already made. */
+.ticket li.k-new {
+  list-style: none; margin-left: -18px; padding: 2px 6px;
+  border-left: 3px solid var(--accent); border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.k-new-tag {
+  display: inline-block; background: var(--accent); color: #fff;
+  font-size: 10px; font-weight: 800; letter-spacing: .4px;
+  padding: 0 5px; border-radius: 4px;
+}
 /* On a kitchen chit the note is a small inline chip, not the big callout box
    the base .note draws — a dense ticket has several and they can't each take a
    full padded row. */

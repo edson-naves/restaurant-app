@@ -1086,7 +1086,10 @@ def _recompute_kitchen(order: Order, now: datetime) -> None:
             order.delivery.status = DeliveryStatus.READY
     elif KitchenStatus.PREPARING in statuses or KitchenStatus.READY in statuses:
         order.kitchen_status = KitchenStatus.PREPARING
-        if order.status in (OrderStatus.OPEN, OrderStatus.PREPARING):
+        # SERVED here too: firing a new item onto an already-served order pulls
+        # it back to Preparing so the kitchen sees the addition and it must be
+        # re-served before payment.
+        if order.status in (OrderStatus.OPEN, OrderStatus.PREPARING, OrderStatus.SERVED):
             order.status = OrderStatus.PREPARING
     else:
         order.kitchen_status = KitchenStatus.PENDING
@@ -1238,9 +1241,14 @@ def _ticket_courses(order: Order) -> list[dict]:
     simply doesn't appear until the waiter fires it. Each group's status is the
     least-advanced item in it — a course is 'ready' only when all its items are.
     """
+    # A line added after the order was first fired is a later addition — flag it
+    # so the line can tell a new item apart from what it already made/plated
+    # (transient attribute, display-only).
+    first_fire = order.sent_to_kitchen_at
     groups: dict[int, list] = {}
     for i in order.items:
         if i.kitchen_status in (KitchenStatus.PREPARING, KitchenStatus.READY):
+            i.is_new = bool(first_fire and i.created_at and i.created_at > first_fire)
             groups.setdefault(i.course, []).append(i)
     out = []
     for course in sorted(groups):
