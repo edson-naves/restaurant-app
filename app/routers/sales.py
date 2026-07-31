@@ -69,6 +69,10 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
             ),
             Order.table_id.is_not(None),
         )
+        # Card total is sum(item.line_total_cents) — a computed property, so the
+        # items (and their modifiers) must be loaded; batch them across all
+        # orders instead of one graph load per occupied table.
+        .options(selectinload(Order.items))
     ).scalars().all()
     by_table = {o.table_id: o for o in open_orders}
 
@@ -572,6 +576,9 @@ def order_screen(
             selectinload(Order.items).selectinload(OrderItem.modifiers),
             selectinload(Order.items).selectinload(OrderItem.options),
             selectinload(Order.items).selectinload(OrderItem.shares),
+            # Payment allocations per item — build_ledgers reads item.allocations
+            # for every line, which is otherwise one query per item.
+            selectinload(Order.items).selectinload(OrderItem.allocations),
             selectinload(Order.seats),
             selectinload(Order.payments).selectinload(Payment.allocations),
         )
@@ -605,6 +612,9 @@ def order_screen(
             MenuItem.category_id == active_cat,
             MenuItem.is_active.is_(True), MenuItem.available.is_(True),
         ).order_by(MenuItem.name)
+        # The grid shows an "options" badge per item (mi.modifier_groups), which
+        # otherwise lazy-loads groups (and their options) one item at a time.
+        .options(selectinload(MenuItem.modifier_groups))
     ).scalars().all()
 
     modifiers = db.execute(select(Modifier).order_by(Modifier.name)).scalars().all()
@@ -676,6 +686,9 @@ def order_screen(
                 Order.table_id.is_not(None),
                 Order.table_id != order.table_id,
             )
+            # _has_paid_items reads each candidate's items/allocations; batch them
+            # so the merge list is a couple of queries, not one graph per table.
+            .options(selectinload(Order.items).selectinload(OrderItem.allocations))
         ).scalars().all()
         mergeable_tables = sorted(
             (o.table for o in others if not _has_paid_items(o)),
