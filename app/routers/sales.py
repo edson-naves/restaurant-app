@@ -66,7 +66,7 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
         select(Order).where(
             Order.status.in_(
                 (OrderStatus.OPEN, OrderStatus.PREPARING, OrderStatus.READY,
-                 OrderStatus.PARTIALLY_PAID)
+                 OrderStatus.SERVED, OrderStatus.PARTIALLY_PAID)
             ),
             Order.table_id.is_not(None),
         )
@@ -1176,7 +1176,10 @@ def kitchen_display(
 
     q = select(Order).where(
         Order.kitchen_status.in_(KITCHEN_STATES),
-        Order.status.not_in((OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED)),
+        # Served orders have been delivered — off the kitchen's plate.
+        Order.status.not_in(
+            (OrderStatus.SERVED, OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED)
+        ),
     )
     orders = db.execute(q).scalars().all()
 
