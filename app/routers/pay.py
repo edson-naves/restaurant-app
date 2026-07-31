@@ -49,6 +49,16 @@ def _load(db: Session, order_id: int) -> Order:
     return order
 
 
+def _require_served(order: Order) -> None:
+    """Payment can't be taken until the order has been served — the required
+    step in the flow (Ready to serve -> Served -> Ready to pay -> Paid).
+    A partially-paid order has already cleared this gate, so it's allowed."""
+    if order.status not in (OrderStatus.SERVED, OrderStatus.PARTIALLY_PAID):
+        raise HTTPException(
+            400, "Mark the order as Served before taking payment."
+        )
+
+
 def _receipt_ctx(db: Session, payment_id: int) -> dict | None:
     """Everything a receipt render needs (chit + tip guide + deliveries), or
     None if no receipt was issued. Shared by the standalone page and the modal.
@@ -277,6 +287,7 @@ def take_seat_payment(
 ):
     """4.2.4 / 4.2.5 — settle a seat, optionally only the ticked items."""
     order = _load(db, order_id)
+    _require_served(order)
     seat = db.get(Seat, seat_id)
     if seat is None or seat.order_id != order.id:
         raise HTTPException(404, "Seat not found")
@@ -345,6 +356,7 @@ def take_full_payment(
 ):
     """4.2.2 — single-instrument settlement of the whole order."""
     order = _load(db, order_id)
+    _require_served(order)
     outstanding = sum(
         i.line_total_cents - sum(a.amount_cents for a in i.allocations)
         for i in order.items

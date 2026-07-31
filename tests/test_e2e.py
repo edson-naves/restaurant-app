@@ -60,6 +60,17 @@ settings_svc.save(db, {"service_charge_rate": "0", "auto_gratuity_party": "0"})
 
 client = httpx.Client(base_url=BASE, follow_redirects=True, timeout=30)
 
+
+def serve(order_id):
+    """Mark an order Served (required before payment). Idempotent — a no-op if
+    the order has already moved past Served, so it's safe to call before any
+    payment flow. Uses whatever cookie is active; the payment roles can serve."""
+    o = db.get(Order, order_id)
+    if o and o.status in ("open", "preparing", "ready"):
+        client.post(f"/orders/{order_id}/served")
+        db.expire_all()
+
+
 # ---------------------------------------------------------------- auth (§3, §5)
 print("--- sign in ---")
 noauth = httpx.Client(base_url=BASE, follow_redirects=False, timeout=30)
@@ -320,16 +331,30 @@ check(db.get(RestaurantTable, table_id).status == TableStatus.OCCUPIED,
       "clearing it returns the table to Occupied")
 client.cookies.set("staff_id", str(kitchen.id))   # step 5 acts as the kitchen
 
-# Step 5: kitchen marks ready -> table becomes Ready to Pay.
+# Step 5: kitchen marks ready -> order is "ready to serve" (the table is NOT
+# auto-flipped to Ready to Pay any more; serving comes first).
 r = client.post(f"/kitchen/{order_id}/status", data={"status": "ready"})
 db.expire_all()
 order = db.get(Order, order_id)
 table = db.get(RestaurantTable, table_id)
 check(order.kitchen_status == "ready", "step 5: kitchen marks order Ready")
-check(table.status == TableStatus.READY_TO_PAY, "step 5: table -> Ready to Pay")
+check(order.status == "ready", "step 5: order -> Ready to serve")
+check(table.status == TableStatus.OCCUPIED, "step 5: table stays Occupied until served")
+
+# Step 5b: payment is blocked until the order is served (mandatory step).
+client.cookies.set("staff_id", str(waiter.id))
+r = client.post(f"/orders/{order_id}/pay-all", data={"instrument_id": 0})
+check(r.status_code == 400, "payment blocked before the order is served")
+# The waiter serves the food, then flags the table Ready to Pay.
+r = client.post(f"/orders/{order_id}/served")
+db.expire_all()
+check(db.get(Order, order_id).status == "served", "step 5b: order -> Served")
+client.post(f"/orders/{order_id}/ready-to-pay", data={"ready": 1})
+db.expire_all()
+check(db.get(RestaurantTable, table_id).status == TableStatus.READY_TO_PAY,
+      "step 5b: waiter flags table Ready to Pay after serving")
 
 # Step 6: payment screen.
-client.cookies.set("staff_id", str(waiter.id))
 r = client.get(f"/orders/{order_id}/pay")
 check(r.status_code == 200, "step 6: payment screen opens")
 
@@ -629,8 +654,8 @@ db.expire_all()
 co = db.get(Order, course_oid)
 check(co.kitchen_status == "ready" and co.status == "ready",
       "with every course up, the order is ready")
-check(db.get(RestaurantTable, free_c.id).status == TableStatus.READY_TO_PAY,
-      "and the table flips to Ready to pay")
+check(db.get(RestaurantTable, free_c.id).status == TableStatus.OCCUPIED,
+      "the table stays Occupied when food is up — serve first, then Ready to pay")
 # Clean up this coursing order (no payments).
 client.cookies.set("staff_id", str(owner.id))
 client.post(f"/orders/{course_oid}/cancel")
@@ -770,6 +795,7 @@ pd_o = db.get(Order, pd_oid)
 pd_seat1 = next(s for s in pd_o.seats if s.seat_number == 1)
 pd_steak = next(i for i in pd_o.items if i.menu_item_id == steak.id)
 # Partially settle the steak on seat 1 so this table is PARTIALLY PAID.
+serve(pd_oid)
 client.post(f"/orders/{pd_oid}/seats/{pd_seat1.id}/pay",
             data={"instrument_id": visa.id, "tip_mode": "none",
                   "partial": "1", "item_ids": pd_steak.id})
@@ -875,6 +901,7 @@ client.post(f"/orders/{big_party_oid}/items", data={"menu_item_id": steak.id, "s
 check("Auto-gratuity" in client.get(f"/orders/{big_party_oid}/pay").text,
       "a party of 6 is offered auto-gratuity")
 # Paying with the auto option applies the configured 18%.
+serve(big_party_oid)
 r = client.post(f"/orders/{big_party_oid}/pay-all",
                 data={"instrument_id": visa.id, "tip_mode": "auto"})
 db.expire_all()
@@ -903,6 +930,7 @@ client.post(f"/orders/{svc_oid}/items", data={"menu_item_id": steak.id, "seat_nu
 # The pay screen advertises the charge.
 check("service charge" in client.get(f"/orders/{svc_oid}/pay").text.lower(),
       "the payment screen notes the service charge")
+serve(svc_oid)
 r = client.post(f"/orders/{svc_oid}/pay-all",
                 data={"instrument_id": visa.id, "tip_mode": "none"})
 db.expire_all()
@@ -1044,6 +1072,7 @@ check(r.status_code == 200
 # After a payment lands, the split can't be reset.
 seat1 = next(s for s in sp_o.seats if s.seat_number == 1)
 client.post(f"/orders/{sp_oid}/items/{sp_o.items[0].id}/assign", data={"seat_number": 1})
+serve(sp_oid)
 client.post(f"/orders/{sp_oid}/seats/{seat1.id}/pay",
             data={"instrument_id": visa.id, "tip_mode": "none", "partial": "1"})
 r = client.post(f"/orders/{sp_oid}/reset-split")
@@ -1130,6 +1159,7 @@ steak_item = next(i for i in order2.items if i.menu_item_id == steak.id)
 bread_item = next(i for i in order2.items if i.menu_item_id == bread.id and i.seat_id == seat_a.id)
 
 # Guest ticks only the steak and departs early.
+serve(order2_id)
 r = client.post(
     f"/orders/{order2_id}/seats/{seat_a.id}/pay",
     data={"instrument_id": visa.id, "tip_mode": "15", "partial": "1", "item_ids": steak_item.id},

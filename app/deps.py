@@ -19,7 +19,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.oltp import Role, Staff
 from app.models.oltp import (
-    ALLERGEN_OPTIONS, COURSE_LABELS, category_emoji, course_label, seat_color,
+    ALLERGEN_OPTIONS, COURSE_LABELS, category_emoji, course_label,
+    order_status_label, seat_color,
     Payment, Reservation, ReservationStatus, RestaurantTable, TableStatus,
 )
 from app.services.money import duration, money
@@ -29,6 +30,7 @@ templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 templates.env.filters["money"] = money
 templates.env.filters["duration"] = duration
 templates.env.filters["course"] = course_label
+templates.env.filters["ostatus"] = order_status_label
 templates.env.filters["seat_color"] = seat_color
 templates.env.filters["cat_emoji"] = category_emoji
 templates.env.globals["COURSE_LABELS"] = COURSE_LABELS

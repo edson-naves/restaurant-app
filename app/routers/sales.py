@@ -29,6 +29,7 @@ from app.models.oltp import (
     OrderStatus,
     Payment,
     build_allergens,
+    order_status_label,
     RestaurantTable,
     Role,
     Seat,
@@ -325,7 +326,7 @@ def reassign_waiter(
 
 LIVE_STATES = (
     OrderStatus.OPEN, OrderStatus.PREPARING,
-    OrderStatus.READY, OrderStatus.PARTIALLY_PAID,
+    OrderStatus.READY, OrderStatus.SERVED, OrderStatus.PARTIALLY_PAID,
 )
 
 
@@ -1035,6 +1036,30 @@ def mark_ready_to_pay(
     return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
+@router.post("/orders/{order_id}/served")
+def mark_served(
+    order_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("orders.manage")),
+):
+    """Mark an order served — the waiter has delivered it to the table. Required
+    before payment (flow: Preparing -> Ready to serve -> Served -> Ready to pay
+    -> Paid). Normally done once the food is up, but allowed from any live
+    pre-payment state so a drinks-only or quick order can be served too."""
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(404, "Order not found")
+    if order.status not in (OrderStatus.OPEN, OrderStatus.PREPARING, OrderStatus.READY):
+        raise HTTPException(
+            400,
+            f"Order {order.code} can't be marked served "
+            f"(it's {order_status_label(order.status)}).",
+        )
+    order.status = OrderStatus.SERVED
+    db.commit()
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
+
+
 def _recompute_kitchen(order: Order, now: datetime) -> None:
     """Re-derive the order's kitchen/table state from its item statuses (4.1.3).
 
@@ -1052,10 +1077,11 @@ def _recompute_kitchen(order: Order, now: datetime) -> None:
     if statuses == {KitchenStatus.READY}:
         order.kitchen_status = KitchenStatus.READY
         order.ready_at = order.ready_at or now
+        # Food up = "ready to serve", not "ready to pay". The table stays
+        # occupied until the waiter serves it and the guest asks for the bill;
+        # SERVED (already past READY) is left untouched.
         if order.status in (OrderStatus.OPEN, OrderStatus.PREPARING, OrderStatus.READY):
             order.status = OrderStatus.READY
-            if order.table:
-                order.table.status = TableStatus.READY_TO_PAY
         if order.delivery:
             order.delivery.status = DeliveryStatus.READY
     elif KitchenStatus.PREPARING in statuses or KitchenStatus.READY in statuses:

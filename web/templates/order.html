@@ -6,7 +6,7 @@
     <p class="sub">
       {% if order.table %}Table {{ order.table.number }} · {{ order.guest_count }} guests{% else %}{{ order.channel.name }}{% endif %}
       · {{ order.waiter.name if order.waiter else 'unassigned' }}
-      · <span class="pill {{ order.status }}">{{ order.status.replace('_',' ') }}</span>
+      · <span class="pill {{ order.status }}">{{ order.status|ostatus }}</span>
     </p>
   </div>
   {% set open_order = order.status not in ('paid','closed','cancelled') %}
@@ -18,6 +18,13 @@
         Send to kitchen
       </button>
     </form>
+    {# Waiter confirms the order reached the table. Required before payment;
+       shown once the order is in motion (food cooking or up). #}
+    {% if order.status in ('preparing','ready') %}
+    <form method="post" action="/orders/{{ order.id }}/served">
+      <button class="btn good">✓ Mark served</button>
+    </form>
+    {% endif %}
     {% endif %}
 
     {# The less-frequent order actions (state, table moves, cancel) collapse
@@ -95,7 +102,8 @@
     </details>
     {% endif %}
 
-    {% if can('payments.take') %}
+    {# Payment only after the order is served (or already part-paid). #}
+    {% if can('payments.take') and order.status in ('served','partially_paid') %}
     <a class="btn good" href="/orders/{{ order.id }}/pay">Payment →</a>
     {% endif %}
   </div>

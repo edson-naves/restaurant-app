@@ -47,11 +47,30 @@ class TableStatus:
 class OrderStatus:
     OPEN = "open"
     PREPARING = "preparing"
-    READY = "ready"
+    READY = "ready"            # food is up in the pass — "ready to serve"
+    SERVED = "served"          # waiter has delivered it to the table
     PARTIALLY_PAID = "partially_paid"
     PAID = "paid"
     CLOSED = "closed"
     CANCELLED = "cancelled"
+
+
+# Guest-facing labels for the order lifecycle. "ready" reads as "Ready to serve"
+# (kitchen done, not yet delivered); the rest are the plain words.
+ORDER_STATUS_LABELS = {
+    OrderStatus.OPEN: "Open",
+    OrderStatus.PREPARING: "Preparing",
+    OrderStatus.READY: "Ready to serve",
+    OrderStatus.SERVED: "Served",
+    OrderStatus.PARTIALLY_PAID: "Partially paid",
+    OrderStatus.PAID: "Paid",
+    OrderStatus.CLOSED: "Closed",
+    OrderStatus.CANCELLED: "Cancelled",
+}
+
+
+def order_status_label(status: str) -> str:
+    return ORDER_STATUS_LABELS.get(status, status.replace("_", " ").title())
 
 
 class KitchenStatus:

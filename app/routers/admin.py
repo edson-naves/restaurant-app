@@ -55,6 +55,7 @@ LIVE_ORDER_STATES = (
     OrderStatus.OPEN,
     OrderStatus.PREPARING,
     OrderStatus.READY,
+    OrderStatus.SERVED,
     OrderStatus.PARTIALLY_PAID,
 )
 
