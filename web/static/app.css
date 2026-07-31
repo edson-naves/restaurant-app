@@ -142,12 +142,20 @@ a.side-ov-row[href]:hover { background: var(--panel-2); text-decoration: none; }
 .app-shell { display: flex; align-items: flex-start; min-height: 100vh; }
 .sidebar {
   width: 216px; flex: none; align-self: stretch;
-  /* Glass, so the background photo reads faintly behind the nav too. */
-  background: color-mix(in srgb, var(--panel) 86%, transparent);
-  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
-  border-right: 1px solid var(--line);
+  /* Glass: more transparent so the background photo reads through, with a
+     stronger blur to keep the nav legible. Dark mode is a touch more opaque
+     (overridden below) for text contrast over busier photos. */
+  /* 90% transparent (10% panel); a strong blur keeps the nav readable. */
+  background: color-mix(in srgb, var(--panel) 10%, transparent);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  /* No hard 1px edge — a soft shadow lets the glass bar dissolve into the
+     content instead of drawing a crisp line down the page. */
+  box-shadow: 12px 0 30px -18px var(--shadow);
   display: flex; flex-direction: column; gap: 4px; padding: 14px 12px;
   position: sticky; top: 0; height: 100vh;
+}
+:root[data-theme="dark"] .sidebar {
+  background: color-mix(in srgb, var(--panel) 16%, transparent);
 }
 .sidebar .brand { padding: 8px 12px 16px; display: flex; align-items: center; gap: 8px; }
 .side-nav { display: flex; flex-direction: column; gap: 2px; flex: 1; min-height: 0; overflow-y: auto; }
@@ -173,17 +181,25 @@ a.side-ov-row[href]:hover { background: var(--panel-2); text-decoration: none; }
 .side-user-txt { display: flex; flex-direction: column; line-height: 1.2; min-width: 0; }
 .side-user-txt b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
 .side-user-txt small { color: var(--muted); font-size: 11px; text-transform: capitalize; }
-/* Light/dark toggle in the sidebar foot. Shows the theme you'd switch TO. */
-.side-theme {
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-  width: 100%; margin-bottom: 8px;
+/* Light/dark toggle — floats top-right on every page. Shows the theme you'd
+   switch TO. Glass pill so it sits over the background photo cleanly. */
+.theme-fab {
+  position: fixed; top: 12px; right: 16px; z-index: 50;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; padding: 0; border-radius: 50%; cursor: pointer;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 18px -8px var(--shadow);
 }
-.side-theme svg { width: 16px; height: 16px; }
-.side-theme .ic-sun, .side-theme .th-light { display: none; }
-:root[data-theme="dark"] .side-theme .ic-moon,
-:root[data-theme="dark"] .side-theme .th-dark { display: none; }
-:root[data-theme="dark"] .side-theme .ic-sun,
-:root[data-theme="dark"] .side-theme .th-light { display: inline; }
+.theme-fab:hover { border-color: var(--accent); }
+.theme-fab svg { width: 18px; height: 18px; }
+.theme-fab .ic-moon { color: #111827; fill: #111827; }   /* black moon (light mode) */
+.theme-fab .ic-sun { color: #facc15; }                    /* yellow sun (dark mode) */
+.theme-fab .ic-sun { display: none; }
+:root[data-theme="dark"] .theme-fab .ic-moon { display: none; }
+:root[data-theme="dark"] .theme-fab .ic-sun { display: inline; }
 .main-area { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 100vh; }
 
 /* On phones/small tablets the sidebar becomes a scrollable top strip. */
