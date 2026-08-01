@@ -77,6 +77,21 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
     ).scalars().all()
     by_table = {o.table_id: o for o in open_orders}
 
+    # Self-heal: a table is only "Ready to pay" once its order is served (or
+    # part-paid). Correct any stale flag left from before that rule (e.g. a table
+    # flagged then pulled back to Preparing by a re-fire) so the floor never
+    # shows "Ready to serve" and "Ready to pay" at once.
+    stale = [
+        t for t in tables
+        if t.status == TableStatus.READY_TO_PAY
+        and by_table.get(t.id)
+        and by_table[t.id].status not in (OrderStatus.SERVED, OrderStatus.PARTIALLY_PAID)
+    ]
+    if stale:
+        for t in stale:
+            t.status = TableStatus.OCCUPIED
+        db.commit()
+
     cards = []
     for t in tables:
         order = by_table.get(t.id)
@@ -1013,13 +1028,11 @@ def mark_ready_to_pay(
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("orders.manage")),
 ):
-    """4.1.1 — a waiter flags a table Ready to pay, or clears it back to Occupied.
+    """4.1.1 — the waiter flags a table Ready to pay, or clears it to Occupied.
 
-    The kitchen flips the table automatically when the food is up, but a guest
-    asks for the bill on their own schedule — often before the kitchen is done,
-    sometimes after. This is the waiter's manual control over that state; it
-    only moves the floor-plan status, never the order's own kitchen/payment
-    state, so it can't interfere with sending food or taking payment.
+    Only meaningful once the order is Served: the guest asks for the bill after
+    they've been fed. It only moves the floor-plan status, never the order's own
+    kitchen/payment state.
     """
     order = db.get(Order, order_id)
     if order is None:
@@ -1028,6 +1041,8 @@ def mark_ready_to_pay(
         raise HTTPException(400, "This is not a table order.")
     if order.status in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
         raise HTTPException(400, f"Order {order.code} is already closed.")
+    if ready and order.status not in (OrderStatus.SERVED, OrderStatus.PARTIALLY_PAID):
+        raise HTTPException(400, "Mark the order Served before flagging Ready to pay.")
 
     order.table.status = (
         TableStatus.READY_TO_PAY if ready else TableStatus.OCCUPIED

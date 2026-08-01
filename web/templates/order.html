@@ -36,15 +36,19 @@
       <div class="edit-pop" style="width:300px">
 
         {% if can('orders.manage') and order.table %}
+        {# "Ready to pay" only makes sense once the order is served. Clearing it
+           is always available while the flag is set. #}
+        {% if order.table.status == 'ready_to_pay' %}
         <form method="post" action="/orders/{{ order.id }}/ready-to-pay" style="margin-bottom:10px">
-          {% if order.table.status == 'ready_to_pay' %}
           <input type="hidden" name="ready" value="0">
           <button class="btn warn sm" style="width:100%">Clear “ready to pay”</button>
-          {% else %}
+        </form>
+        {% elif order.status in ('served','partially_paid') %}
+        <form method="post" action="/orders/{{ order.id }}/ready-to-pay" style="margin-bottom:10px">
           <input type="hidden" name="ready" value="1">
           <button class="btn warn sm" style="width:100%">Mark ready to pay</button>
-          {% endif %}
         </form>
+        {% endif %}
         {% endif %}
 
         {# 4.1.1 — move this party to another free table. #}
