@@ -1091,6 +1091,11 @@ def _recompute_kitchen(order: Order, now: datetime) -> None:
         # re-served before payment.
         if order.status in (OrderStatus.OPEN, OrderStatus.PREPARING, OrderStatus.SERVED):
             order.status = OrderStatus.PREPARING
+            # New food means the table isn't ready to pay any more — clear the
+            # stale flag (the waiter re-flags it after re-serving). This is the
+            # only place the system touches ready-to-pay, and only to clear it.
+            if order.table and order.table.status == TableStatus.READY_TO_PAY:
+                order.table.status = TableStatus.OCCUPIED
     else:
         order.kitchen_status = KitchenStatus.PENDING
 
