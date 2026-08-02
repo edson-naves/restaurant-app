@@ -291,7 +291,12 @@
          only when more than one course is still un-fired. #}
       {% set pending_courses = order.items|selectattr('kitchen_status','equalto','pending')|map(attribute='course')|list|unique|sort %}
       <div class="between" style="margin-bottom:12px">
-        <h2 style="margin:0">Order</h2>
+        <div style="display:flex;align-items:center;gap:10px">
+          <h2 style="margin:0">Order</h2>
+          {% if line_groups|length > 1 %}
+          <button type="button" class="btn sm" onclick="toggleAllSeats(this)" title="Expand or collapse all seats">Expand all</button>
+          {% endif %}
+        </div>
         {% if can('orders.manage') and pending_courses|length > 1 %}
         <div class="fire-courses">
           {% for c in pending_courses %}
@@ -316,6 +321,9 @@
             <span class="seat-sq" style="background:{{ g.num|seat_color }}">{% if g.num %}{{ g.num }}{% elif g.num == 0 %}T{% else %}·{% endif %}</span>
             <strong>{{ g.label }}</strong>
             <span class="sub" style="margin:0">{{ g.count }} item{{ '' if g.count == 1 else 's' }}</span>
+            {# Un-fired items on this seat — flag it so it's not forgotten. #}
+            {% set to_fire = g.lines|selectattr('kitchen_status','equalto','pending')|list %}
+            {% if to_fire %}<span class="seat-fire" title="{{ to_fire|length }} item(s) not sent to the kitchen">🔥 to fire</span>{% endif %}
             <svg class="ordgroup-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
           </summary>
           {% for i in g.lines %}
@@ -459,5 +467,13 @@ function stepQty(d) {
 
 // Seat chips now navigate (server-authoritative active seat), so no JS here.
 // (Outside-click / Escape close for .edit-menu popovers lives in base.html.)
+
+// Expand / collapse every seat group at once.
+function toggleAllSeats(btn) {
+  var groups = document.querySelectorAll('.ordgroup');
+  var anyClosed = Array.prototype.some.call(groups, function (g) { return !g.open; });
+  Array.prototype.forEach.call(groups, function (g) { g.open = anyClosed; });
+  btn.textContent = anyClosed ? 'Collapse all' : 'Expand all';
+}
 </script>
 {% endblock %}

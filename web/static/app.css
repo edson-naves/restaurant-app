@@ -588,6 +588,12 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .ordgroup > summary.ordgroup-head::-webkit-details-marker { display: none; }
 .ordgroup-chev { margin-left: auto; color: var(--muted); transition: transform .15s ease; }
 .ordgroup[open] .ordgroup-chev { transform: rotate(180deg); }
+/* Un-fired items on a seat — a nudge to send them to the kitchen. */
+.seat-fire {
+  font-size: 11px; font-weight: 700; white-space: nowrap; color: var(--occupied);
+  background: color-mix(in srgb, var(--occupied) 16%, transparent);
+  padding: 1px 8px; border-radius: 999px;
+}
 .ordgroup:not([open]) { padding-bottom: 4px; }
 .seat-sq {
   width: 22px; height: 22px; border-radius: 6px; color: #fff;
