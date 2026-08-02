@@ -366,6 +366,9 @@ label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 4px; f
 .pill.os-preparing { background: rgba(245,158,11,.15); color: #b45309; }
 .pill.os-ready { background: rgba(37,99,235,.13); color: #1d4ed8; }
 .pill.os-served { background: rgba(16,185,129,.14); color: #047857; }
+/* Preparing / Ready-to-serve badges jump to the kitchen. */
+.pill.os-jump { cursor: pointer; }
+.pill.os-jump:hover { filter: brightness(1.12); text-decoration: underline; }
 /* Allergy flag — red, so it stands out on the order line. */
 .pill.allergy { background: rgba(212,72,59,.2); color: #b91c1c; text-transform: none; }
 .allergen { border: 1px solid rgba(212,72,59,.4) !important; }
