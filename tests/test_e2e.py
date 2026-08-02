@@ -62,13 +62,21 @@ client = httpx.Client(base_url=BASE, follow_redirects=True, timeout=30)
 
 
 def serve(order_id):
-    """Mark an order Served (required before payment). Idempotent — a no-op if
-    the order has already moved past Served, so it's safe to call before any
-    payment flow. Uses whatever cookie is active; the payment roles can serve."""
+    """Fully prepare and serve an order so it can be paid: fire everything, mark
+    it ready in the kitchen, then serve. You can only serve food that's ready, so
+    this drives the whole cooking flow. Runs as the owner (all permissions) and
+    restores the caller's cookie. Idempotent for already-served orders."""
     o = db.get(Order, order_id)
-    if o and o.status in ("open", "preparing", "ready"):
-        client.post(f"/orders/{order_id}/served")
-        db.expire_all()
+    if not o or o.status not in ("open", "preparing", "ready"):
+        return
+    saved = client.cookies.get("staff_id")
+    client.cookies.set("staff_id", str(owner.id))
+    client.post(f"/orders/{order_id}/send")                                # -> preparing
+    client.post(f"/kitchen/{order_id}/status", data={"status": "ready"})   # -> ready
+    client.post(f"/orders/{order_id}/served")                              # -> served
+    if saved is not None:
+        client.cookies.set("staff_id", saved)
+    db.expire_all()
 
 
 # ---------------------------------------------------------------- auth (§3, §5)

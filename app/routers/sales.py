@@ -1072,16 +1072,20 @@ def mark_served(
             f"Order {order.code} can't be marked served "
             f"(it's {order_status_label(order.status)}).",
         )
-    order.status = OrderStatus.SERVED
-    # Whatever's up (Ready) has now been delivered — take it off the kitchen line
-    # so a later re-fire shows only the new items, not what was already served.
+    # Deliver whatever's up (Ready) — those lines leave the kitchen line so a
+    # later re-fire shows only the new items, not what was already served.
     for item in order.items:
         if item.kitchen_status == KitchenStatus.READY:
             item.kitchen_status = KitchenStatus.SERVED
-    # Nothing left on the line -> off the kitchen board. (A later fire re-enters
-    # it via _recompute in the send path.)
     if all(i.kitchen_status == KitchenStatus.SERVED for i in order.items):
+        # Everything delivered — the order is served and off the board.
+        order.status = OrderStatus.SERVED
         order.kitchen_status = KitchenStatus.SERVED
+    else:
+        # Still food cooking or held (pending/preparing) — the order is NOT fully
+        # served. Re-derive so it stays Preparing and on the kitchen board (and
+        # can't be paid) until the rest is up and served too.
+        _recompute_kitchen(order, datetime.now())
     db.commit()
     return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
