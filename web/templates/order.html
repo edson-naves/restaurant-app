@@ -308,12 +308,16 @@
       {% else %}
       <div class="ordgroups">
         {% for g in line_groups %}
-        <div class="ordgroup">
-          <div class="ordgroup-head">
+        {# Collapsible per seat: the seat you're ordering for is open, the rest
+           collapse to their header. Switching seats reloads with the new one
+           active; you can also tap a header to peek. #}
+        <details class="ordgroup" {% if g.num == active_seat %}open{% endif %}>
+          <summary class="ordgroup-head">
             <span class="seat-sq" style="background:{{ g.num|seat_color }}">{% if g.num %}{{ g.num }}{% elif g.num == 0 %}T{% else %}·{% endif %}</span>
             <strong>{{ g.label }}</strong>
             <span class="sub" style="margin:0">{{ g.count }} item{{ '' if g.count == 1 else 's' }}</span>
-          </div>
+            <svg class="ordgroup-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </summary>
           {% for i in g.lines %}
           <div class="ordline">
             <div class="ordline-main">
@@ -391,7 +395,7 @@
             </div>{# /ordline-actions #}
           </div>{# /ordline #}
           {% endfor %}
-        </div>{# /ordgroup #}
+        </details>{# /ordgroup #}
         {% endfor %}
       </div>{# /ordgroups #}
       {% endif %}

@@ -579,7 +579,16 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .ordgroups { display: flex; flex-direction: column; }
 .ordgroup { padding: 4px 0 10px; }
 .ordgroup + .ordgroup { border-top: 1px solid var(--line); padding-top: 12px; }
-.ordgroup-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+/* Collapsible seat groups (accordion). Header is the <summary>; body hides when
+   the group is closed. */
+.ordgroup > summary.ordgroup-head {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+  cursor: pointer; list-style: none;
+}
+.ordgroup > summary.ordgroup-head::-webkit-details-marker { display: none; }
+.ordgroup-chev { margin-left: auto; color: var(--muted); transition: transform .15s ease; }
+.ordgroup[open] .ordgroup-chev { transform: rotate(180deg); }
+.ordgroup:not([open]) { padding-bottom: 4px; }
 .seat-sq {
   width: 22px; height: 22px; border-radius: 6px; color: #fff;
   display: inline-flex; align-items: center; justify-content: center;
