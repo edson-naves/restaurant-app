@@ -3,6 +3,6 @@
 <div class="card">
   <h1>{{ status }}</h1>
   <div class="err">{{ detail }}</div>
-  <p style="margin-top:16px"><a class="btn" href="/">← Back to floor plan</a></p>
+  <p style="margin-top:16px"><a class="btn" href="{{ back|default('/') }}">← {{ back_label|default('Back to floor plan') }}</a></p>
 </div>
 {% endblock %}

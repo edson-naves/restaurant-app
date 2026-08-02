@@ -3,6 +3,7 @@
 Run:  uvicorn app.main:app --reload
 """
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -37,12 +38,19 @@ def http_error(request: Request, exc: StarletteHTTPException):
         return RedirectResponse("/login", status_code=303)
     if request.headers.get("accept", "").startswith("application/json"):
         raise exc
+    # Go back to wherever the action came from (the order screen, usually) rather
+    # than always the floor plan — a rejected add/pay should return to the order.
+    ref = urlparse(request.headers.get("referer", "")).path
+    back = ref if ref.startswith("/") and ref != request.url.path else "/"
+    back_label = "Back to order" if back.startswith("/orders/") else "Back to floor plan"
     return templates.TemplateResponse(
         request,
         "error.html",
         {
             "status": exc.status_code,
             "detail": exc.detail,
+            "back": back,
+            "back_label": back_label,
             "title": f"Error {exc.status_code}",
             "can": lambda p: False,
             "all_staff": [],
