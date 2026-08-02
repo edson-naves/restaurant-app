@@ -1323,6 +1323,10 @@ def kitchen_status(
 
     targets = order.items if not course else [i for i in order.items if i.course == course]
     for item in targets:
+        # Already-served items are delivered — a course-level "Ready" must not
+        # drag them back onto the line.
+        if item.kitchen_status == KitchenStatus.SERVED:
+            continue
         item.kitchen_status = status
 
     now = datetime.now()
