@@ -94,14 +94,6 @@
         </li>
         {% endfor %}
       </ul>
-      {# Whole-course shortcut, only when there's more than one course. #}
-      {% if can('kitchen.update') and c.multi and c.status == 'preparing' %}
-      <form method="post" action="/kitchen/{{ t.order.id }}/status">
-        <input type="hidden" name="status" value="ready">
-        <input type="hidden" name="course" value="{{ c.course }}">
-        <button class="btn sm" style="width:100%">Mark {{ c.label|lower }} ready</button>
-      </form>
-      {% endif %}
     </div>
     {% endfor %}
 
