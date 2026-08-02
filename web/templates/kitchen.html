@@ -79,7 +79,7 @@
           <form method="post" action="/kitchen/{{ t.order.id }}/status" class="k-line-act">
             <input type="hidden" name="status" value="ready">
             <input type="hidden" name="item_id" value="{{ i.id }}">
-            <button class="btn good sm" title="Mark this item ready">✓</button>
+            <button type="submit" class="k-check" title="Mark this item ready" aria-label="Mark ready"></button>
           </form>
           {% elif i.kitchen_status == 'ready' %}
           <span class="k-line-done" title="Ready">✓</span>
