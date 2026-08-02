@@ -319,7 +319,7 @@
         <details class="ordgroup" {% if g.num == active_seat %}open{% endif %}>
           {# Clicking a seat header selects that seat (new items go to it) and
              opens it — no need to also pick it in the seats bar. #}
-          <summary class="ordgroup-head"{% if g.num is not none %} onclick="event.preventDefault();window.location='/orders/{{ order.id }}?seat={{ g.num }}{{ seat_qs }}';"{% endif %}>
+          <summary class="ordgroup-head"{% if g.num is not none %} onclick="seatClick(event, this, '/orders/{{ order.id }}?seat={{ g.num }}{{ seat_qs }}')"{% endif %}>
             <span class="seat-sq" style="background:{{ g.num|seat_color }}">{% if g.num %}{{ g.num }}{% elif g.num == 0 %}T{% else %}·{% endif %}</span>
             <strong>{{ g.label }}</strong>
             <span class="sub" style="margin:0">{{ g.count }} item{{ '' if g.count == 1 else 's' }}</span>
@@ -469,6 +469,16 @@ function stepQty(d) {
 
 // Seat chips now navigate (server-authoritative active seat), so no JS here.
 // (Outside-click / Escape close for .edit-menu popovers lives in base.html.)
+
+// Seat header: an OPEN seat collapses in place; a CLOSED seat is selected
+// (navigates so new items go to it and it opens). So you can both switch seats
+// and collapse the one you're on.
+function seatClick(e, summary, url) {
+  e.preventDefault();                 // suppress the native <details> toggle
+  var d = summary.parentElement;
+  if (d.open) { d.open = false; }     // open -> collapse here, no reload
+  else { window.location = url; }     // closed -> select that seat
+}
 
 // Expand / collapse every seat group at once.
 function toggleAllSeats(btn) {
