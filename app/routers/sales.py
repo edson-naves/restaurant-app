@@ -1221,6 +1221,24 @@ def kitchen_display(
     if kstatus != "all" and kstatus not in KITCHEN_STATES:
         kstatus = "all"
 
+    # Self-heal: an order left SERVED while it still has food on the line
+    # (preparing/ready items) is inconsistent — re-derive so its cooking items
+    # show on the board instead of vanishing.
+    stale = db.execute(
+        select(Order).where(
+            Order.status == OrderStatus.SERVED,
+            Order.id.in_(
+                select(OrderItem.order_id).where(
+                    OrderItem.kitchen_status.in_(KITCHEN_STATES)
+                )
+            ),
+        )
+    ).scalars().all()
+    if stale:
+        for o in stale:
+            _recompute_kitchen(o, datetime.now())
+        db.commit()
+
     q = select(Order).where(
         Order.kitchen_status.in_(KITCHEN_STATES),
         # Served orders have been delivered — off the kitchen's plate.
