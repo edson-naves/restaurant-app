@@ -18,9 +18,10 @@
         Send to kitchen
       </button>
     </form>
-    {# Waiter confirms the order reached the table. Required before payment;
-       shown once the order is in motion (food cooking or up). #}
-    {% if order.status in ('preparing','ready') %}
+    {# Waiter confirms the order reached the table. Shown whenever any item is
+       up (READY) and still needs serving — including partially-paid orders,
+       where later courses come up after an early seat has settled. #}
+    {% if order.items|selectattr('kitchen_status','equalto','ready')|list %}
     <form method="post" action="/orders/{{ order.id }}/served">
       <button class="btn good">✓ Mark served</button>
     </form>

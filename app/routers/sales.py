@@ -1066,7 +1066,13 @@ def mark_served(
     order = db.get(Order, order_id)
     if order is None:
         raise HTTPException(404, "Order not found")
-    if order.status not in (OrderStatus.OPEN, OrderStatus.PREPARING, OrderStatus.READY):
+    servable = (
+        OrderStatus.OPEN,
+        OrderStatus.PREPARING,
+        OrderStatus.READY,
+        OrderStatus.PARTIALLY_PAID,
+    )
+    if order.status not in servable:
         raise HTTPException(
             400,
             f"Order {order.code} can't be marked served "
@@ -1077,7 +1083,11 @@ def mark_served(
     for item in order.items:
         if item.kitchen_status == KitchenStatus.READY:
             item.kitchen_status = KitchenStatus.SERVED
-    if all(i.kitchen_status == KitchenStatus.SERVED for i in order.items):
+    if order.status == OrderStatus.PARTIALLY_PAID:
+        # A seat already settled — keep the payment state and just re-derive the
+        # kitchen side (marks it off the board once nothing's left cooking).
+        _recompute_kitchen(order, datetime.now())
+    elif all(i.kitchen_status == KitchenStatus.SERVED for i in order.items):
         # Everything delivered — the order is served and off the board.
         order.status = OrderStatus.SERVED
         order.kitchen_status = KitchenStatus.SERVED
