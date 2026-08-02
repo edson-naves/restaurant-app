@@ -319,7 +319,7 @@
             <div class="ordline-main">
               <div>
                 {{ i.quantity }}× {{ i.menu_item.name }}
-                <span class="pill {{ 'ok' if i.kitchen_status == 'ready' else ('warn' if i.kitchen_status == 'preparing' else 'open') }}">{{ i.kitchen_status }}</span>
+                <span class="pill {{ 'ok' if i.kitchen_status in ('ready','served') else ('warn' if i.kitchen_status == 'preparing' else 'open') }}">{{ i.kitchen_status }}</span>
                 <span class="sub" style="font-size:11px">· {{ i.course|course }}</span>
                 {% if i.allocations %}<span class="pill paid" title="Already paid — can't be changed or removed">paid ✓</span>{% endif %}
                 {% if i.merged_from_order and i.merged_from_order.table %}<span class="pill open" title="Merged in from {{ i.merged_from_order.code }}">⤷ from Table {{ i.merged_from_order.table.number }}</span>{% endif %}

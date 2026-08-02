@@ -74,10 +74,11 @@ def order_status_label(status: str) -> str:
 
 
 class KitchenStatus:
-    """Section 4.1.3 — Pending -> Preparing -> Ready."""
+    """Section 4.1.3 — Pending -> Preparing -> Ready -> Served."""
     PENDING = "pending"
     PREPARING = "preparing"
     READY = "ready"
+    SERVED = "served"      # per item: delivered to the table, off the kitchen line
 
 
 # Section 4.1.3 — coursing. Meal stages, fired in this order.

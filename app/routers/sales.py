@@ -1071,6 +1071,15 @@ def mark_served(
             f"(it's {order_status_label(order.status)}).",
         )
     order.status = OrderStatus.SERVED
+    # Whatever's up (Ready) has now been delivered — take it off the kitchen line
+    # so a later re-fire shows only the new items, not what was already served.
+    for item in order.items:
+        if item.kitchen_status == KitchenStatus.READY:
+            item.kitchen_status = KitchenStatus.SERVED
+    # Nothing left on the line -> off the kitchen board. (A later fire re-enters
+    # it via _recompute in the send path.)
+    if all(i.kitchen_status == KitchenStatus.SERVED for i in order.items):
+        order.kitchen_status = KitchenStatus.SERVED
     db.commit()
     return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
@@ -1087,7 +1096,13 @@ def _recompute_kitchen(order: Order, now: datetime) -> None:
     items = order.items
     if not items:
         return
-    statuses = {i.kitchen_status for i in items}
+    # Served items are delivered — they no longer drive the kitchen state. The
+    # order's stage is derived from what's still on the line.
+    active = [i for i in items if i.kitchen_status != KitchenStatus.SERVED]
+    if not active:
+        order.kitchen_status = KitchenStatus.SERVED   # nothing left to cook/plate
+        return
+    statuses = {i.kitchen_status for i in active}
 
     if statuses == {KitchenStatus.READY}:
         order.kitchen_status = KitchenStatus.READY
