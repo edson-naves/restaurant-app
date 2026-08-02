@@ -314,6 +314,7 @@ def pay_seat(
     discount_approved_by_id: int | None = None,
     discount_reason: str = "",
     card_last4: str | None = None,
+    card_brand: str | None = None,
     is_partial_close: bool = False,
 ) -> Payment:
     """Settle a seat, in whole or in part, with a single instrument.
@@ -369,7 +370,9 @@ def pay_seat(
         discount_cents=discount_cents,
         tax_cents=tax_cents,
         total_cents=total_cents,
-        card_brand=instrument.card_brand,
+        # A card-present terminal reports the actual brand it read (Interac,
+        # Visa…); fall back to the instrument's fixed brand for manual entry.
+        card_brand=card_brand or instrument.card_brand,
         card_last4=card_last4 if instrument.instrument_type in ("card", "contactless") else None,
         is_partial_close=is_partial_close,
         created_at=datetime.now(),

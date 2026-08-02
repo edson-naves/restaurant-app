@@ -323,20 +323,15 @@ client.cookies.set("staff_id", str(kitchen.id))
 r = client.get("/kitchen")
 check(f"Table {table_no}" in r.text, "step 4: ticket appears on the kitchen display")
 
-# 4.1.1 — a waiter can flag Ready to pay manually, before the kitchen is done.
+# 4.1.1 — Ready to pay is a post-served action (mandatory-served workflow):
+# flagging it while the food is still cooking is rejected, and the table is
+# left untouched. The waiter flags it after serving, tested at step 5b below.
 client.cookies.set("staff_id", str(waiter.id))
 r = client.post(f"/orders/{order_id}/ready-to-pay", data={"ready": 1})
 db.expire_all()
-check(r.status_code == 200 and db.get(RestaurantTable, table_id).status == TableStatus.READY_TO_PAY,
-      "waiter marks the table Ready to pay by hand")
-# It must not disturb the order's own kitchen/payment state.
-check(db.get(Order, order_id).status != "ready",
-      "the manual flag moves only the table, not the order status")
-# And it toggles back.
-r = client.post(f"/orders/{order_id}/ready-to-pay", data={"ready": 0})
-db.expire_all()
-check(db.get(RestaurantTable, table_id).status == TableStatus.OCCUPIED,
-      "clearing it returns the table to Occupied")
+check(r.status_code == 400, "flagging Ready to pay before serving is rejected")
+check(db.get(RestaurantTable, table_id).status != TableStatus.READY_TO_PAY,
+      "the table is not flagged Ready to pay until the order is served")
 client.cookies.set("staff_id", str(kitchen.id))   # step 5 acts as the kitchen
 
 # Step 5: kitchen marks ready -> order is "ready to serve" (the table is NOT

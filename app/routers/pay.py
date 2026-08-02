@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -26,6 +26,7 @@ from app.models.oltp import (
 from app.services import receipt_delivery
 from app.services import refunds
 from app.services import settings as settings_svc
+from app.services import square
 from app.services.money import money, pct
 from app.services.payments import (
     PaymentError,
@@ -169,6 +170,8 @@ def payment_screen(
         # 4.2.6 — mandatory service charge rate (0 = none), shown on the screen.
         "service_charge_rate": settings_svc.service_charge_rate(db),
         "receipt_view": receipt_view,
+        # Card-terminal path is offered only when Square is configured.
+        "terminal_enabled": square.is_configured(),
         "title": f"Payment · {order.code}",
     })
 
@@ -355,6 +358,218 @@ def take_seat_payment(
     return RedirectResponse(
         f"/orders/{order.id}/pay?receipt={payment.id}", status_code=303
     )
+
+
+# --------------------------------------------------------------------------
+# Card-terminal payment (Square Terminal API)
+#
+# The physical terminal — not this app — takes the card and the tip. We send it
+# the amount owed, the customer taps and tips on the machine, and we read the
+# result back (real tip + card last-4). The waiter never types the tip.
+#
+# The flow is three routes: create the checkout, a waiting page that polls, and
+# a status endpoint that records the payment once the terminal completes.
+# --------------------------------------------------------------------------
+
+def _terminal_instrument(db: Session) -> PaymentInstrument:
+    """The instrument card-terminal payments are booked under (created once)."""
+    inst = db.execute(
+        select(PaymentInstrument).where(PaymentInstrument.name == "Card (terminal)")
+    ).scalars().first()
+    if inst is None:
+        inst = PaymentInstrument(
+            code="card_terminal", name="Card (terminal)", instrument_type="card"
+        )
+        db.add(inst)
+        db.flush()
+    return inst
+
+
+@router.post("/orders/{order_id}/seats/{seat_id}/pay-terminal")
+def start_terminal_payment(
+    order_id: int,
+    seat_id: int,
+    item_ids: list[int] = Form(default=[]),
+    partial: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("payments.take")),
+):
+    """Send the seat's served balance to the card terminal for the customer to
+    pay + tip on. Returns a waiting page that polls for the result."""
+    if not square.is_configured():
+        raise HTTPException(400, "No card terminal is set up.")
+    order = _load(db, order_id)
+    _require_served(order)
+    seat = db.get(Seat, seat_id)
+    if seat is None or seat.order_id != order.id:
+        raise HTTPException(404, "Seat not found")
+
+    ledgers, _ = build_ledgers(db, order)
+    ledger = ledgers.get(seat.id)
+    if ledger is None:
+        raise HTTPException(404, "Seat has no ledger")
+
+    served_ids = {i.id for i in order.items if i.kitchen_status == KitchenStatus.SERVED}
+    wanted = set(item_ids) if item_ids else None
+    lines = [
+        l for l in ledger.lines
+        if l.item.id in served_ids and l.outstanding_cents > 0
+        and (wanted is None or l.item.id in wanted)
+    ]
+    if not lines:
+        raise HTTPException(400, "No served items to charge on this seat yet.")
+
+    base = sum(l.outstanding_cents for l in lines)
+    svc_cents = pct(base, settings_svc.service_charge_rate(db))
+    cfg = settings_svc.tax_config(db)
+    tax_cents = pct(base, cfg.gst_rate) + pct(base, cfg.pst_rate)
+    # Charge the pre-tip total; the terminal adds the customer's tip on top.
+    amount = base + tax_cents + svc_cents
+
+    selected = [l.item.id for l in lines]
+    table = order.table.number if order.table else "—"
+    try:
+        checkout = square.create_checkout(
+            amount,
+            reference_id=f"O{order.id}S{seat.id}",
+            note=f"Table {table} · Seat {seat.seat_number} · {order.code}",
+        )
+    except square.SquareError as e:
+        raise HTTPException(502, f"Card terminal error: {e}")
+
+    items_q = ",".join(str(i) for i in selected)
+    url = (
+        f"/orders/{order.id}/seats/{seat.id}/terminal/{checkout['id']}"
+        f"?items={items_q}&partial={'1' if partial else ''}"
+    )
+    return RedirectResponse(url, status_code=303)
+
+
+@router.get("/orders/{order_id}/seats/{seat_id}/terminal/{checkout_id}")
+def terminal_wait(
+    order_id: int,
+    seat_id: int,
+    checkout_id: str,
+    request: Request,
+    items: str = "",
+    partial: str = "",
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("payments.take")),
+):
+    """The 'Waiting for the terminal…' page. It polls the status endpoint."""
+    order = _load(db, order_id)
+    seat = db.get(Seat, seat_id)
+    if seat is None or seat.order_id != order.id:
+        raise HTTPException(404, "Seat not found")
+    return render(request, "terminal_wait.html", {
+        "db": db, "staff": staff, "order": order, "seat": seat,
+        "checkout_id": checkout_id, "items": items, "partial": partial,
+        "title": f"Terminal · Seat {seat.seat_number}",
+    })
+
+
+@router.get("/orders/{order_id}/seats/{seat_id}/terminal/{checkout_id}/status")
+def terminal_status(
+    order_id: int,
+    seat_id: int,
+    checkout_id: str,
+    items: str = "",
+    partial: str = "",
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("payments.take")),
+):
+    """Polled by the waiting page. Reports the terminal's progress and, on
+    completion, records the payment with the real tip and card last-4.
+
+    Idempotent: once the seat's chosen items are settled, a repeat poll finds
+    nothing outstanding and simply reports done — no second payment.
+    """
+    order = _load(db, order_id)
+    seat = db.get(Seat, seat_id)
+    if seat is None or seat.order_id != order.id:
+        raise HTTPException(404, "Seat not found")
+
+    try:
+        checkout = square.get_checkout(checkout_id)
+    except square.SquareError as e:
+        return JSONResponse({"state": "error", "message": str(e)})
+
+    status = checkout.get("status")
+    if status == square.CANCELED:
+        return JSONResponse({"state": "canceled"})
+    if status != square.COMPLETED:
+        return JSONResponse({"state": "pending", "status": status})
+
+    # Completed on the machine — settle the chosen served items on our side.
+    wanted = {int(x) for x in items.split(",") if x.strip().isdigit()}
+    served_ids = {i.id for i in order.items if i.kitchen_status == KitchenStatus.SERVED}
+    payable = [
+        i.id for i in order.items
+        if i.id in served_ids and i.id in wanted
+        and i.line_total_cents - sum(a.amount_cents for a in i.allocations) > 0
+    ]
+    if not payable:
+        # Already recorded by an earlier poll — find that receipt to hand back.
+        pay = _latest_terminal_payment(order, seat)
+        rid = pay.id if pay else ""
+        return JSONResponse({"state": "done", "receipt_url":
+                             f"/orders/{order.id}/pay?receipt={rid}" if rid
+                             else f"/orders/{order.id}/pay"})
+
+    tip_cents, brand, last4 = square.tip_and_card(checkout)
+    svc_cents = pct(
+        sum(i.line_total_cents - sum(a.amount_cents for a in i.allocations)
+            for i in order.items if i.id in set(payable)),
+        settings_svc.service_charge_rate(db),
+    )
+    inst = _terminal_instrument(db)
+    try:
+        payment = pay_seat(
+            db, order, seat,
+            instrument_id=inst.id,
+            staff_id=staff.id,
+            tip_cents=tip_cents,
+            service_charge_cents=svc_cents,
+            item_ids=payable,
+            card_last4=last4,
+            card_brand=brand,
+            is_partial_close=bool(partial),
+        )
+    except PaymentError as e:
+        return JSONResponse({"state": "error", "message": str(e)})
+    db.commit()
+    return JSONResponse({
+        "state": "done",
+        "tip_cents": tip_cents,
+        "receipt_url": f"/orders/{order.id}/pay?receipt={payment.id}",
+    })
+
+
+def _latest_terminal_payment(order: Order, seat: Seat) -> Payment | None:
+    """The most recent live card-terminal payment on a seat (for the receipt
+    link when a completed checkout was already recorded)."""
+    cand = [
+        p for p in order.payments
+        if not p.voided and p.seat_id == seat.id
+        and p.instrument and p.instrument.name == "Card (terminal)"
+    ]
+    return max(cand, key=lambda p: p.id) if cand else None
+
+
+@router.post("/orders/{order_id}/seats/{seat_id}/terminal/{checkout_id}/cancel")
+def terminal_cancel(
+    order_id: int,
+    seat_id: int,
+    checkout_id: str,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("payments.take")),
+):
+    """Cancel a still-pending terminal checkout and return to the pay screen."""
+    try:
+        square.cancel_checkout(checkout_id)
+    except square.SquareError:
+        pass  # already terminal (completed/canceled) — nothing to undo
+    return RedirectResponse(f"/orders/{order_id}/pay", status_code=303)
 
 
 @router.post("/orders/{order_id}/pay-all")

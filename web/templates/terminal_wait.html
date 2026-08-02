@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>Card terminal</h1>
+    <p class="sub">
+      {% if order.table %}Table {{ order.table.number }}{% else %}{{ order.channel.name }}{% endif %}
+      · Seat {{ seat.seat_number }} · {{ order.code }}
+    </p>
+  </div>
+  <a class="btn" href="/orders/{{ order.id }}/pay">← Payment</a>
+</div>
+
+<div class="card" style="max-width:520px;margin:24px auto;text-align:center">
+  <div id="tw-pending">
+    <div class="tw-spinner" aria-hidden="true"></div>
+    <h2 style="margin:14px 0 4px">Waiting for the terminal…</h2>
+    <p class="sub">Hand the machine to the guest. They tap their card and choose
+      a tip on the terminal — the tip returns here automatically.</p>
+    <form method="post"
+          action="/orders/{{ order.id }}/seats/{{ seat.id }}/terminal/{{ checkout_id }}/cancel"
+          style="margin-top:18px">
+      <button class="btn warn">Cancel on terminal</button>
+    </form>
+  </div>
+
+  <div id="tw-done" style="display:none">
+    <div class="tw-check" aria-hidden="true">✓</div>
+    <h2 style="margin:14px 0 4px">Paid</h2>
+    <p class="sub" id="tw-done-msg">Recording the payment…</p>
+  </div>
+
+  <div id="tw-fail" style="display:none">
+    <div class="tw-x" aria-hidden="true">✕</div>
+    <h2 style="margin:14px 0 4px" id="tw-fail-title">Payment canceled</h2>
+    <p class="sub" id="tw-fail-msg"></p>
+    <a class="btn primary" href="/orders/{{ order.id }}/pay" style="margin-top:14px">← Back to payment</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<style>
+  .tw-spinner{width:52px;height:52px;margin:0 auto;border:5px solid var(--line);
+    border-top-color:var(--accent,#2563eb);border-radius:50%;animation:tw-spin 1s linear infinite}
+  @keyframes tw-spin{to{transform:rotate(360deg)}}
+  .tw-check{width:56px;height:56px;line-height:56px;margin:0 auto;border-radius:50%;
+    background:#16a34a;color:#fff;font-size:30px;font-weight:800}
+  .tw-x{width:56px;height:56px;line-height:56px;margin:0 auto;border-radius:50%;
+    background:#b91c1c;color:#fff;font-size:26px;font-weight:800}
+</style>
+<script>
+(function () {
+  var statusUrl = "/orders/{{ order.id }}/seats/{{ seat.id }}/terminal/{{ checkout_id }}/status"
+                + "?items={{ items }}&partial={{ partial }}";
+  var stopped = false;
+
+  function show(id) {
+    ["tw-pending", "tw-done", "tw-fail"].forEach(function (x) {
+      document.getElementById(x).style.display = (x === id) ? "" : "none";
+    });
+  }
+  function fail(title, msg) {
+    document.getElementById("tw-fail-title").textContent = title;
+    document.getElementById("tw-fail-msg").textContent = msg || "";
+    show("tw-fail");
+  }
+
+  function poll() {
+    if (stopped) return;
+    fetch(statusUrl, { headers: { "Accept": "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.state === "done") {
+          stopped = true;
+          var msg = document.getElementById("tw-done-msg");
+          if (d.tip_cents !== undefined) {
+            msg.textContent = "Tip added on the terminal: $" + (d.tip_cents / 100).toFixed(2);
+          } else {
+            msg.textContent = "Payment recorded.";
+          }
+          show("tw-done");
+          setTimeout(function () { window.location = d.receipt_url; }, 1200);
+        } else if (d.state === "canceled") {
+          stopped = true;
+          fail("Payment canceled", "The customer canceled on the terminal. Nothing was charged.");
+        } else if (d.state === "error") {
+          stopped = true;
+          fail("Terminal error", d.message || "Something went wrong. Try again.");
+        } else {
+          setTimeout(poll, 2000);   // still pending — keep waiting
+        }
+      })
+      .catch(function () { setTimeout(poll, 3000); });   // transient — retry
+  }
+  poll();
+})();
+</script>
+{% endblock %}

@@ -148,6 +148,19 @@
           <button class="btn good" style="width:100%">Confirm payment</button>
         </form>
       </details>
+
+      {% if terminal_enabled %}
+      {# Card-terminal path: charges this seat's whole served balance. The
+         customer taps + tips on the machine and the real tip comes back
+         automatically — no waiter entry. #}
+      <form method="post" action="/orders/{{ order.id }}/seats/{{ L.seat.id }}/pay-terminal"
+            style="margin-top:8px">
+        <button class="btn primary" style="width:100%">💳 Pay on card terminal</button>
+        <p class="sub" style="margin:6px 0 0;font-size:11px">
+          Customer taps &amp; tips on the machine — the tip comes back automatically.
+        </p>
+      </form>
+      {% endif %}
       {% else %}
       <p class="sub" style="margin-top:10px">Waiting on the kitchen — nothing served to pay on this seat yet.</p>
       {% endif %}{# closes: if payable #}

@@ -5,6 +5,13 @@ Run:  uvicorn app.main:app --reload
 from pathlib import Path
 from urllib.parse import urlparse
 
+from dotenv import load_dotenv
+
+# Local dev reads secrets from .env; on Render the real env vars are already set
+# and win (load_dotenv does not override existing values), so this is a no-op
+# there. Must run before anything reads os.environ.
+load_dotenv()
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
