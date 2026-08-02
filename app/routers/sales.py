@@ -1305,15 +1305,15 @@ def kitchen_status(
     order_id: int,
     status: str = Form(...),
     course: int = Form(0),
+    item_id: int = Form(0),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("kitchen.update")),
 ):
     """Advance items to Pending/Preparing/Ready (4.1.3).
 
-    course=0 moves the whole order; a specific course moves only that stage, so
-    the line can mark the starters up while the mains are still cooking. The
-    order/table state is then re-derived — Ready to Pay only once everything is
-    up (see _recompute_kitchen).
+    item_id marks a single line; else course marks one stage; else (course=0)
+    the whole order. The order/table state is then re-derived — Ready to Pay
+    only once everything is up (see _recompute_kitchen).
     """
     order = db.get(Order, order_id)
     if order is None:
@@ -1321,7 +1321,12 @@ def kitchen_status(
     if status not in (KitchenStatus.PENDING, KitchenStatus.PREPARING, KitchenStatus.READY):
         raise HTTPException(400, "Invalid kitchen status.")
 
-    targets = order.items if not course else [i for i in order.items if i.course == course]
+    if item_id:
+        targets = [i for i in order.items if i.id == item_id]
+    elif course:
+        targets = [i for i in order.items if i.course == course]
+    else:
+        targets = order.items
     for item in targets:
         # Already-served items are delivered — a course-level "Ready" must not
         # drag them back onto the line.

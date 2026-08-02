@@ -67,27 +67,43 @@
       {% endif %}
       <ul>
         {% for i in c.lines %}
-        <li{% if i.is_new %} class="k-new"{% endif %}>
-          {% if i.is_new %}<span class="k-new-tag">NEW</span> {% endif %}{{ i.quantity }}× {{ i.menu_item.name }}
-          {% for o in i.options %}<br><span class="sub">+ {{ o.label }}</span>{% endfor %}
-          {% for m in i.modifiers %}<br><span class="sub">+ {{ m.modifier.name }}</span>{% endfor %}
-          {% if i.allergens %}<br><span class="allergy-chit">⚠ ALLERGY: {{ i.allergens }}</span>{% endif %}
-          {% if i.notes %}<br><span class="note">✎ {{ i.notes }}</span>{% endif %}
+        <li class="k-line{% if i.is_new %} k-new{% endif %}{% if i.kitchen_status == 'ready' %} k-done{% endif %}">
+          <div class="k-line-body">
+            {% if i.is_new %}<span class="k-new-tag">NEW</span> {% endif %}{{ i.quantity }}× {{ i.menu_item.name }}
+            {% for o in i.options %}<br><span class="sub">+ {{ o.label }}</span>{% endfor %}
+            {% for m in i.modifiers %}<br><span class="sub">+ {{ m.modifier.name }}</span>{% endfor %}
+            {% if i.allergens %}<br><span class="allergy-chit">⚠ ALLERGY: {{ i.allergens }}</span>{% endif %}
+            {% if i.notes %}<br><span class="note">✎ {{ i.notes }}</span>{% endif %}
+          </div>
+          {% if can('kitchen.update') and i.kitchen_status == 'preparing' %}
+          <form method="post" action="/kitchen/{{ t.order.id }}/status" class="k-line-act">
+            <input type="hidden" name="status" value="ready">
+            <input type="hidden" name="item_id" value="{{ i.id }}">
+            <button class="btn good sm" title="Mark this item ready">✓</button>
+          </form>
+          {% elif i.kitchen_status == 'ready' %}
+          <span class="k-line-done" title="Ready">✓</span>
+          {% endif %}
         </li>
         {% endfor %}
       </ul>
-      {% if can('kitchen.update') and c.status == 'preparing' %}
+      {# Whole-course shortcut, only when there's more than one course. #}
+      {% if can('kitchen.update') and c.multi and c.status == 'preparing' %}
       <form method="post" action="/kitchen/{{ t.order.id }}/status">
         <input type="hidden" name="status" value="ready">
         <input type="hidden" name="course" value="{{ c.course }}">
-        <button class="btn good sm" style="width:100%">
-          Mark {{ c.label|lower if c.multi else 'ready' }}
-        </button>
+        <button class="btn sm" style="width:100%">Mark {{ c.label|lower }} ready</button>
       </form>
       {% endif %}
     </div>
     {% endfor %}
 
+    {% if can('kitchen.update') and t.courses|selectattr('status','equalto','preparing')|list %}
+    <form method="post" action="/kitchen/{{ t.order.id }}/status" style="margin-top:8px">
+      <input type="hidden" name="status" value="ready">
+      <button class="btn good" style="width:100%">✓ Mark all ready</button>
+    </form>
+    {% endif %}
     <div class="chit-total">Total items: {{ t.total_items }}</div>
     {% if t.order.kitchen_status == 'ready' %}
     <span class="pill ok" style="margin-top:8px;display:inline-block">ready — waiter notified</span>
