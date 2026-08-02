@@ -1254,8 +1254,11 @@ def kitchen_display(
             "is_delivery": is_delivery,
             # Field 2: who fired the order. Delivery tickets have no waiter.
             "server": o.waiter.name if o.waiter else None,
-            # Field 5: the line count the expo checks the plated tray against.
-            "total_items": sum(i.quantity for i in o.items),
+            # Field 5: the line count the expo checks the plated tray against —
+            # only what's still on the line (served items have left the kitchen).
+            "total_items": sum(
+                i.quantity for i in o.items if i.kitchen_status != KitchenStatus.SERVED
+            ),
             # Items grouped by course, each with an aggregate status so the line
             # can mark a whole course up at once (4.1.3 coursing).
             "courses": _ticket_courses(o),
