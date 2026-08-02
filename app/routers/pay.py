@@ -307,13 +307,18 @@ def take_seat_payment(
     if ledger is None:
         raise HTTPException(404, "Seat has no ledger")
 
-    selected = [i for i in item_ids if i] or None
-    if selected:
-        base = sum(
-            l.outstanding_cents for l in ledger.lines if l.item.id in set(selected)
-        )
+    # Only served items can be paid — food not yet delivered stays on the order.
+    served_ids = {i.id for i in order.items if i.kitchen_status == KitchenStatus.SERVED}
+    if item_ids:
+        selected = [i for i in item_ids if i in served_ids]
     else:
-        base = ledger.outstanding_cents
+        selected = [
+            l.item.id for l in ledger.lines
+            if l.item.id in served_ids and l.outstanding_cents > 0
+        ]
+    if not selected:
+        raise HTTPException(400, "No served items to pay on this seat yet.")
+    base = sum(l.outstanding_cents for l in ledger.lines if l.item.id in set(selected))
 
     # 4.2.6 — tip as a percentage, auto-gratuity, or a custom amount,
     # proportional to the items actually being paid (4.2.5).
@@ -367,6 +372,19 @@ def take_full_payment(
     """4.2.2 — single-instrument settlement of the whole order."""
     order = _load(db, order_id)
     _require_served(order)
+    # Paying the whole order at once only makes sense when everything's been
+    # served — otherwise you'd be charging for undelivered food. Un-served items
+    # must be settled seat by seat (once they're up) instead.
+    if any(
+        i.kitchen_status != KitchenStatus.SERVED
+        and i.line_total_cents - sum(a.amount_cents for a in i.allocations) > 0
+        for i in order.items
+    ):
+        raise HTTPException(
+            400,
+            "Some items aren't served yet — settle those seats once they're up, "
+            "or pay this seat by seat.",
+        )
     outstanding = sum(
         i.line_total_cents - sum(a.amount_cents for a in i.allocations)
         for i in order.items
