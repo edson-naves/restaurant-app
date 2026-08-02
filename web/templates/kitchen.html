@@ -36,7 +36,13 @@
   {% for t in tickets %}
   <div class="ticket {{ t.urgency }}">
     <div class="between">
+      {# Front-of-house (owner/manager/waiter) can jump to the order; the kitchen
+         line just reads the ticket. #}
+      {% if can('orders.manage') %}
+      <a class="k-order-link" href="/orders/{{ t.order.id }}"><strong>{{ t.where }}</strong> <span class="k-open">↗</span></a>
+      {% else %}
       <strong>{{ t.where }}</strong>
+      {% endif %}
       <span class="elapsed">{{ t.elapsed|duration }}</span>
     </div>
     {# Header modelled on the kitchen chit: order code, server, time in. #}
