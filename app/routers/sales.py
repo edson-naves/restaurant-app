@@ -923,8 +923,9 @@ def edit_item(
             item.modifiers.append(
                 OrderItemModifier(modifier_id=mod.id, price_delta_cents=mod.price_delta_cents)
             )
+    seat = item.seat.seat_number if item.seat else 0
     db.commit()
-    return RedirectResponse(f"/orders/{order_id}", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}?seat={seat}", status_code=303)
 
 
 @router.post("/orders/{order_id}/items/{item_id}/remove")
@@ -939,9 +940,10 @@ def remove_item(
         raise HTTPException(404, "Item not found")
     if item.allocations:
         raise HTTPException(400, "This item has already been paid for.")
+    seat = item.seat.seat_number if item.seat else 0
     db.delete(item)
     db.commit()
-    return RedirectResponse(f"/orders/{order_id}", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}?seat={seat}", status_code=303)
 
 
 # --------------------------------------------------------------------------
@@ -1184,11 +1186,13 @@ def fire_item(
         raise HTTPException(400, "That item has already been fired.")
 
     now = datetime.now()
+    seat = item.seat.seat_number if item.seat else 0
     item.kitchen_status = KitchenStatus.PREPARING
     order.sent_to_kitchen_at = order.sent_to_kitchen_at or now
     _recompute_kitchen(order, now)
     db.commit()
-    return RedirectResponse(f"/orders/{order_id}", status_code=303)
+    # Stay on the seat you were working — don't collapse it.
+    return RedirectResponse(f"/orders/{order_id}?seat={seat}", status_code=303)
 
 
 # --------------------------------------------------------------------------

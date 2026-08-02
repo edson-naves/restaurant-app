@@ -317,7 +317,9 @@
            collapse to their header. Switching seats reloads with the new one
            active; you can also tap a header to peek. #}
         <details class="ordgroup" {% if g.num == active_seat %}open{% endif %}>
-          <summary class="ordgroup-head">
+          {# Clicking a seat header selects that seat (new items go to it) and
+             opens it — no need to also pick it in the seats bar. #}
+          <summary class="ordgroup-head"{% if g.num is not none %} onclick="event.preventDefault();window.location='/orders/{{ order.id }}?seat={{ g.num }}{{ seat_qs }}';"{% endif %}>
             <span class="seat-sq" style="background:{{ g.num|seat_color }}">{% if g.num %}{{ g.num }}{% elif g.num == 0 %}T{% else %}·{% endif %}</span>
             <strong>{{ g.label }}</strong>
             <span class="sub" style="margin:0">{{ g.count }} item{{ '' if g.count == 1 else 's' }}</span>
