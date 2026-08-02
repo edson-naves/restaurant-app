@@ -78,7 +78,7 @@
             <label>Items to pay — untick to leave on the open order</label>
             {% for line in payable %}
             <label class="tick">
-              <input type="checkbox" name="item_ids" value="{{ line.item.id }}" checked>
+              <input type="checkbox" name="item_ids" value="{{ line.item.id }}" data-cents="{{ line.outstanding_cents }}" onchange="payTotal(this.form)" checked>
               {{ line.item.menu_item.name }} — ${{ line.outstanding_cents|money }}
             </label>
             {% endfor %}
@@ -88,6 +88,10 @@
               {{ line.item.menu_item.name }} — <span class="sub">not served yet</span>
             </label>
             {% endfor %}
+            <div class="pay-sel" style="margin-top:8px">
+              Paying for ticked items: <b class="pay-sel-amt">$0.00</b>
+              <span class="sub">+ tax at payment</span>
+            </div>
           </div>
 
           <div class="field">
@@ -311,4 +315,23 @@
   {% include "_receipt_body.html" %}
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Live "paying for the ticked items" total per seat form — reflects which
+  // lines are checked (pre-tax; tax is added server-side at payment).
+  function payTotal(form) {
+    var cents = 0;
+    form.querySelectorAll('input[name="item_ids"]:checked').forEach(function (cb) {
+      cents += parseInt(cb.dataset.cents || '0', 10);
+    });
+    var el = form.querySelector('.pay-sel-amt');
+    if (el) el.textContent = '$' + (cents / 100).toFixed(2);
+  }
+  document.querySelectorAll('.pay-sel-amt').forEach(function (el) {
+    var f = el.closest('form');
+    if (f) payTotal(f);
+  });
+</script>
 {% endblock %}
