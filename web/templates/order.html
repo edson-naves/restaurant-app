@@ -106,8 +106,9 @@
     </details>
     {% endif %}
 
-    {# Payment only after the order is served (or already part-paid). #}
-    {% if can('payments.take') and order.status in ('served','partially_paid') %}
+    {# Payment appears once anything's been served — a guest at a served seat can
+       pay while the rest of the table's food is still cooking. #}
+    {% if can('payments.take') and (order.status in ('served','partially_paid') or order.items|selectattr('kitchen_status','equalto','served')|list) %}
     <a class="btn good" href="/orders/{{ order.id }}/pay">Payment →</a>
     {% endif %}
   </div>

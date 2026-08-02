@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import can, current_staff, render, require
 from app.models.oltp import (
+    KitchenStatus,
     Order,
     OrderItem,
     OrderStatus,
@@ -49,13 +50,22 @@ def _load(db: Session, order_id: int) -> Order:
     return order
 
 
+def order_has_served(order: Order) -> bool:
+    """True once anything on the order has been served — i.e. there's delivered
+    food to pay for. Lets a guest at a served seat settle up while the rest of
+    the table's food is still cooking."""
+    return (
+        order.status in (OrderStatus.SERVED, OrderStatus.PARTIALLY_PAID)
+        or any(i.kitchen_status == KitchenStatus.SERVED for i in order.items)
+    )
+
+
 def _require_served(order: Order) -> None:
-    """Payment can't be taken until the order has been served — the required
-    step in the flow (Ready to serve -> Served -> Ready to pay -> Paid).
-    A partially-paid order has already cleared this gate, so it's allowed."""
-    if order.status not in (OrderStatus.SERVED, OrderStatus.PARTIALLY_PAID):
+    """Payment needs something served first — you can't pay for food that hasn't
+    been delivered. A served seat can be settled even while the rest cooks."""
+    if not order_has_served(order):
         raise HTTPException(
-            400, "Mark the order as Served before taking payment."
+            400, "Serve an item before taking payment."
         )
 
 
