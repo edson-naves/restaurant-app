@@ -62,7 +62,7 @@
 :root[data-theme="dark"] .pill.os-preparing,
 :root[data-theme="dark"] .pill.paid_partial,
 :root[data-theme="dark"] .ticket.warn .elapsed { color: #fbbf24; }
-:root[data-theme="dark"] .pill.os-ready { color: #93c5fd; }
+:root[data-theme="dark"] .pill.os-ready { background: #3b82f6; color: #fff; }
 :root[data-theme="dark"] .pill.ready_to_pay,
 :root[data-theme="dark"] .pill.late,
 :root[data-theme="dark"] .pill.allergy,
@@ -362,9 +362,11 @@ label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 4px; f
 .pill.open { background: var(--panel-2); color: var(--muted); }
 .pill.ok { background: rgba(16,185,129,.13); color: #047857; }
 .pill.warn { background: rgba(245,158,11,.15); color: #b45309; }
-/* Order lifecycle stage badges (Preparing -> Ready to serve -> Served). */
+/* Order lifecycle stage badges (Preparing -> Ready to serve -> Served). Each a
+   clearly distinct hue so they're easy to pick out on the floor: amber, a bold
+   blue, then green. */
 .pill.os-preparing { background: rgba(245,158,11,.15); color: #b45309; }
-.pill.os-ready { background: rgba(37,99,235,.13); color: #1d4ed8; }
+.pill.os-ready { background: #2563eb; color: #fff; font-weight: 800; }
 .pill.os-served { background: rgba(16,185,129,.14); color: #047857; }
 /* Preparing / Ready-to-serve badges jump to the kitchen. */
 .pill.os-jump { cursor: pointer; }
