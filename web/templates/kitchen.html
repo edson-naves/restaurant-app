@@ -81,6 +81,13 @@
             <input type="hidden" name="item_id" value="{{ i.id }}">
             <button type="submit" class="k-check" title="Mark this item ready" aria-label="Mark ready"></button>
           </form>
+          {% elif can('kitchen.update') and i.kitchen_status == 'ready' %}
+          {# Click the tick to undo — in case a line was marked ready by mistake. #}
+          <form method="post" action="/kitchen/{{ t.order.id }}/status" class="k-line-act">
+            <input type="hidden" name="status" value="preparing">
+            <input type="hidden" name="item_id" value="{{ i.id }}">
+            <button type="submit" class="k-uncheck" title="Not ready — undo" aria-label="Undo ready">✓</button>
+          </form>
           {% elif i.kitchen_status == 'ready' %}
           <span class="k-line-done" title="Ready">✓</span>
           {% endif %}

@@ -461,6 +461,13 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 /* A readied line: the green tick is the only marker (no strikethrough). */
 .k-line-done { flex: none; color: var(--ok); font-weight: 800; font-size: 16px; padding: 0 3px; }
+/* Same tick, but clickable to undo a mistaken "ready" (back to preparing). */
+.k-uncheck {
+  flex: none; margin-top: 1px; padding: 0 3px; cursor: pointer;
+  background: transparent; border: none;
+  color: var(--ok); font-weight: 800; font-size: 16px; line-height: 1;
+}
+.k-uncheck:hover { opacity: .5; }
 /* Ticket header links through to the order for front-of-house staff. */
 .k-order-link { color: inherit; text-decoration: none; }
 .k-order-link:hover { text-decoration: underline; }

@@ -1116,10 +1116,11 @@ def _recompute_kitchen(order: Order, now: datetime) -> None:
             order.delivery.status = DeliveryStatus.READY
     elif KitchenStatus.PREPARING in statuses or KitchenStatus.READY in statuses:
         order.kitchen_status = KitchenStatus.PREPARING
-        # SERVED here too: firing a new item onto an already-served order pulls
-        # it back to Preparing so the kitchen sees the addition and it must be
-        # re-served before payment.
-        if order.status in (OrderStatus.OPEN, OrderStatus.PREPARING, OrderStatus.SERVED):
+        # READY (a line was un-marked) and SERVED (a new item fired onto a served
+        # order) both fall back to Preparing so the kitchen sees the work and the
+        # order must be (re-)served before payment.
+        if order.status in (OrderStatus.OPEN, OrderStatus.PREPARING,
+                            OrderStatus.READY, OrderStatus.SERVED):
             order.status = OrderStatus.PREPARING
             # New food means the table isn't ready to pay any more — clear the
             # stale flag (the waiter re-flags it after re-serving). This is the
