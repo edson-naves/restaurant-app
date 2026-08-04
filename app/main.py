@@ -25,7 +25,14 @@ from app.routers import admin, analytics, auth, pay, reservations, sales
 app = FastAPI(title="Restaurant Management System", version="1.0")
 
 Base.metadata.create_all(engine)
-migrate.run(engine)          # create_all adds tables, never columns — see migrate.py
+# create_all adds tables, never columns — see migrate.py. Log what changed so a
+# schema migration on deploy (esp. on Postgres/Render) is visible and verifiable
+# in the service logs rather than silent.
+_migrated = migrate.run(engine)
+if _migrated:
+    print(f"[migrate] applied: {', '.join(_migrated)}", flush=True)
+else:
+    print("[migrate] schema up to date", flush=True)
 
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 app.include_router(auth.router)
