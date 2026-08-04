@@ -98,25 +98,48 @@
   });
 
   // ---- Resize by dragging a block's bottom edge --------------------------
+  // The block is natively draggable (for moving), which would otherwise hijack
+  // an edge drag — so we turn draggable off for the duration of the resize and
+  // preview the new height live, then post the new end time on release.
   document.querySelectorAll(".cblock .cb-resize").forEach(function (handle) {
     handle.addEventListener("pointerdown", function (e) {
       e.preventDefault();
-      e.stopPropagation();                 // don't open the block or start a drag
+      e.stopPropagation();
       var b = handle.closest(".cblock");
       var col = b.closest(".cal-col");
       var startMin = parseInt(b.dataset.startMin, 10);
+      var endMin = startMin + parseInt(b.dataset.duration || "60", 10);
 
-      function onUp(ev) {
-        document.removeEventListener("pointerup", onUp);
-        var end = minuteFromY(col, ev.clientY);
-        if (end <= startMin) end = startMin + SNAP;
+      b.draggable = false;
+      b.classList.add("resizing");
+      handle.setPointerCapture(e.pointerId);
+
+      function onMove(ev) {
+        endMin = minuteFromY(col, ev.clientY);
+        if (endMin < startMin + SNAP) endMin = startMin + SNAP;
+        b.style.height = ((endMin - startMin) / 60 * PPH) + "px";
+      }
+      function onUp() {
+        handle.removeEventListener("pointermove", onMove);
+        handle.removeEventListener("pointerup", onUp);
+        b.draggable = true;
         post("/schedule/shifts/" + b.dataset.shiftId + "/edit", {
           staff_id: b.dataset.staffId || "0", position_id: b.dataset.positionId || "0",
-          date: col.dataset.date, start: hhmm(startMin), end: hhmm(end),
+          date: col.dataset.date, start: hhmm(startMin), end: hhmm(endMin),
           notes: b.dataset.notes || "",
         });
       }
-      document.addEventListener("pointerup", onUp);
+      handle.addEventListener("pointermove", onMove);
+      handle.addEventListener("pointerup", onUp);
     });
   });
+
+  // Delete a shift (the ✕ on the block corner).
+  window.deleteShift = function (e, id) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (window.confirm("Delete this shift?")) {
+      post("/schedule/shifts/" + id + "/delete", {});
+    }
+  };
 })();

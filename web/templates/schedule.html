@@ -102,6 +102,7 @@
               <span class="cb-pos">{{ b.shift.position.name if b.shift.position else b.shift.role }}</span>
               {% if b.state == 'in' %}<span class="sbadge in">● on</span>{% elif b.state == 'done' %}<span class="sbadge done">✓</span>{% endif %}
             </summary>
+            {% if can('schedule.manage') %}<button type="button" class="cb-del" title="Delete shift" onclick="deleteShift(event, {{ b.shift.id }})">✕</button>{% endif %}
             <div class="cb-menu">
               {% if b.shift.staff_id == staff.id %}
               {% if b.state == 'scheduled' %}<form method="post" action="/schedule/shifts/{{ b.shift.id }}/clock-in"><button class="btn xs good">Clock in</button></form>
