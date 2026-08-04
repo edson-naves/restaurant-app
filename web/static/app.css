@@ -1007,38 +1007,73 @@ td.pending { color: var(--accent); font-weight: 700; }
   .login-card { padding: 24px 18px 20px; }
 }
 
-/* ---- Staff schedule ------------------------------------------------------ */
-.btn.xs {
-  padding: 2px 8px; font-size: 11px; min-height: 0; line-height: 1.6;
+/* ---- Staff schedule (week calendar) -------------------------------------- */
+.btn.xs { padding: 2px 8px; font-size: 11px; min-height: 0; line-height: 1.6; }
+.sbadge { font-size: 10px; font-weight: 800; padding: 0 5px; border-radius: 6px; white-space: nowrap; }
+.sbadge.in { background: #16a34a; color: #fff; }
+.sbadge.done { background: color-mix(in srgb, var(--muted) 30%, transparent); }
+
+.sched-wrap { display: flex; gap: 16px; align-items: flex-start; }
+.team-panel { width: 230px; flex: 0 0 230px; }
+.team-search { width: 100%; margin-bottom: 8px; }
+.team-list { display: flex; flex-direction: column; gap: 6px; max-height: 72vh; overflow-y: auto; }
+.team-row { display: flex; gap: 8px; align-items: center; }
+.avatar {
+  width: 30px; height: 30px; border-radius: 50%; flex: 0 0 30px;
+  display: grid; place-items: center; font-size: 11px; font-weight: 800;
+  color: #fff; background: var(--accent);
 }
-.sched-add {
-  display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 10px;
+.team-meta b { font-size: 13px; }
+
+.cal { flex: 1; min-width: 0; }
+.cal-add { margin-bottom: 10px; }
+.cal-scroll { overflow-x: auto; }
+.cal-head, .cal-body {
+  display: grid; grid-template-columns: 52px repeat(7, minmax(120px, 1fr)); min-width: 760px;
 }
+.cal-dayhead { text-align: center; font-size: 12px; padding: 6px 2px; border-bottom: 1px solid var(--line); }
+.cal-dayhead.is-today { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 8px 8px 0 0; }
+.cal-body { position: relative; }
+.cal-gutter { position: relative; }
+.cal-hour { position: absolute; right: 6px; font-size: 10px; color: var(--muted); transform: translateY(-6px); white-space: nowrap; }
+.cal-col {
+  position: relative; border-left: 1px solid var(--line);
+  background: repeating-linear-gradient(to bottom, transparent 0, transparent 43px, var(--line) 43px, var(--line) 44px);
+}
+.cal-col.is-today { background-color: color-mix(in srgb, var(--accent) 6%, transparent); }
+
+.cblock {
+  position: absolute; overflow: hidden; border-radius: 7px; font-size: 11px; line-height: 1.25;
+  background: color-mix(in srgb, var(--pc) 22%, var(--panel));
+  border: 1px solid var(--pc); border-left: 3px solid var(--pc);
+}
+.cblock[open] { overflow: visible; z-index: 20; }
+.cblock.open-shift {
+  background: color-mix(in srgb, #ef4444 8%, var(--panel));
+  border: 1px dashed #ef4444; border-left: 3px dashed #ef4444;
+}
+.cb-face { list-style: none; cursor: pointer; padding: 3px 5px; height: 100%; }
+.cb-face::-webkit-details-marker { display: none; }
+.cb-time, .cb-name { font-weight: 700; display: block; }
+.cb-pos { color: var(--muted); display: block; }
+.cb-menu {
+  position: absolute; top: 100%; left: 0; min-width: 190px; z-index: 30;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.shift-edit { display: flex; flex-direction: column; gap: 5px; }
+.shift-edit input, .shift-edit select { min-height: 26px; font-size: 12px; padding: 2px 6px; }
+
+.cal-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 12px; color: var(--muted); }
+.cal-legend .leg { display: inline-flex; align-items: center; gap: 5px; }
+.cal-legend .dot { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+.cal-legend .dot.open { border: 1px dashed #ef4444; background: transparent; }
+
+.sched-add { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 10px; }
 .sched-add .field { margin: 0; }
 
-table.sched { width: 100%; border-collapse: collapse; min-width: 720px; }
-table.sched th, table.sched td {
-  border: 1px solid var(--line); padding: 6px; vertical-align: top; text-align: left;
+@media (max-width: 820px) {
+  .sched-wrap { flex-direction: column; }
+  .team-panel { width: 100%; flex: none; }
 }
-table.sched thead th { text-align: center; font-size: 12px; white-space: nowrap; }
-table.sched .c-staff { min-width: 120px; font-weight: 700; }
-table.sched .c-hours { min-width: 68px; text-align: right; white-space: nowrap; }
-table.sched td { min-width: 96px; }
-table.sched .is-today { background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.cell-empty { color: var(--muted); opacity: .4; }
-
-.shift {
-  border-radius: 8px; padding: 5px 7px; margin-bottom: 5px; font-size: 12px;
-  border: 1px solid var(--line);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-}
-.shift:last-child { margin-bottom: 0; }
-.shift.s-in   { background: color-mix(in srgb, #16a34a 22%, transparent); border-color: #16a34a; }
-.shift.s-done { background: color-mix(in srgb, var(--muted) 16%, transparent); }
-.shift-time { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.sbadge { font-size: 10px; font-weight: 800; padding: 0 5px; border-radius: 6px; white-space: nowrap; }
-.sbadge.in   { background: #16a34a; color: #fff; }
-.sbadge.done { background: color-mix(in srgb, var(--muted) 30%, transparent); }
-.shift-act { display: flex; gap: 5px; align-items: center; margin-top: 5px; flex-wrap: wrap; }
-.shift-edit { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
-.shift-edit input, .shift-edit select { min-height: 28px; font-size: 12px; padding: 2px 6px; }

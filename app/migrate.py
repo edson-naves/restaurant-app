@@ -56,6 +56,9 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("payment", "card_surcharge_cents", "INTEGER NOT NULL DEFAULT 0"),
     ("fact_payment", "card_surcharge_cents", "INTEGER NOT NULL DEFAULT 0"),
     ("fact_order_header", "card_surcharge_cents", "INTEGER NOT NULL DEFAULT 0"),
+    # Schedule positions. The shift table was created without this column in an
+    # earlier deploy; add it (the position table itself is created by create_all).
+    ("shift", "position_id", "INTEGER REFERENCES position(id)"),
 )
 
 DEFAULT_FLOOR = "1st floor"

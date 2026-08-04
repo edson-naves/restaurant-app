@@ -1,113 +1,142 @@
 {% extends "base.html" %}
 {% block body %}
+{% macro initials(name) %}{% set p = name.split() %}{{ (p[0][:1] ~ (p[1][:1] if p|length > 1 else ''))|upper }}{% endmacro %}
+{% macro hourlabel(h) %}{% set d = h % 24 %}{% set h12 = d % 12 %}{{ 12 if h12 == 0 else h12 }} {{ 'AM' if d < 12 else 'PM' }}{% endmacro %}
+
 <div class="between">
   <div>
     <h1>Schedule</h1>
     <p class="sub">
-      Week of {{ week_start.strftime('%b') }} {{ week_start.day }} – {{ grid.days[6].strftime('%b') }} {{ grid.days[6].day }}, {{ grid.days[6].year }}
+      Week of {{ week_start.strftime('%b') }} {{ week_start.day }} – {{ cal.days[6].date.strftime('%b') }} {{ cal.days[6].date.day }}, {{ cal.days[6].date.year }}
       {% if not can('schedule.manage') %} · your shifts only{% endif %}
     </p>
   </div>
   <div style="display:flex;gap:8px">
-    <a class="btn" href="/schedule?week={{ prev_week }}">‹ Prev</a>
-    <a class="btn" href="/schedule?week={{ this_week }}">This week</a>
-    <a class="btn" href="/schedule?week={{ next_week }}">Next ›</a>
+    <a class="btn" href="/schedule?week={{ this_week }}">Today</a>
+    <a class="btn" href="/schedule?week={{ prev_week }}">‹</a>
+    <a class="btn" href="/schedule?week={{ next_week }}">›</a>
   </div>
 </div>
 
-{% if can('schedule.manage') %}
-<div class="card">
-  <strong>Add a shift</strong>
-  <form method="post" action="/schedule/shifts" class="sched-add">
-    <div class="field"><label>Staff</label>
-      <select name="staff_id" required>
-        {% for m in all_staff %}<option value="{{ m.id }}">{{ m.name }} ({{ m.role|replace('_',' ') }})</option>{% endfor %}
-      </select>
+<div class="sched-wrap">
+  <!-- Team panel -->
+  <aside class="team-panel card">
+    <h3 style="margin:0 0 8px">Team</h3>
+    <input type="search" class="team-search" placeholder="Search team…" oninput="filterTeam(this.value)">
+    <div class="team-list">
+      {% for m in cal.team %}
+      <div class="team-row" data-name="{{ m.staff.name|lower }}">
+        <span class="avatar">{{ initials(m.staff.name) }}</span>
+        <div class="team-meta">
+          <b>{{ m.staff.name }}</b>
+          <div class="sub">{{ m.staff.role|replace('_',' ') }} · {{ '%.0f'|format(m.weekly_hours) }}h</div>
+        </div>
+      </div>
+      {% endfor %}
+      {% if not cal.team %}<p class="sub">No staff.</p>{% endif %}
     </div>
-    <div class="field"><label>Date</label><input type="date" name="date" value="{{ today.isoformat() }}" required></div>
-    <div class="field"><label>Start</label><input type="time" name="start" value="16:00" required></div>
-    <div class="field"><label>End</label><input type="time" name="end" value="22:00" required></div>
-    <div class="field"><label>Role</label>
-      <select name="role">
-        <option value="">(their role)</option>
-        {% for r in roles %}<option value="{{ r }}">{{ r|replace('_',' ')|title }}</option>{% endfor %}
-      </select>
-    </div>
-    <div class="field" style="flex:1;min-width:130px"><label>Notes</label><input type="text" name="notes" placeholder="optional"></div>
-    <button class="btn good">Add shift</button>
-  </form>
-</div>
-{% endif %}
+  </aside>
 
-<div class="card" style="overflow-x:auto">
-  <table class="sched">
-    <thead>
-      <tr>
-        <th class="c-staff">Staff</th>
-        {% for d in grid.days %}
-        <th class="{{ 'is-today' if d == today else '' }}">{{ d.strftime('%a') }}<div class="sub">{{ d.strftime('%b') }} {{ d.day }}</div></th>
+  <!-- Calendar -->
+  <div class="cal card">
+    {% if can('schedule.manage') %}
+    <details class="cal-add">
+      <summary class="btn primary sm">+ Add shift</summary>
+      <form method="post" action="/schedule/shifts" class="sched-add">
+        <div class="field"><label>Staff</label>
+          <select name="staff_id">
+            <option value="0">— Open shift —</option>
+            {% for m in all_staff %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field"><label>Position</label>
+          <select name="position_id">
+            <option value="0">—</option>
+            {% for p in positions %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field"><label>Date</label><input type="date" name="date" value="{{ today.isoformat() }}" required></div>
+        <div class="field"><label>Start</label><input type="time" name="start" value="16:00" required></div>
+        <div class="field"><label>End</label><input type="time" name="end" value="22:00" required></div>
+        <div class="field" style="flex:1;min-width:120px"><label>Notes</label><input type="text" name="notes" placeholder="optional"></div>
+        <button class="btn good">Add</button>
+      </form>
+    </details>
+    {% endif %}
+
+    <div class="cal-scroll">
+      <div class="cal-head">
+        <div class="cal-gutter"></div>
+        {% for day in cal.days %}
+        <div class="cal-dayhead {{ 'is-today' if day.date == today else '' }}">
+          <b>{{ day.date.strftime('%a') }}</b> {{ day.date.strftime('%b') }} {{ day.date.day }}
+          <div class="sub">{{ '%.0f'|format(day.labor_hours) }}h</div>
+        </div>
         {% endfor %}
-        <th class="c-hours">Hours</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in grid.rows %}
-      <tr>
-        <th class="c-staff">{{ row.staff.name }}<div class="sub">{{ row.staff.role|replace('_',' ') }}</div></th>
-        {% for cell in row.cells %}
-        {% set d = grid.days[loop.index0] %}
-        <td class="{{ 'is-today' if d == today else '' }}">
-          {% for cs in cell %}
-          <div class="shift s-{{ cs.state }}">
-            <div class="shift-time">
-              <b>{{ cs.shift.starts_at.strftime('%H:%M') }}–{{ cs.shift.ends_at.strftime('%H:%M') }}</b>
-              {% if cs.state == 'in' %}<span class="sbadge in">● on</span>
-              {% elif cs.state == 'done' %}<span class="sbadge done">✓ {{ '%.1f'|format(cs.worked_h) }}h</span>{% endif %}
-            </div>
-            <div class="sub">{{ cs.shift.role|replace('_',' ') }}{% if cs.shift.notes %} · {{ cs.shift.notes }}{% endif %}</div>
+      </div>
 
-            {% if cs.shift.staff_id == staff.id %}
-            <div class="shift-act">
-              {% if cs.state == 'scheduled' %}
-              <form method="post" action="/schedule/shifts/{{ cs.shift.id }}/clock-in"><button class="btn xs good">Clock in</button></form>
-              {% elif cs.state == 'in' %}
-              <form method="post" action="/schedule/shifts/{{ cs.shift.id }}/clock-out"><button class="btn xs warn">Clock out</button></form>
+      <div class="cal-body" style="--rows: {{ cal.end_hour - cal.start_hour }}">
+        <div class="cal-gutter" style="height:calc(var(--rows) * 44px)">
+          {% for h in cal.hours %}
+          <div class="cal-hour" style="top:{{ loop.index0 * 44 }}px">{{ hourlabel(h) }}</div>
+          {% endfor %}
+        </div>
+        {% for day in cal.days %}
+        <div class="cal-col {{ 'is-today' if day.date == today else '' }}" style="height:calc(var(--rows) * 44px)">
+          {% for b in day.blocks %}
+          {% set pcolor = b.shift.position.color if b.shift.position else '#64748b' %}
+          <details class="cblock {{ 'open-shift' if b.is_open else '' }}"
+                   style="top:{{ b.top_pct }}%;height:{{ b.height_pct }}%;left:calc({{ b.lane * 100 / b.lanes }}% + 1px);width:calc({{ 100 / b.lanes }}% - 2px);--pc:{{ pcolor }}">
+            <summary class="cb-face">
+              <span class="cb-time">{{ b.shift.starts_at.strftime('%H:%M') }}–{{ b.shift.ends_at.strftime('%H:%M') }}</span>
+              <span class="cb-name">{% if b.is_open %}OPEN SHIFT{% else %}{{ b.shift.staff.name }}{% endif %}</span>
+              <span class="cb-pos">{{ b.shift.position.name if b.shift.position else b.shift.role }}</span>
+              {% if b.state == 'in' %}<span class="sbadge in">● on</span>{% elif b.state == 'done' %}<span class="sbadge done">✓</span>{% endif %}
+            </summary>
+            <div class="cb-menu">
+              {% if b.shift.staff_id == staff.id %}
+              {% if b.state == 'scheduled' %}<form method="post" action="/schedule/shifts/{{ b.shift.id }}/clock-in"><button class="btn xs good">Clock in</button></form>
+              {% elif b.state == 'in' %}<form method="post" action="/schedule/shifts/{{ b.shift.id }}/clock-out"><button class="btn xs warn">Clock out</button></form>{% endif %}
+              {% endif %}
+              {% if can('schedule.manage') %}
+              <form method="post" action="/schedule/shifts/{{ b.shift.id }}/edit" class="shift-edit">
+                <select name="staff_id">
+                  <option value="0" {{ 'selected' if not b.shift.staff_id else '' }}>— Open —</option>
+                  {% for m in all_staff %}<option value="{{ m.id }}" {{ 'selected' if m.id == b.shift.staff_id else '' }}>{{ m.name }}</option>{% endfor %}
+                </select>
+                <select name="position_id">
+                  <option value="0">—</option>
+                  {% for p in positions %}<option value="{{ p.id }}" {{ 'selected' if p.id == b.shift.position_id else '' }}>{{ p.name }}</option>{% endfor %}
+                </select>
+                <input type="date" name="date" value="{{ b.shift.starts_at.strftime('%Y-%m-%d') }}" required>
+                <input type="time" name="start" value="{{ b.shift.starts_at.strftime('%H:%M') }}" required>
+                <input type="time" name="end" value="{{ b.shift.ends_at.strftime('%H:%M') }}" required>
+                <input type="text" name="notes" value="{{ b.shift.notes }}" placeholder="notes">
+                <button class="btn xs good">Save</button>
+              </form>
+              <form method="post" action="/schedule/shifts/{{ b.shift.id }}/delete" onsubmit="return confirm('Delete this shift?')"><button class="btn xs danger">Delete</button></form>
               {% endif %}
             </div>
-            {% endif %}
-
-            {% if can('schedule.manage') %}
-            <div class="shift-act">
-              <details class="edit-menu">
-                <summary class="btn xs">Edit</summary>
-                <form method="post" action="/schedule/shifts/{{ cs.shift.id }}/edit" class="shift-edit">
-                  <input type="date" name="date" value="{{ cs.shift.starts_at.strftime('%Y-%m-%d') }}" required>
-                  <input type="time" name="start" value="{{ cs.shift.starts_at.strftime('%H:%M') }}" required>
-                  <input type="time" name="end" value="{{ cs.shift.ends_at.strftime('%H:%M') }}" required>
-                  <select name="role">
-                    {% for r in roles %}<option value="{{ r }}" {{ 'selected' if r == cs.shift.role else '' }}>{{ r|replace('_',' ')|title }}</option>{% endfor %}
-                  </select>
-                  <input type="text" name="notes" value="{{ cs.shift.notes }}" placeholder="notes">
-                  <button class="btn xs good">Save</button>
-                </form>
-              </details>
-              <form method="post" action="/schedule/shifts/{{ cs.shift.id }}/delete" onsubmit="return confirm('Delete this shift?')"><button class="btn xs danger" title="Delete">✕</button></form>
-            </div>
-            {% endif %}
-          </div>
-          {% else %}
-          <span class="cell-empty">·</span>
+          </details>
           {% endfor %}
-        </td>
+        </div>
         {% endfor %}
-        <td class="c-hours">
-          <b>{{ '%.1f'|format(row.sched_hours) }}h</b>
-          {% if row.worked_hours %}<div class="sub">{{ '%.1f'|format(row.worked_hours) }}h worked</div>{% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% if not grid.rows %}<p class="empty">No staff to schedule yet.</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="cal-legend">
+      {% for p in positions %}<span class="leg"><span class="dot" style="background:{{ p.color }}"></span>{{ p.name }}</span>{% endfor %}
+      <span class="leg"><span class="dot open"></span>Open shift</span>
+    </div>
+  </div>
 </div>
+
+<script>
+  function filterTeam(q) {
+    q = (q || '').toLowerCase();
+    document.querySelectorAll('.team-row').forEach(function (r) {
+      r.style.display = r.dataset.name.indexOf(q) === -1 ? 'none' : '';
+    });
+  }
+</script>
 {% endblock %}

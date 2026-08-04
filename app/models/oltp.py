@@ -954,8 +954,9 @@ class Shift(Base):
     # that runs past midnight), so both are full datetimes, not a date + times.
     starts_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     ends_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    # Position worked this shift (server, cook, host…). Defaults to the person's
-    # role at creation but can differ (a waiter covering the host stand).
+    # Position worked this shift (Server, Bartender, Line Cook…). Colour-codes the
+    # calendar block. `role` is kept as a plain-text fallback label.
+    position_id: Mapped[int | None] = mapped_column(ForeignKey("position.id"), nullable=True)
     role: Mapped[str] = mapped_column(String(32), nullable=False, default=Role.WAITER)
     notes: Mapped[str] = mapped_column(String(300), default="")
     # Attendance — the actual times, filled in when the member clocks in/out.
@@ -966,8 +967,25 @@ class Shift(Base):
     )
 
     staff: Mapped["Staff | None"] = relationship(lazy="joined")
+    position: Mapped["Position | None"] = relationship(lazy="joined")
 
     __table_args__ = (
         Index("ix_shift_staff_starts", "staff_id", "starts_at"),
         Index("ix_shift_starts", "starts_at"),
     )
+
+
+class Position(Base):
+    """A schedulable job (Server, Bartender, Host, Line Cook…) with a colour.
+
+    Richer than the five auth Roles — a schedule can distinguish a Bartender from
+    a Host though both log in as 'waiter'. Tags a shift and colour-codes its block
+    on the calendar. Owner-managed under Manage.
+    """
+    __tablename__ = "position"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(40), unique=True, nullable=False)
+    color: Mapped[str] = mapped_column(String(7), nullable=False, default="#3b82f6")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

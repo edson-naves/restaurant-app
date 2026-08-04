@@ -18,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import migrate
-from app.database import Base, engine
+from app.database import Base, SessionLocal, engine
 from app.deps import WEB_DIR, templates
 from app.routers import admin, analytics, auth, pay, reservations, sales, schedule
 
@@ -33,6 +33,12 @@ if _migrated:
     print(f"[migrate] applied: {', '.join(_migrated)}", flush=True)
 else:
     print("[migrate] schema up to date", flush=True)
+
+# Seed the default schedule positions once (idempotent) so colour-coding works
+# out of the box on a fresh or existing database.
+from app.services import schedule as _schedule_svc  # noqa: E402
+with SessionLocal() as _db:
+    _schedule_svc.ensure_default_positions(_db)
 
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 app.include_router(auth.router)

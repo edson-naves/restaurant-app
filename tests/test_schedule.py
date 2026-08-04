@@ -17,7 +17,7 @@ load_dotenv(ROOT / ".env")
 from fastapi.testclient import TestClient
 from app.main import app
 from app.database import SessionLocal
-from app.models.oltp import Role, Shift, Staff
+from app.models.oltp import Position, Role, Shift, Staff
 from app.services import schedule as sched
 
 fails = 0
@@ -46,16 +46,19 @@ waiter = db.query(Staff).filter(Staff.role == Role.WAITER, Staff.is_active.is_(T
 other = db.query(Staff).filter(
     Staff.is_active.is_(True), Staff.id.notin_([owner.id, waiter.id])
 ).first()
+server_pos = db.query(Position).filter(Position.name == "Server").first()
+check(server_pos is not None, "default positions seeded (Server exists)")
+pos_id = server_pos.id if server_pos else 0
 mon = sched.monday_of(date.today())
 day = mon.isoformat()
 win_start = datetime(mon.year, mon.month, mon.day)
 win_end = win_start + timedelta(days=7)
-# Pre-clean any shifts for these staff in the test week (idempotency).
-for sid in (waiter.id, other.id):
-    for sh in db.query(Shift).filter(
-        Shift.staff_id == sid, Shift.starts_at >= win_start, Shift.starts_at < win_end
-    ).all():
-        db.delete(sh)
+# Pre-clean any shifts for these staff (and open shifts) in the test week.
+for sh in db.query(Shift).filter(
+    Shift.starts_at >= win_start, Shift.starts_at < win_end,
+    (Shift.staff_id.in_([waiter.id, other.id]) | Shift.staff_id.is_(None)),
+).all():
+    db.delete(sh)
 db.commit()
 db.close()
 
@@ -71,19 +74,36 @@ def week_shift(staff_id):
     d.close()
     return sh
 
-# 1. Owner creates a waiter's shift.
+# 1. Owner creates a waiter's shift with a position.
 r = owner_c.post("/schedule/shifts", follow_redirects=False, data={
-    "staff_id": waiter.id, "date": day, "start": "16:00", "end": "22:00", "role": "", "notes": "dinner"})
+    "staff_id": waiter.id, "position_id": pos_id, "date": day,
+    "start": "16:00", "end": "22:00", "notes": "dinner"})
 check(r.status_code == 303, "owner creates a shift", r.status_code)
 sh = week_shift(waiter.id)
 check(sh is not None and sched.shift_hours(sh) == 6.0, "shift saved, 6h scheduled")
+check(sh is not None and sh.position_id == pos_id, "shift tagged with the position")
 if sh:
     created.append(sh.id)
 
-# 2. It shows in the week grid.
+# 2. It shows in the week calendar (block + team panel).
 r = owner_c.get(f"/schedule?week={day}")
 check(r.status_code == 200 and "16:00" in r.text and waiter.name in r.text,
-      "shift appears in the weekly grid")
+      "shift appears in the calendar")
+check("team-panel" in r.text and (server_pos.color in r.text if server_pos else True),
+      "team panel + position colour render")
+
+# 2b. An open (unassigned) shift renders as OPEN SHIFT for managers.
+owner_c.post("/schedule/shifts", follow_redirects=False, data={
+    "staff_id": 0, "position_id": pos_id, "date": day, "start": "11:00", "end": "15:00"})
+d = SessionLocal()
+osh_open = d.query(Shift).filter(
+    Shift.staff_id.is_(None), Shift.starts_at >= win_start, Shift.starts_at < win_end
+).order_by(Shift.id.desc()).first()
+d.close()
+if osh_open:
+    created.append(osh_open.id)
+r = owner_c.get(f"/schedule?week={day}")
+check(osh_open is not None and "OPEN SHIFT" in r.text, "open shift renders as OPEN SHIFT")
 
 # 3. A waiter cannot create shifts.
 r = waiter_c.post("/schedule/shifts", follow_redirects=False, data={

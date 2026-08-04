@@ -37,8 +37,10 @@ from app.models.oltp import (
     Modifier,
     Order,
     OrderStatus,
+    Position,
     RestaurantTable,
     Role,
+    Shift,
     Staff,
     TableStatus,
     Zone,
@@ -1179,6 +1181,84 @@ def save_settings(
         "biz_postal": biz_postal, "biz_phone": biz_phone,
     })
     return RedirectResponse("/admin/settings?saved=1", status_code=303)
+
+
+# --------------------------------------------------------------------------
+# Schedule positions (name + colour) — used to colour-code the shift calendar.
+# --------------------------------------------------------------------------
+
+@router.get("/positions")
+def positions_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    positions = db.execute(
+        select(Position).order_by(Position.is_active.desc(), Position.sort_order, Position.name)
+    ).scalars().all()
+    return render(request, "admin_positions.html", {
+        "db": db, "staff": staff, "positions": positions,
+        "title": "Positions",
+    })
+
+
+@router.post("/positions")
+def add_position(
+    name: str = Form(...),
+    color: str = Form("#3b82f6"),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "A position needs a name.")
+    if db.execute(select(Position).where(func.lower(Position.name) == name.lower())).scalars().first():
+        raise HTTPException(400, f"A position named '{name}' already exists.")
+    nxt = (db.execute(select(func.coalesce(func.max(Position.sort_order), 0))).scalar() or 0) + 1
+    db.add(Position(name=name, color=color or "#3b82f6", sort_order=nxt))
+    db.commit()
+    return RedirectResponse("/admin/positions", status_code=303)
+
+
+@router.post("/positions/{position_id}/edit")
+def edit_position(
+    position_id: int,
+    name: str = Form(...),
+    color: str = Form("#3b82f6"),
+    is_active: int = Form(0),          # unchecked box is omitted → inactive
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    pos = db.get(Position, position_id)
+    if pos is None:
+        raise HTTPException(404, "Position not found.")
+    pos.name = name.strip() or pos.name
+    pos.color = color or pos.color
+    pos.is_active = bool(is_active)
+    db.commit()
+    return RedirectResponse("/admin/positions", status_code=303)
+
+
+@router.post("/positions/{position_id}/delete")
+def delete_position(
+    position_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Delete if unused, otherwise just deactivate so existing shifts keep their
+    colour and the position stops appearing in the pickers."""
+    pos = db.get(Position, position_id)
+    if pos is None:
+        return RedirectResponse("/admin/positions", status_code=303)
+    in_use = db.execute(
+        select(func.count()).select_from(Shift).where(Shift.position_id == position_id)
+    ).scalar()
+    if in_use:
+        pos.is_active = False
+    else:
+        db.delete(pos)
+    db.commit()
+    return RedirectResponse("/admin/positions", status_code=303)
 
 
 @router.get("/menu")

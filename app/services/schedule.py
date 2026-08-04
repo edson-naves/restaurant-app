@@ -8,10 +8,32 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.oltp import Shift, Staff
+from app.models.oltp import Position, Shift, Staff
+
+
+# Default restaurant positions with calendar colours, seeded once if none exist.
+DEFAULT_POSITIONS: tuple[tuple[str, str], ...] = (
+    ("Manager", "#14b8a6"),
+    ("Server", "#3b82f6"),
+    ("Bartender", "#8b5cf6"),
+    ("Host", "#f59e0b"),
+    ("Line Cook", "#22c55e"),
+    ("Prep Cook", "#84cc16"),
+    ("Dishwasher", "#9ca3af"),
+)
+
+
+def ensure_default_positions(db: Session) -> None:
+    """Seed the standard positions on first run (idempotent). Runs on startup so
+    an existing database — including production — gets them without a reseed."""
+    if db.execute(select(func.count()).select_from(Position)).scalar():
+        return
+    for i, (name, color) in enumerate(DEFAULT_POSITIONS):
+        db.add(Position(name=name, color=color, sort_order=i))
+    db.commit()
 
 
 # --------------------------------------------------------------------------
@@ -87,66 +109,125 @@ def overlaps(
 
 
 # --------------------------------------------------------------------------
-# Grid model the template renders
+# Calendar model the template renders (day columns × time-of-day)
 # --------------------------------------------------------------------------
 
 @dataclass
-class CellShift:
-    """A shift plus its rendered attendance, so the template does no maths."""
+class CalBlock:
+    """One shift positioned on a day column: top/height as % of the visible time
+    window, plus a lane so overlapping shifts sit side by side."""
     shift: Shift
-    state: str                               # 'scheduled' | 'in' | 'done'
-    sched_h: float
-    worked_h: float
+    state: str                # 'scheduled' | 'in' | 'done'
+    hours: float
+    is_open: bool             # unassigned (staff_id is None)
+    top_pct: float
+    height_pct: float
+    lane: int
+    lanes: int                # total lanes that day, for width
 
 
 @dataclass
-class GridRow:
+class CalDay:
+    date: date
+    blocks: list[CalBlock] = field(default_factory=list)
+    labor_hours: float = 0.0
+
+
+@dataclass
+class TeamMember:
     staff: Staff
-    cells: list[list[CellShift]]             # 7 lists, Monday..Sunday
-    sched_hours: float = 0.0
-    worked_hours: float = 0.0
+    weekly_hours: float = 0.0
 
 
 @dataclass
-class Grid:
+class Calendar:
     week_start: date
-    days: list[date] = field(default_factory=list)
-    rows: list[GridRow] = field(default_factory=list)
+    days: list[CalDay]
+    start_hour: int
+    end_hour: int
+    hours: list[int]          # hour marks for the time axis
+    team: list[TeamMember]
 
 
-def build_grid(db: Session, week_start: date, staff_list: list[Staff]) -> Grid:
-    """Bucket the week's shifts into a per-staff, per-day grid with row totals."""
-    days = week_days(week_start)
+def _display_end_hour(sh: Shift) -> int:
+    """The block's end hour on its start day (an overnight shift caps at 24)."""
+    if sh.ends_at.date() > sh.starts_at.date():
+        return 24
+    return sh.ends_at.hour + (1 if sh.ends_at.minute else 0)
+
+
+def _layout_day(blocks: list[CalBlock], start_min: int, span_min: int) -> None:
+    """Greedy interval partition: give overlapping blocks distinct lanes so they
+    render side by side. Sets .lane/.lanes/.top_pct/.height_pct in place."""
+    lane_end: list[int] = []
+    for b in blocks:                                   # already start-sorted
+        s = b.shift.starts_at.hour * 60 + b.shift.starts_at.minute
+        e = _display_end_hour(b.shift) * 60
+        for i, end in enumerate(lane_end):
+            if s >= end:
+                lane_end[i] = e
+                b.lane = i
+                break
+        else:
+            b.lane = len(lane_end)
+            lane_end.append(e)
+    ncols = max(1, len(lane_end))
+    for b in blocks:
+        s = b.shift.starts_at.hour * 60 + b.shift.starts_at.minute
+        e = _display_end_hour(b.shift) * 60
+        top = max(0.0, (s - start_min) / span_min * 100)
+        b.top_pct = min(top, 98.0)
+        b.height_pct = max(4.0, min(100 - b.top_pct, (e - max(s, start_min)) / span_min * 100))
+        b.lanes = ncols
+
+
+def build_calendar(db: Session, week_start: date, staff_list: list[Staff],
+                   include_open: bool) -> Calendar:
+    """The week's shifts laid out on day columns by time. `staff_list` is the
+    rows for the team panel; managers also see open (unassigned) shifts."""
+    days = [CalDay(date=d) for d in week_days(week_start)]
     start_dt = datetime(week_start.year, week_start.month, week_start.day)
     end_dt = start_dt + timedelta(days=7)
 
     ids = [s.id for s in staff_list]
-    rows: list[GridRow] = []
-    if ids:
-        shifts = db.execute(
-            select(Shift).where(
-                Shift.staff_id.in_(ids),
-                Shift.starts_at >= start_dt,
-                Shift.starts_at < end_dt,
-            ).order_by(Shift.starts_at)
-        ).scalars().all()
+    conds = [Shift.starts_at >= start_dt, Shift.starts_at < end_dt]
+    who = Shift.staff_id.in_(ids)
+    who = (who | Shift.staff_id.is_(None)) if include_open else who
+    shifts = db.execute(
+        select(Shift).where(*conds, who).order_by(Shift.starts_at)
+    ).scalars().all()
+
+    # Visible time window: fit the shifts, with sane defaults and a 6h floor.
+    if shifts:
+        start_hour = max(0, min(min(s.starts_at.hour for s in shifts), 10))
+        end_hour = min(24, max(_display_end_hour(s) for s in shifts))
+        end_hour = max(end_hour, start_hour + 6)
     else:
-        shifts = []
+        start_hour, end_hour = 8, 24
+    start_min = start_hour * 60
+    span_min = (end_hour - start_hour) * 60
 
-    by_staff: dict[int, list[Shift]] = {}
+    per_staff: dict[int, float] = {}
     for sh in shifts:
-        by_staff.setdefault(sh.staff_id, []).append(sh)
+        idx = (sh.starts_at.date() - week_start).days
+        if not (0 <= idx < 7):
+            continue
+        h = shift_hours(sh)
+        blk = CalBlock(
+            shift=sh, state=clock_state(sh), hours=h, is_open=sh.staff_id is None,
+            top_pct=0.0, height_pct=0.0, lane=0, lanes=1,
+        )
+        days[idx].blocks.append(blk)
+        days[idx].labor_hours += h
+        if sh.staff_id is not None:
+            per_staff[sh.staff_id] = per_staff.get(sh.staff_id, 0.0) + h
 
-    for member in staff_list:
-        cells: list[list[CellShift]] = [[] for _ in range(7)]
-        sched = worked = 0.0
-        for sh in by_staff.get(member.id, []):
-            idx = (sh.starts_at.date() - week_start).days
-            if 0 <= idx < 7:
-                sh_h, wk_h = shift_hours(sh), worked_hours(sh)
-                cells[idx].append(CellShift(sh, clock_state(sh), sh_h, wk_h))
-                sched += sh_h
-                worked += wk_h
-        rows.append(GridRow(staff=member, cells=cells, sched_hours=sched, worked_hours=worked))
+    for day in days:
+        _layout_day(day.blocks, start_min, span_min)
 
-    return Grid(week_start=week_start, days=days, rows=rows)
+    team = [TeamMember(staff=m, weekly_hours=per_staff.get(m.id, 0.0)) for m in staff_list]
+    return Calendar(
+        week_start=week_start, days=days,
+        start_hour=start_hour, end_hour=end_hour,
+        hours=list(range(start_hour, end_hour + 1)), team=team,
+    )

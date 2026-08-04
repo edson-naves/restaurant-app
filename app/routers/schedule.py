@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import can, render, require
-from app.models.oltp import Role, Shift, Staff
+from app.models.oltp import Position, Shift, Staff
 from app.services import schedule as sched
 
 router = APIRouter()
@@ -56,50 +56,63 @@ def schedule_page(
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("schedule.view")),
 ):
-    """The weekly grid. Managers see every active staff member; anyone else sees
-    only their own row and can clock in/out on their shifts."""
+    """The week calendar. Managers see every active staff member plus open
+    shifts; anyone else sees only their own week and clocks in/out."""
     week_start = sched.week_start_for(week or None)
+    manage = can(staff, "schedule.manage")
 
-    if can(staff, "schedule.manage"):
+    if manage:
         staff_list = db.execute(
             select(Staff).where(Staff.is_active.is_(True)).order_by(Staff.name)
         ).scalars().all()
     else:
         staff_list = [staff]
 
-    grid = sched.build_grid(db, week_start, staff_list)
+    cal = sched.build_calendar(db, week_start, staff_list, include_open=manage)
+    positions = db.execute(
+        select(Position).where(Position.is_active.is_(True)).order_by(Position.sort_order)
+    ).scalars().all()
     return render(request, "schedule.html", {
         "db": db, "staff": staff,
-        "grid": grid,
+        "cal": cal, "positions": positions,
         "week_start": week_start,
         "prev_week": (week_start - timedelta(days=7)).isoformat(),
         "next_week": (week_start + timedelta(days=7)).isoformat(),
         "this_week": sched.monday_of(datetime.now().date()).isoformat(),
         "today": datetime.now().date(),
-        "roles": Role.ALL,
         "title": "Schedule",
     })
 
 
+def _resolve(db, staff_id: int, position_id: int) -> tuple[Staff | None, Position | None]:
+    """Look up the (optional) assignee and position. staff_id 0 = open shift."""
+    member = db.get(Staff, staff_id) if staff_id else None
+    if staff_id and member is None:
+        raise HTTPException(404, "Unknown staff member.")
+    pos = db.get(Position, position_id) if position_id else None
+    return member, pos
+
+
 @router.post("/schedule/shifts")
 def create_shift(
-    staff_id: int = Form(...),
+    staff_id: int = Form(0),          # 0 = open (unassigned) shift
+    position_id: int = Form(0),
     date: str = Form(...),
     start: str = Form(...),
     end: str = Form(...),
-    role: str = Form(""),
     notes: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("schedule.manage")),
 ):
-    member = db.get(Staff, staff_id)
-    if member is None:
-        raise HTTPException(404, "Unknown staff member.")
+    member, pos = _resolve(db, staff_id, position_id)
     starts, ends = _parse_window(date, start, end)
-    _guard_overlap(db, staff_id, starts, ends)
+    _guard_overlap(db, member.id if member else None, starts, ends)
     db.add(Shift(
-        staff_id=staff_id, starts_at=starts, ends_at=ends,
-        role=(role or member.role), notes=notes.strip(),
+        staff_id=(member.id if member else None),
+        position_id=(pos.id if pos else None),
+        starts_at=starts, ends_at=ends,
+        role=(pos.name if pos else (member.role if member else "Open")),
+        notes=notes.strip(),
     ))
     db.commit()
     return RedirectResponse(
@@ -110,10 +123,11 @@ def create_shift(
 @router.post("/schedule/shifts/{shift_id}/edit")
 def edit_shift(
     shift_id: int,
+    staff_id: int = Form(0),          # 0 = leave open / unassign
+    position_id: int = Form(0),
     date: str = Form(...),
     start: str = Form(...),
     end: str = Form(...),
-    role: str = Form(""),
     notes: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("schedule.manage")),
@@ -121,11 +135,14 @@ def edit_shift(
     shift = db.get(Shift, shift_id)
     if shift is None:
         raise HTTPException(404, "Shift not found.")
+    member, pos = _resolve(db, staff_id, position_id)
     starts, ends = _parse_window(date, start, end)
-    _guard_overlap(db, shift.staff_id, starts, ends, exclude_id=shift.id)
+    _guard_overlap(db, member.id if member else None, starts, ends, exclude_id=shift.id)
+    shift.staff_id = member.id if member else None
+    shift.position_id = pos.id if pos else None
     shift.starts_at, shift.ends_at = starts, ends
-    if role:
-        shift.role = role
+    if pos:
+        shift.role = pos.name
     shift.notes = notes.strip()
     db.commit()
     return RedirectResponse(
