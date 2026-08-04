@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>Schedule</h1>
+    <p class="sub">
+      Week of {{ week_start.strftime('%b') }} {{ week_start.day }} – {{ grid.days[6].strftime('%b') }} {{ grid.days[6].day }}, {{ grid.days[6].year }}
+      {% if not can('schedule.manage') %} · your shifts only{% endif %}
+    </p>
+  </div>
+  <div style="display:flex;gap:8px">
+    <a class="btn" href="/schedule?week={{ prev_week }}">‹ Prev</a>
+    <a class="btn" href="/schedule?week={{ this_week }}">This week</a>
+    <a class="btn" href="/schedule?week={{ next_week }}">Next ›</a>
+  </div>
+</div>
+
+{% if can('schedule.manage') %}
+<div class="card">
+  <strong>Add a shift</strong>
+  <form method="post" action="/schedule/shifts" class="sched-add">
+    <div class="field"><label>Staff</label>
+      <select name="staff_id" required>
+        {% for m in all_staff %}<option value="{{ m.id }}">{{ m.name }} ({{ m.role|replace('_',' ') }})</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field"><label>Date</label><input type="date" name="date" value="{{ today.isoformat() }}" required></div>
+    <div class="field"><label>Start</label><input type="time" name="start" value="16:00" required></div>
+    <div class="field"><label>End</label><input type="time" name="end" value="22:00" required></div>
+    <div class="field"><label>Role</label>
+      <select name="role">
+        <option value="">(their role)</option>
+        {% for r in roles %}<option value="{{ r }}">{{ r|replace('_',' ')|title }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="field" style="flex:1;min-width:130px"><label>Notes</label><input type="text" name="notes" placeholder="optional"></div>
+    <button class="btn good">Add shift</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="card" style="overflow-x:auto">
+  <table class="sched">
+    <thead>
+      <tr>
+        <th class="c-staff">Staff</th>
+        {% for d in grid.days %}
+        <th class="{{ 'is-today' if d == today else '' }}">{{ d.strftime('%a') }}<div class="sub">{{ d.strftime('%b') }} {{ d.day }}</div></th>
+        {% endfor %}
+        <th class="c-hours">Hours</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in grid.rows %}
+      <tr>
+        <th class="c-staff">{{ row.staff.name }}<div class="sub">{{ row.staff.role|replace('_',' ') }}</div></th>
+        {% for cell in row.cells %}
+        {% set d = grid.days[loop.index0] %}
+        <td class="{{ 'is-today' if d == today else '' }}">
+          {% for cs in cell %}
+          <div class="shift s-{{ cs.state }}">
+            <div class="shift-time">
+              <b>{{ cs.shift.starts_at.strftime('%H:%M') }}–{{ cs.shift.ends_at.strftime('%H:%M') }}</b>
+              {% if cs.state == 'in' %}<span class="sbadge in">● on</span>
+              {% elif cs.state == 'done' %}<span class="sbadge done">✓ {{ '%.1f'|format(cs.worked_h) }}h</span>{% endif %}
+            </div>
+            <div class="sub">{{ cs.shift.role|replace('_',' ') }}{% if cs.shift.notes %} · {{ cs.shift.notes }}{% endif %}</div>
+
+            {% if cs.shift.staff_id == staff.id %}
+            <div class="shift-act">
+              {% if cs.state == 'scheduled' %}
+              <form method="post" action="/schedule/shifts/{{ cs.shift.id }}/clock-in"><button class="btn xs good">Clock in</button></form>
+              {% elif cs.state == 'in' %}
+              <form method="post" action="/schedule/shifts/{{ cs.shift.id }}/clock-out"><button class="btn xs warn">Clock out</button></form>
+              {% endif %}
+            </div>
+            {% endif %}
+
+            {% if can('schedule.manage') %}
+            <div class="shift-act">
+              <details class="edit-menu">
+                <summary class="btn xs">Edit</summary>
+                <form method="post" action="/schedule/shifts/{{ cs.shift.id }}/edit" class="shift-edit">
+                  <input type="date" name="date" value="{{ cs.shift.starts_at.strftime('%Y-%m-%d') }}" required>
+                  <input type="time" name="start" value="{{ cs.shift.starts_at.strftime('%H:%M') }}" required>
+                  <input type="time" name="end" value="{{ cs.shift.ends_at.strftime('%H:%M') }}" required>
+                  <select name="role">
+                    {% for r in roles %}<option value="{{ r }}" {{ 'selected' if r == cs.shift.role else '' }}>{{ r|replace('_',' ')|title }}</option>{% endfor %}
+                  </select>
+                  <input type="text" name="notes" value="{{ cs.shift.notes }}" placeholder="notes">
+                  <button class="btn xs good">Save</button>
+                </form>
+              </details>
+              <form method="post" action="/schedule/shifts/{{ cs.shift.id }}/delete" onsubmit="return confirm('Delete this shift?')"><button class="btn xs danger" title="Delete">✕</button></form>
+            </div>
+            {% endif %}
+          </div>
+          {% else %}
+          <span class="cell-empty">·</span>
+          {% endfor %}
+        </td>
+        {% endfor %}
+        <td class="c-hours">
+          <b>{{ '%.1f'|format(row.sched_hours) }}h</b>
+          {% if row.worked_hours %}<div class="sub">{{ '%.1f'|format(row.worked_hours) }}h worked</div>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if not grid.rows %}<p class="empty">No staff to schedule yet.</p>{% endif %}
+</div>
+{% endblock %}

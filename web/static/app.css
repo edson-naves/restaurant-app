@@ -1006,3 +1006,39 @@ td.pending { color: var(--accent); font-weight: 700; }
 @media (max-width: 480px) {
   .login-card { padding: 24px 18px 20px; }
 }
+
+/* ---- Staff schedule ------------------------------------------------------ */
+.btn.xs {
+  padding: 2px 8px; font-size: 11px; min-height: 0; line-height: 1.6;
+}
+.sched-add {
+  display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 10px;
+}
+.sched-add .field { margin: 0; }
+
+table.sched { width: 100%; border-collapse: collapse; min-width: 720px; }
+table.sched th, table.sched td {
+  border: 1px solid var(--line); padding: 6px; vertical-align: top; text-align: left;
+}
+table.sched thead th { text-align: center; font-size: 12px; white-space: nowrap; }
+table.sched .c-staff { min-width: 120px; font-weight: 700; }
+table.sched .c-hours { min-width: 68px; text-align: right; white-space: nowrap; }
+table.sched td { min-width: 96px; }
+table.sched .is-today { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.cell-empty { color: var(--muted); opacity: .4; }
+
+.shift {
+  border-radius: 8px; padding: 5px 7px; margin-bottom: 5px; font-size: 12px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.shift:last-child { margin-bottom: 0; }
+.shift.s-in   { background: color-mix(in srgb, #16a34a 22%, transparent); border-color: #16a34a; }
+.shift.s-done { background: color-mix(in srgb, var(--muted) 16%, transparent); }
+.shift-time { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.sbadge { font-size: 10px; font-weight: 800; padding: 0 5px; border-radius: 6px; white-space: nowrap; }
+.sbadge.in   { background: #16a34a; color: #fff; }
+.sbadge.done { background: color-mix(in srgb, var(--muted) 30%, transparent); }
+.shift-act { display: flex; gap: 5px; align-items: center; margin-top: 5px; flex-wrap: wrap; }
+.shift-edit { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+.shift-edit input, .shift-edit select { min-height: 28px; font-size: 12px; padding: 2px 6px; }

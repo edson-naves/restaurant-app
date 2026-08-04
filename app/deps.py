@@ -69,6 +69,10 @@ PERMISSIONS: dict[str, set[str]] = {
     "reports.view":    {Role.OWNER, Role.MANAGER},
     "staff.manage":    {Role.OWNER},
     "settings":        {Role.OWNER},                  # manager explicitly excluded
+    # Staff scheduling. Everyone may open the schedule (they see only their own
+    # shifts unless they can manage); owner/manager build and edit the roster.
+    "schedule.view":   {Role.OWNER, Role.MANAGER, Role.WAITER, Role.KITCHEN, Role.DELIVERY_COORDINATOR},
+    "schedule.manage": {Role.OWNER, Role.MANAGER},
 }
 
 # Plain-English name for each permission, in the order they read on the staff
@@ -86,6 +90,8 @@ PERMISSION_LABELS: dict[str, str] = {
     "reports.view":      "Reports & end-of-day close",
     "settings":          "Menu, tables & settings",
     "staff.manage":      "Manage staff",
+    "schedule.view":     "See my schedule",
+    "schedule.manage":   "Build & edit the schedule",
 }
 
 

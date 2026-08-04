@@ -20,7 +20,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app import migrate
 from app.database import Base, engine
 from app.deps import WEB_DIR, templates
-from app.routers import admin, analytics, auth, pay, reservations, sales
+from app.routers import admin, analytics, auth, pay, reservations, sales, schedule
 
 app = FastAPI(title="Restaurant Management System", version="1.0")
 
@@ -41,6 +41,7 @@ app.include_router(reservations.router)
 app.include_router(pay.router)
 app.include_router(analytics.router)
 app.include_router(admin.router)
+app.include_router(schedule.router)
 
 
 @app.exception_handler(StarletteHTTPException)

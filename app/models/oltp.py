@@ -933,3 +933,41 @@ class Reservation(Base):
         ),
         Index("ix_reservation_status_at", "status", "at"),
     )
+
+
+class Shift(Base):
+    """A scheduled work block for one staff member, plus its attendance.
+
+    Section: staff scheduling. Each shift belongs to a single person (the
+    industry-standard model) and carries both the *scheduled* window
+    (starts_at/ends_at) and the *actual* clock in/out — so one row shows planned
+    vs worked hours. staff_id is nullable so an open slot can be created and
+    filled later. Money never touches this table; it stays out of the star schema.
+    """
+    __tablename__ = "shift"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    staff_id: Mapped[int | None] = mapped_column(
+        ForeignKey("staff.id"), nullable=True
+    )
+    # Scheduled window. ends_at may fall on the next calendar day (a close shift
+    # that runs past midnight), so both are full datetimes, not a date + times.
+    starts_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # Position worked this shift (server, cook, host…). Defaults to the person's
+    # role at creation but can differ (a waiter covering the host stand).
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default=Role.WAITER)
+    notes: Mapped[str] = mapped_column(String(300), default="")
+    # Attendance — the actual times, filled in when the member clocks in/out.
+    clock_in_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    clock_out_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, nullable=False
+    )
+
+    staff: Mapped["Staff | None"] = relationship(lazy="joined")
+
+    __table_args__ = (
+        Index("ix_shift_staff_starts", "staff_id", "starts_at"),
+        Index("ix_shift_starts", "starts_at"),
+    )
