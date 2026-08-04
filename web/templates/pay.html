@@ -72,7 +72,7 @@
       {% set holding = L.lines|rejectattr('item.kitchen_status','equalto','served')|selectattr('outstanding_cents')|list %}
       {% if payable %}
       <details style="margin-top:10px">
-        <summary class="btn primary sm" style="width:100%">{% if terminal_enabled %}💵 Cash{% else %}Take payment{% endif %}</summary>
+        <summary class="btn primary sm" style="width:100%">{% if terminal_enabled %}💵 Cash &amp; manual{% else %}Take payment{% endif %}</summary>
         <form method="post" action="/orders/{{ order.id }}/seats/{{ L.seat.id }}/pay" style="margin-top:10px">
           <div class="field">
             <label>Items to pay — untick to leave on the open order</label>
