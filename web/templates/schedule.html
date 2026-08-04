@@ -25,7 +25,8 @@
     <input type="search" class="team-search" placeholder="Search team…" oninput="filterTeam(this.value)">
     <div class="team-list">
       {% for m in cal.team %}
-      <div class="team-row" data-name="{{ m.staff.name|lower }}">
+      <div class="team-row" data-name="{{ m.staff.name|lower }}"
+           {% if can('schedule.manage') %}draggable="true" data-staff-id="{{ m.staff.id }}" title="Drag onto a day to schedule"{% endif %}>
         <span class="avatar">{{ initials(m.staff.name) }}</span>
         <div class="team-meta">
           <b>{{ m.staff.name }}</b>
@@ -62,6 +63,7 @@
         <button class="btn good">Add</button>
       </form>
     </details>
+    <p class="sub cal-hint">↔ Drag a teammate onto a day to schedule them · drag a shift to move it · drag its bottom edge to resize.</p>
     {% endif %}
 
     <div class="cal-scroll">
@@ -75,17 +77,24 @@
         {% endfor %}
       </div>
 
-      <div class="cal-body" style="--rows: {{ cal.end_hour - cal.start_hour }}">
+      <div class="cal-body" style="--rows: {{ cal.end_hour - cal.start_hour }}" data-start-hour="{{ cal.start_hour }}">
         <div class="cal-gutter" style="height:calc(var(--rows) * 44px)">
           {% for h in cal.hours %}
           <div class="cal-hour" style="top:{{ loop.index0 * 44 }}px">{{ hourlabel(h) }}</div>
           {% endfor %}
         </div>
         {% for day in cal.days %}
-        <div class="cal-col {{ 'is-today' if day.date == today else '' }}" style="height:calc(var(--rows) * 44px)">
+        <div class="cal-col {{ 'is-today' if day.date == today else '' }}" style="height:calc(var(--rows) * 44px)" data-date="{{ day.date.isoformat() }}">
           {% for b in day.blocks %}
           {% set pcolor = b.shift.position.color if b.shift.position else '#64748b' %}
           <details class="cblock {{ 'open-shift' if b.is_open else '' }}"
+                   {% if can('schedule.manage') %}draggable="true"{% endif %}
+                   data-shift-id="{{ b.shift.id }}"
+                   data-staff-id="{{ b.shift.staff_id or 0 }}"
+                   data-position-id="{{ b.shift.position_id or 0 }}"
+                   data-notes="{{ b.shift.notes }}"
+                   data-duration="{{ ((b.shift.ends_at - b.shift.starts_at).total_seconds() / 60)|int }}"
+                   data-start-min="{{ b.shift.starts_at.hour * 60 + b.shift.starts_at.minute }}"
                    style="top:{{ b.top_pct }}%;height:{{ b.height_pct }}%;left:calc({{ b.lane * 100 / b.lanes }}% + 1px);width:calc({{ 100 / b.lanes }}% - 2px);--pc:{{ pcolor }}">
             <summary class="cb-face">
               <span class="cb-time">{{ b.shift.starts_at.strftime('%H:%M') }}–{{ b.shift.ends_at.strftime('%H:%M') }}</span>
@@ -117,6 +126,7 @@
               <form method="post" action="/schedule/shifts/{{ b.shift.id }}/delete" onsubmit="return confirm('Delete this shift?')"><button class="btn xs danger">Delete</button></form>
               {% endif %}
             </div>
+            {% if can('schedule.manage') %}<div class="cb-resize" title="Drag to resize"></div>{% endif %}
           </details>
           {% endfor %}
         </div>
@@ -131,12 +141,5 @@
   </div>
 </div>
 
-<script>
-  function filterTeam(q) {
-    q = (q || '').toLowerCase();
-    document.querySelectorAll('.team-row').forEach(function (r) {
-      r.style.display = r.dataset.name.indexOf(q) === -1 ? 'none' : '';
-    });
-  }
-</script>
+<script src="/static/schedule.js?v={{ asset_v() }}"></script>
 {% endblock %}
