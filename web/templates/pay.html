@@ -72,7 +72,7 @@
       {% set holding = L.lines|rejectattr('item.kitchen_status','equalto','served')|selectattr('outstanding_cents')|list %}
       {% if payable %}
       <details style="margin-top:10px">
-        <summary class="btn primary sm" style="width:100%">Take payment</summary>
+        <summary class="btn primary sm" style="width:100%">{% if terminal_enabled %}💵 Cash{% else %}Take payment{% endif %}</summary>
         <form method="post" action="/orders/{{ order.id }}/seats/{{ L.seat.id }}/pay" style="margin-top:10px">
           <div class="field">
             <label>Items to pay — untick to leave on the open order</label>
@@ -97,12 +97,25 @@
           <div class="field">
             <label>Payment instrument</label>
             <select name="instrument_id" required>
+              {% if terminal_enabled %}
+              {# Cash-first; cards live under the terminal and belong on the
+                 💳 Card button — kept here only as an outage fallback. #}
+              <optgroup label="Cash &amp; other">
+                {% for i in cash_instruments %}<option value="{{ i.id }}">{{ i.name }}</option>{% endfor %}
+              </optgroup>
+              {% if card_instruments %}
+              <optgroup label="Card — only if the terminal is down">
+                {% for i in card_instruments %}<option value="{{ i.id }}">{{ i.name }}</option>{% endfor %}
+              </optgroup>
+              {% endif %}
+              {% else %}
               {% for i in instruments %}<option value="{{ i.id }}">{{ i.name }}</option>{% endfor %}
+              {% endif %}
             </select>
           </div>
 
           <div class="field">
-            <label>Card last 4 (cards only — no raw numbers stored)</label>
+            <label>Card last 4 {% if terminal_enabled %}— only for the card fallback{% else %}(cards only){% endif %} — no raw numbers stored</label>
             <input type="text" name="card_last4" maxlength="4" placeholder="1234" inputmode="numeric">
           </div>
 
@@ -156,7 +169,7 @@
          automatically — no waiter entry. #}
       <form method="post" action="/orders/{{ order.id }}/seats/{{ L.seat.id }}/pay-terminal"
             style="margin-top:8px">
-        <button class="btn primary" style="width:100%">💳 Pay on card terminal</button>
+        <button class="btn primary" style="width:100%">💳 Card</button>
         <p class="sub" style="margin:6px 0 0;font-size:11px">
           Customer taps &amp; tips on the machine — the tip comes back automatically.
           {% if card_surcharge_rate %}A {{ card_surcharge_rate }}% card fee is included.{% endif %}

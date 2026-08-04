@@ -146,6 +146,11 @@ def payment_screen(
         i for i in instruments
         if not i.delivery_only or order.channel.channel_type == "delivery"
     ]
+    # When a card terminal is available, cards go through it (💳 Card) and the
+    # manual form becomes cash-first (💵 Cash), with card tenders demoted to a
+    # "terminal down" fallback. Split so the template can group them.
+    cash_instruments = [i for i in usable if i.instrument_type not in ("card", "contactless")]
+    card_instruments = [i for i in usable if i.instrument_type in ("card", "contactless")]
 
     managers = db.execute(
         select(Staff).where(Staff.role.in_((Role.OWNER, Role.MANAGER)))
@@ -161,6 +166,7 @@ def payment_screen(
         "db": db, "staff": staff, "order": order,
         "ledgers": [ledgers[s.id] for s in order.seats if s.id in ledgers],
         "unassigned": unassigned, "panel": panel, "instruments": usable,
+        "cash_instruments": cash_instruments, "card_instruments": card_instruments,
         "managers": managers,
         "settled": settled, "refundable": refundable, "refunded": refunded,
         "tax_cfg": settings_svc.tax_config(db),
