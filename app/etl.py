@@ -492,6 +492,8 @@ def load_facts_for_order(db: Session, order: Order) -> tuple[int, int]:
         taxes = distribute(payment.tax_cents, amounts)
         # Service charge likewise, so it survives to the allocation grain.
         svc = distribute(payment.service_charge_cents, amounts)
+        # Card surcharge rides down the same way.
+        surch = distribute(payment.card_surcharge_cents, amounts)
 
         p_date = date_key_of(payment.created_at)
         p_time = time_key_of(payment.created_at)
@@ -520,9 +522,11 @@ def load_facts_for_order(db: Session, order: Order) -> tuple[int, int]:
                     amount_cents=alloc.amount_cents,
                     tip_cents=tips[j],
                     service_charge_cents=svc[j],
+                    card_surcharge_cents=surch[j],
                     discount_cents=discounts[j],
                     tax_cents=taxes[j],
-                    total_cents=alloc.amount_cents - discounts[j] + taxes[j] + tips[j] + svc[j],
+                    total_cents=alloc.amount_cents - discounts[j] + taxes[j]
+                    + tips[j] + svc[j] + surch[j],
                     is_partial_close=payment.is_partial_close,
                 )
             )
@@ -536,6 +540,7 @@ def load_facts_for_order(db: Session, order: Order) -> tuple[int, int]:
     subtotal = sum(gross_by_item)
     tip_total = sum(p.tip_cents for p in live_payments)
     svc_total = sum(p.service_charge_cents for p in live_payments)
+    surch_total = sum(p.card_surcharge_cents for p in live_payments)
     tax_total = sum(p.tax_cents for p in live_payments)
     total = sum(p.total_cents for p in live_payments)
     # Post-settlement refunds against this order; net revenue = total - refunds.
@@ -571,6 +576,7 @@ def load_facts_for_order(db: Session, order: Order) -> tuple[int, int]:
             tax_cents=tax_total,
             tip_cents=tip_total,
             service_charge_cents=svc_total,
+            card_surcharge_cents=surch_total,
             total_cents=total,
             refund_cents=refund_total,
             duration_minutes=duration,

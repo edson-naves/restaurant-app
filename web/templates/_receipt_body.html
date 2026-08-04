@@ -72,6 +72,9 @@
   {% if data.service_charge is defined and data.service_charge != '0.00' %}
   <div class="l"><span>Service charge</span><span>{{ data.service_charge }}</span></div>
   {% endif %}
+  {% if data.card_surcharge is defined and data.card_surcharge != '0.00' %}
+  <div class="l"><span>Card fee</span><span>{{ data.card_surcharge }}</span></div>
+  {% endif %}
   {% if data.tip != '0.00' %}
   <div class="l"><span>Tip</span><span>{{ data.tip }}</span></div>
   {% endif %}

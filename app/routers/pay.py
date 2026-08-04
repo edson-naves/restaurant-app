@@ -169,6 +169,8 @@ def payment_screen(
         "auto_gratuity": settings_svc.gratuity_config(db).applies(order.guest_count),
         # 4.2.6 — mandatory service charge rate (0 = none), shown on the screen.
         "service_charge_rate": settings_svc.service_charge_rate(db),
+        # 4.2.6 — optional card surcharge rate (0 = none); previewed on screen.
+        "card_surcharge_rate": settings_svc.card_surcharge_rate(db),
         "receipt_view": receipt_view,
         # Card-terminal path is offered only when Square is configured.
         "terminal_enabled": square.is_configured(),
@@ -340,6 +342,7 @@ def take_seat_payment(
             staff_id=staff.id,
             tip_cents=max(0, tip_cents),
             service_charge_cents=max(0, service_charge_cents),
+            card_surcharge_rate=settings_svc.card_surcharge_rate(db),
             item_ids=selected,
             discount_cents=discount_cents,
             discount_approved_by_id=(
@@ -423,8 +426,10 @@ def start_terminal_payment(
     svc_cents = pct(base, settings_svc.service_charge_rate(db))
     cfg = settings_svc.tax_config(db)
     tax_cents = pct(base, cfg.gst_rate) + pct(base, cfg.pst_rate)
-    # Charge the pre-tip total; the terminal adds the customer's tip on top.
-    amount = base + tax_cents + svc_cents
+    # A terminal payment is a card tender, so the card surcharge applies (on the
+    # pre-tip bill). The terminal adds the customer's tip on top of all this.
+    surcharge_cents = pct(base + tax_cents + svc_cents, settings_svc.card_surcharge_rate(db))
+    amount = base + tax_cents + svc_cents + surcharge_cents
 
     selected = [l.item.id for l in lines]
     table = order.table.number if order.table else "—"
@@ -530,6 +535,7 @@ def terminal_status(
             staff_id=staff.id,
             tip_cents=tip_cents,
             service_charge_cents=svc_cents,
+            card_surcharge_rate=settings_svc.card_surcharge_rate(db),
             item_ids=payable,
             card_last4=last4,
             card_brand=brand,
@@ -615,6 +621,7 @@ def take_full_payment(
             staff_id=staff.id,
             tip_cents=max(0, tip_cents),
             service_charge_cents=max(0, service_charge_cents),
+            card_surcharge_rate=settings_svc.card_surcharge_rate(db),
             discount_cents=discount_cents,
             discount_approved_by_id=(
                 approved_by_id or (staff.id if can(staff, "discount.approve") else None)

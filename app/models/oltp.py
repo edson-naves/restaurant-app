@@ -684,6 +684,10 @@ class Payment(Base):
     # House revenue (not the waiter's tip) and, like the tip, not itself taxed,
     # so the stored total is items - discount + tax + tip + service_charge.
     service_charge_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Optional card surcharge (settings.card_surcharge_rate), charged only on
+    # card payments. Like the service charge, it is not itself taxed, so the
+    # stored total is items - discount + tax + tip + service_charge + card_surcharge.
+    card_surcharge_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     discount_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # Combined sales tax (GST + PST) on (items - discount). Zero on payments
     # taken before tax existed, so their stored total still equals

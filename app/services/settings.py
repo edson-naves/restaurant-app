@@ -28,6 +28,9 @@ DEFAULTS: dict[str, str] = {
     "auto_gratuity_rate": "18",
     # Mandatory house service charge on every bill (4.2.6). 0 disables it.
     "service_charge_rate": "0",
+    # Optional surcharge added only when the guest pays by card, to pass on the
+    # card-processing cost. A percent of the pre-tip bill. 0 disables it.
+    "card_surcharge_rate": "0",
 }
 
 # What the settings form is allowed to write. Anything else is ignored, so a
@@ -99,6 +102,12 @@ def gratuity_config(db: Session) -> GratuityConfig:
 def service_charge_rate(db: Session) -> float:
     """The mandatory house service-charge percent (0 = off)."""
     return _rate(_all(db)["service_charge_rate"])
+
+
+def card_surcharge_rate(db: Session) -> float:
+    """The card-payment surcharge percent (0 = off). Applied only when the
+    guest settles with a card, to pass on the processing cost."""
+    return _rate(_all(db)["card_surcharge_rate"])
 
 
 def save(db: Session, values: dict[str, str]) -> None:

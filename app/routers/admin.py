@@ -1143,6 +1143,10 @@ def save_settings(
     gst_number: str = Form(""),
     pst_rate: str = Form("0"),
     pst_number: str = Form(""),
+    auto_gratuity_party: str = Form("0"),
+    auto_gratuity_rate: str = Form("0"),
+    service_charge_rate: str = Form("0"),
+    card_surcharge_rate: str = Form("0"),
     biz_name: str = Form(""),
     biz_address: str = Form(""),
     biz_postal: str = Form(""),
@@ -1150,16 +1154,27 @@ def save_settings(
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
-    for label, raw in (("GST", gst_rate), ("PST", pst_rate)):
+    # Every percentage/count on the form must be a number, 0 or greater.
+    for label, raw in (
+        ("GST", gst_rate), ("PST", pst_rate),
+        ("Auto-gratuity party size", auto_gratuity_party),
+        ("Auto-gratuity rate", auto_gratuity_rate),
+        ("Service charge", service_charge_rate),
+        ("Card fee", card_surcharge_rate),
+    ):
         try:
             if float(raw) < 0:
                 raise ValueError
         except ValueError:
-            raise HTTPException(400, f"{label} rate must be a number, 0 or greater.")
+            raise HTTPException(400, f"{label} must be a number, 0 or greater.")
 
     settings_svc.save(db, {
         "gst_rate": gst_rate, "gst_number": gst_number,
         "pst_rate": pst_rate, "pst_number": pst_number,
+        "auto_gratuity_party": auto_gratuity_party,
+        "auto_gratuity_rate": auto_gratuity_rate,
+        "service_charge_rate": service_charge_rate,
+        "card_surcharge_rate": card_surcharge_rate,
         "biz_name": biz_name, "biz_address": biz_address,
         "biz_postal": biz_postal, "biz_phone": biz_phone,
     })

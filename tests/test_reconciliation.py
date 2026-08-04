@@ -121,16 +121,17 @@ check(src_tax == hdr_tax, "GST: OLTP payments == fact_order_header",
       f"{money(src_tax)} vs {money(hdr_tax)}")
 
 # The whole equation must hold at payment level:
-# total = items - disc + tax + tip + service charge.
+# total = items - disc + tax + tip + service charge + card surcharge.
 bad_total = db.execute(
     select(func.count()).select_from(Payment).where(
         Payment.order_id.in_(closed_ids),
         Payment.total_cents
         != Payment.items_cents - Payment.discount_cents + Payment.tax_cents
-        + Payment.tip_cents + Payment.service_charge_cents,
+        + Payment.tip_cents + Payment.service_charge_cents + Payment.card_surcharge_cents,
     )
 ).scalar_one()
-check(bad_total == 0, "every payment total equals items - discount + tax + tip + service charge",
+check(bad_total == 0,
+      "every payment total equals items - discount + tax + tip + service charge + card fee",
       f"{bad_total} rows break the identity")
 
 # Post-settlement refunds: source total for closed orders == fact header total.

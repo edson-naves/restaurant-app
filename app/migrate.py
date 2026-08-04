@@ -50,6 +50,12 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("payment", "service_charge_cents", "INTEGER NOT NULL DEFAULT 0"),
     ("fact_payment", "service_charge_cents", "INTEGER NOT NULL DEFAULT 0"),
     ("fact_order_header", "service_charge_cents", "INTEGER NOT NULL DEFAULT 0"),
+    # Optional card surcharge. Defaulting to 0 keeps every existing payment's
+    # stored total (items - discount + tax + tip + service_charge) unchanged and
+    # reconciling until a rate is set.
+    ("payment", "card_surcharge_cents", "INTEGER NOT NULL DEFAULT 0"),
+    ("fact_payment", "card_surcharge_cents", "INTEGER NOT NULL DEFAULT 0"),
+    ("fact_order_header", "card_surcharge_cents", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 DEFAULT_FLOOR = "1st floor"
@@ -58,14 +64,16 @@ DEFAULT_FLOOR = "1st floor"
 def run(engine: Engine) -> list[str]:
     """Apply any missing columns, then backfill. Returns what changed.
 
-    These additive migrations exist to evolve an *existing* SQLite development
-    database whose schema predates a column, and they introspect with SQLite's
-    PRAGMA. A fresh Postgres (or any non-SQLite) gets the full, current schema
-    from Base.metadata.create_all() and seeds its floors/zones in seed_reference,
-    so there is nothing to migrate — skip cleanly rather than run PRAGMA there.
+    These additive migrations exist to evolve an *existing* database whose
+    schema predates a column. SQLite (dev) is introspected with PRAGMA; Postgres
+    (prod on Render) with information_schema. A *fresh* database gets the full
+    current schema from Base.metadata.create_all(), so the checks below simply
+    find every column present and do nothing — but an existing Postgres created
+    before a column was added still needs it, which is what the Postgres branch
+    handles (previously it was skipped, so new columns never reached prod).
     """
     if engine.dialect.name != "sqlite":
-        return []
+        return _run_postgres(engine)
     applied: list[str] = []
     with engine.begin() as conn:
         for table, column, ddl in ADDED_COLUMNS:
@@ -78,6 +86,49 @@ def run(engine: Engine) -> list[str]:
             applied.append(f"{table}.{column}")
 
         applied.extend(_backfill_locations(conn))
+    return applied
+
+
+def _run_postgres(engine: Engine) -> list[str]:
+    """Additive ADD COLUMN for an existing Postgres database (Render).
+
+    Only columns that are genuinely missing are added, checked against
+    information_schema. Every column already present (a fresh DB has them all
+    from create_all) is skipped, so in practice this only ever adds the newest
+    columns — all of which use cross-compatible DDL (INTEGER NOT NULL DEFAULT 0).
+    Each ALTER runs in its own transaction and is guarded, so one failure can't
+    abort the others or block startup.
+    """
+    applied: list[str] = []
+    for table, column, ddl in ADDED_COLUMNS:
+        with engine.connect() as conn:
+            exists = conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_name = :t AND table_schema = current_schema()"
+                ),
+                {"t": table},
+            ).first()
+            if not exists:
+                continue                       # create_all owns a not-yet-made table
+            has_col = conn.execute(
+                text(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_name = :t AND column_name = :c "
+                    "AND table_schema = current_schema()"
+                ),
+                {"t": table, "c": column},
+            ).first()
+            if has_col:
+                continue                       # already migrated
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS {column} {ddl}')
+                )
+            applied.append(f"{table}.{column}")
+        except Exception as exc:               # noqa: BLE001 — never block startup
+            applied.append(f"SKIPPED {table}.{column}: {exc}")
     return applied
 
 

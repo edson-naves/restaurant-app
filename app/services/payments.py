@@ -287,6 +287,20 @@ def _taxes(db: Session, taxable_cents: int) -> tuple[int, int]:
     return pct(base, cfg.gst_rate), pct(base, cfg.pst_rate)
 
 
+def is_card(instrument: PaymentInstrument) -> bool:
+    """True for tenders that incur a card-processing cost."""
+    return instrument.instrument_type in ("card", "contactless")
+
+
+def _card_surcharge(instrument: PaymentInstrument, rate: float, base_cents: int) -> int:
+    """The card surcharge on a base amount — zero unless it's a card tender and
+    a rate is set (4.2.6). Kept in one place so seat and whole-order payments,
+    and the pre-charge preview, all agree."""
+    if rate and is_card(instrument):
+        return pct(max(base_cents, 0), rate)
+    return 0
+
+
 def active_payments(order: Order) -> list[Payment]:
     """Payments that still count — voided ones are kept for the record only."""
     return [p for p in order.payments if not p.voided]
@@ -309,6 +323,7 @@ def pay_seat(
     staff_id: int,
     tip_cents: int = 0,
     service_charge_cents: int = 0,
+    card_surcharge_rate: float = 0.0,
     item_ids: list[int] | None = None,
     discount_cents: int = 0,
     discount_approved_by_id: int | None = None,
@@ -355,7 +370,14 @@ def pay_seat(
 
     gst_cents, pst_cents = _taxes(db, items_cents - discount_cents)
     tax_cents = gst_cents + pst_cents
-    total_cents = items_cents - discount_cents + tax_cents + tip_cents + service_charge_cents
+    # 4.2.6 — a card surcharge is charged only on card tenders, on the pre-tip
+    # bill (items - discount + tax + service charge). Cash is never surcharged.
+    card_surcharge_cents = _card_surcharge(
+        instrument, card_surcharge_rate,
+        items_cents - discount_cents + tax_cents + service_charge_cents,
+    )
+    total_cents = (items_cents - discount_cents + tax_cents + tip_cents
+                   + service_charge_cents + card_surcharge_cents)
     if total_cents < 0:
         raise PaymentError("Payment total cannot be negative.")
 
@@ -367,6 +389,7 @@ def pay_seat(
         items_cents=items_cents,
         tip_cents=tip_cents,
         service_charge_cents=service_charge_cents,
+        card_surcharge_cents=card_surcharge_cents,
         discount_cents=discount_cents,
         tax_cents=tax_cents,
         total_cents=total_cents,
@@ -429,6 +452,7 @@ def pay_whole_order(
     staff_id: int,
     tip_cents: int = 0,
     service_charge_cents: int = 0,
+    card_surcharge_rate: float = 0.0,
     discount_cents: int = 0,
     discount_approved_by_id: int | None = None,
     card_last4: str | None = None,
@@ -455,6 +479,11 @@ def pay_whole_order(
             raise PaymentError("A discount requires manager approval.")
         discount_cents = min(discount_cents, items_cents)
 
+    tax_cents = sum(_taxes(db, items_cents - discount_cents))
+    card_surcharge_cents = _card_surcharge(
+        instrument, card_surcharge_rate,
+        items_cents - discount_cents + tax_cents + service_charge_cents,
+    )
     payment = Payment(
         order_id=order.id,
         seat_id=None,
@@ -463,10 +492,11 @@ def pay_whole_order(
         items_cents=items_cents,
         tip_cents=tip_cents,
         service_charge_cents=service_charge_cents,
+        card_surcharge_cents=card_surcharge_cents,
         discount_cents=discount_cents,
-        tax_cents=sum(_taxes(db, items_cents - discount_cents)),
-        total_cents=items_cents - discount_cents
-        + sum(_taxes(db, items_cents - discount_cents)) + tip_cents + service_charge_cents,
+        tax_cents=tax_cents,
+        total_cents=items_cents - discount_cents + tax_cents + tip_cents
+        + service_charge_cents + card_surcharge_cents,
         card_brand=instrument.card_brand,
         card_last4=card_last4 if instrument.instrument_type in ("card", "contactless") else None,
         created_at=datetime.now(),
@@ -646,6 +676,8 @@ def _issue_receipt(
         **_tax_breakdown(db, payment),
         "service_charge": money(payment.service_charge_cents),
         "service_charge_cents": payment.service_charge_cents,
+        "card_surcharge": money(payment.card_surcharge_cents),
+        "card_surcharge_cents": payment.card_surcharge_cents,
         "tip": money(payment.tip_cents),
         "total": money(payment.total_cents),
         "total_cents": payment.total_cents,

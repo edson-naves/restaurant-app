@@ -80,6 +80,21 @@
   </div>
 
   <div class="card">
+    <strong>Card transaction fee</strong>
+    <p class="sub" style="margin:2px 0 12px">
+      An optional surcharge added <em>only when the guest pays by card</em>, to
+      pass on the processing cost. A percent of the pre-tip bill. It's shown to
+      the guest on the payment screen and as its own line on the receipt. Cash
+      payments are never surcharged. Set to 0 to switch it off.
+    </p>
+    <div class="field" style="max-width:140px">
+      <label>Card fee (%)</label>
+      <input type="number" name="card_surcharge_rate" step="0.01" min="0"
+             value="{{ settings.card_surcharge_rate }}">
+    </div>
+  </div>
+
+  <div class="card">
     <strong>Receipt identity</strong>
     <p class="sub" style="margin:2px 0 12px">The heading printed on every receipt.</p>
     <div class="field">

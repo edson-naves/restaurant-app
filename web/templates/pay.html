@@ -144,6 +144,7 @@
             ({% if tax_cfg.pst_rate %}GST {{ tax_cfg.gst_rate }}% + PST {{ tax_cfg.pst_rate }}%{% else %}GST {{ tax_cfg.gst_rate }}%{% endif %})
             is added to the item subtotal at payment.
             {% if service_charge_rate %}A {{ service_charge_rate }}% service charge also applies.{% endif %}
+            {% if card_surcharge_rate %}<br><b>A {{ card_surcharge_rate }}% card fee is added when paying by card</b> (never on cash).{% endif %}
           </p>
           <button class="btn good" style="width:100%">Confirm payment</button>
         </form>
@@ -158,6 +159,7 @@
         <button class="btn primary" style="width:100%">💳 Pay on card terminal</button>
         <p class="sub" style="margin:6px 0 0;font-size:11px">
           Customer taps &amp; tips on the machine — the tip comes back automatically.
+          {% if card_surcharge_rate %}A {{ card_surcharge_rate }}% card fee is included.{% endif %}
         </p>
       </form>
       {% endif %}
@@ -184,6 +186,9 @@
       <div class="bal-row"><span class="lbl">Seats paid</span><span>{{ panel.seats_paid }} / {{ panel.seats_total }}</span></div>
       <div class="bal-row"><span class="lbl">Seats remaining</span><span>{{ panel.seats_remaining }}</span></div>
       <div class="bal-row big"><span>Still owed</span><span class="owed">${{ panel.owed_cents|money }}</span></div>
+      {% if card_surcharge_rate %}
+      <div class="bal-row"><span class="lbl">Card fee ({{ card_surcharge_rate }}%)</span><span class="sub">added on card payments</span></div>
+      {% endif %}
       {% if panel.service_charge_cents or panel.auto_gratuity_cents %}
       <p class="sub" style="margin:10px 0 0;font-size:11px">Still to be added on the amount owed:</p>
       {% if panel.service_charge_cents %}
@@ -240,7 +245,7 @@
           </div>
         </div>
         <p class="sub" style="margin:0 0 8px">
-          Plus {{ tax_cfg.total_rate }}% tax on the items{% if service_charge_rate %}, a {{ service_charge_rate }}% service charge{% endif %}, and any tip.
+          Plus {{ tax_cfg.total_rate }}% tax on the items{% if service_charge_rate %}, a {{ service_charge_rate }}% service charge{% endif %}{% if card_surcharge_rate %}, a {{ card_surcharge_rate }}% card fee if paying by card{% endif %}, and any tip.
         </p>
         <button class="btn primary" style="width:100%">Settle ${{ panel.owed_cents|money }} + tax</button>
       </form>
