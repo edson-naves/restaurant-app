@@ -100,9 +100,9 @@
             <td>
               {{ avatar(p) }}
               <div class="photo-actions">
-                <form method="post" action="/admin/staff/{{ p.id }}/photo" enctype="multipart/form-data" style="margin:0;display:flex;gap:3px;align-items:center">
-                  <input type="file" name="photo" accept="image/*" class="photo-file">
-                  <button class="btn xs" title="Upload photo">↑</button>
+                {# Uploads automatically the moment a file is chosen. #}
+                <form method="post" action="/admin/staff/{{ p.id }}/photo" enctype="multipart/form-data" style="margin:0">
+                  <input type="file" name="photo" accept="image/*" class="photo-file" onchange="this.form.submit()">
                 </form>
                 {% if p.photo %}<form method="post" action="/admin/staff/{{ p.id }}/photo/remove" style="margin:0"><button class="btn xs danger" title="Remove photo">✕</button></form>{% endif %}
               </div>
