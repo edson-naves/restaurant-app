@@ -142,4 +142,20 @@
       post("/schedule/shifts/" + id + "/delete", {});
     }
   };
+
+  // One-click position/colour picker — preserves the shift's person and times.
+  window.setPosition = function (e, id, positionId) {
+    e.preventDefault();
+    e.stopPropagation();
+    var b = document.querySelector('.cblock[data-shift-id="' + id + '"]');
+    if (!b) return;
+    var col = b.closest(".cal-col");
+    var startMin = parseInt(b.dataset.startMin, 10);
+    var dur = parseInt(b.dataset.duration || String(DEFAULT_MIN), 10);
+    post("/schedule/shifts/" + id + "/edit", {
+      staff_id: b.dataset.staffId || "0", position_id: positionId,
+      date: col.dataset.date, start: hhmm(startMin), end: hhmm(startMin + dur),
+      notes: b.dataset.notes || "",
+    });
+  };
 })();

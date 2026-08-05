@@ -109,6 +109,13 @@
               {% elif b.state == 'in' %}<form method="post" action="/schedule/shifts/{{ b.shift.id }}/clock-out"><button class="btn xs warn">Clock out</button></form>{% endif %}
               {% endif %}
               {% if can('schedule.manage') %}
+              {# One-click position/colour picker — sets the block's colour. #}
+              <div class="cb-pos-pick">
+                {% for p in positions %}
+                <button type="button" class="cb-swatch {{ 'on' if p.id == b.shift.position_id else '' }}" style="background:{{ p.color }}" title="{{ p.name }}" onclick="setPosition(event, {{ b.shift.id }}, {{ p.id }})"></button>
+                {% endfor %}
+                <button type="button" class="cb-swatch none {{ 'on' if not b.shift.position_id else '' }}" title="No position" onclick="setPosition(event, {{ b.shift.id }}, 0)">✕</button>
+              </div>
               {# Notes only — person, position and times are set by dragging, so
                  they ride along as hidden fields and stay unchanged on save. #}
               <form method="post" action="/schedule/shifts/{{ b.shift.id }}/edit" class="shift-edit">
