@@ -1016,7 +1016,7 @@ td.pending { color: var(--accent); font-weight: 700; }
 
 .sched-wrap {
   display: grid; gap: 16px; align-items: start;
-  grid-template-columns: 250px minmax(0, 1fr);
+  grid-template-columns: 260px minmax(0, 1fr);
   grid-template-areas: "team cal" "req cal";
 }
 .team-panel { grid-area: team; }
@@ -1111,7 +1111,7 @@ td.pending { color: var(--accent); font-weight: 700; }
 .cblock.timeoff .cb-name { font-weight: 700; }
 
 /* Requests panel (under the Team panel, left column) */
-.req-panel { grid-area: req; }
+.req-panel { grid-area: req; min-width: 0; }
 .req-group { margin-top: 12px; }
 .req-title { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
 .req-badge { background: #ef4444; color: #fff; border-radius: 10px; padding: 0 6px; font-size: 11px; }
@@ -1119,7 +1119,12 @@ td.pending { color: var(--accent); font-weight: 700; }
 .req-card .pill { align-self: flex-start; }
 .req-act { display: flex; gap: 6px; }
 .req-form summary { width: 100%; }
-.req-form input[type="date"], .req-form input[type="text"] { width: 100%; }
+.req-form label { min-width: 0; }
+.req-form input[type="date"], .req-form input[type="text"] { width: 100%; min-width: 0; box-sizing: border-box; }
+/* Hide the year in the time-off date fields (only near-term requests) — the
+   value still carries the year, defaulted to this year. */
+.req-form input[type="date"]::-webkit-datetime-edit-year-field,
+.req-form input[type="date"]::-webkit-datetime-edit-text:last-child { display: none; }
 
 .nav-badge {
   margin-left: auto; background: #ef4444; color: #fff; border-radius: 10px;

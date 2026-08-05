@@ -195,8 +195,8 @@
       <summary class="btn primary sm">+ Request time off</summary>
       <form method="post" action="/schedule/timeoff" style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
         <div style="display:flex;gap:8px">
-          <label class="sub" style="flex:1;display:flex;flex-direction:column;gap:3px">From<input type="date" name="start_date" required></label>
-          <label class="sub" style="flex:1;display:flex;flex-direction:column;gap:3px">To<input type="date" name="end_date"></label>
+          <label class="sub" style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">From<input type="date" name="start_date" value="{{ today.isoformat() }}" required></label>
+          <label class="sub" style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">To<input type="date" name="end_date"></label>
         </div>
         <input type="text" name="reason" placeholder="Reason (optional)">
         <button class="btn good">Request</button>
