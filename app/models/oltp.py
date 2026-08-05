@@ -182,6 +182,9 @@ class Staff(Base):
     # stored as a small resized data-URI so it survives redeploys without a disk.
     wage_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     photo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # A short availability note shown in the schedule team panel (e.g. "Prefers
+    # mornings", "Weekends only").
+    availability_note: Mapped[str] = mapped_column(String(60), nullable=False, default="")
     hired_on: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     position: Mapped["Position | None"] = relationship(lazy="joined")

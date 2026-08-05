@@ -1028,6 +1028,7 @@ td.pending { color: var(--accent); font-weight: 700; }
 .photo-actions { display: flex; gap: 4px; align-items: center; margin-top: 4px; }
 .photo-file { max-width: 118px; font-size: 11px; }
 .team-meta b { font-size: 13px; }
+.team-meta .avail { font-size: 11px; color: #f59e0b; }
 
 .cal { flex: 1; min-width: 0; }
 .cal-toolbar {

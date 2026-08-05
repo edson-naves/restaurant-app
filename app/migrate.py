@@ -65,6 +65,7 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # it works on SQLite and Postgres alike and needs no upload disk).
     ("staff", "wage_cents", "INTEGER NOT NULL DEFAULT 0"),
     ("staff", "photo", "TEXT"),
+    ("staff", "availability_note", "VARCHAR(60) NOT NULL DEFAULT ''"),
 )
 
 DEFAULT_FLOOR = "1st floor"

@@ -66,6 +66,10 @@
         <input type="number" name="wage" min="0" step="0.01" value="0">
       </div>
       <div class="field">
+        <label>Availability <span class="sub">(note)</span></label>
+        <input type="text" name="availability" maxlength="60" placeholder="e.g. Prefers mornings">
+      </div>
+      <div class="field">
         <label>PIN (4–8 digits)</label>
         <input type="text" name="pin_code" inputmode="numeric" pattern="[0-9]{4,8}" required>
       </div>
@@ -91,7 +95,7 @@
         <thead>
           <tr>
             <th>Photo</th><th>Name</th><th>Role</th><th>Position</th><th>Pay/hr</th>
-            <th>New PIN</th><th class="num">Open orders</th><th></th>
+            <th>Availability</th><th>New PIN</th><th class="num">Open orders</th><th></th>
           </tr>
         </thead>
         <tbody>
@@ -130,6 +134,10 @@
                      value="{{ '%.2f'|format(p.wage_cents / 100) }}" style="width:90px">
             </td>
             <td>
+              <input form="saveall" type="text" name="availability" maxlength="60"
+                     value="{{ p.availability_note }}" placeholder="e.g. Prefers mornings" style="width:150px">
+            </td>
+            <td>
               <input form="saveall" type="text" name="pin_code" placeholder="unchanged"
                      inputmode="numeric" pattern="[0-9]{4,8}" style="width:110px">
             </td>
@@ -152,7 +160,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="8" class="empty">No staff yet.</td></tr>
+          <tr><td colspan="9" class="empty">No staff yet.</td></tr>
         {% endfor %}
         </tbody>
       </table>

@@ -996,6 +996,7 @@ def create_staff(
     pin_code: str = Form(...),
     position_id: int = Form(0),
     wage: str = Form("0"),
+    availability: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("staff.manage")),
 ):
@@ -1004,14 +1005,16 @@ def create_staff(
         raise HTTPException(400, "Name is required.")
     db.add(Staff(
         name=name, role=_check_role(role), pin_code=_check_pin(pin_code),
-        position_id=(position_id or None), wage_cents=_wage_cents(wage), is_active=True,
+        position_id=(position_id or None), wage_cents=_wage_cents(wage),
+        availability_note=availability.strip()[:60], is_active=True,
     ))
     db.commit()
     return RedirectResponse("/admin/staff", status_code=303)
 
 
 def _apply_staff_edit(db: Session, person: Staff, name: str, role: str,
-                      pin_code: str, position_id: int = 0, wage: str = "0") -> None:
+                      pin_code: str, position_id: int = 0, wage: str = "0",
+                      availability: str = "") -> None:
     """Apply one person's edits. Shared by the single-row and save-all routes."""
     name = name.strip()
     if not name:
@@ -1025,6 +1028,7 @@ def _apply_staff_edit(db: Session, person: Staff, name: str, role: str,
     person.role = role
     person.position_id = position_id or None
     person.wage_cents = _wage_cents(wage)
+    person.availability_note = availability.strip()[:60]
     if pin_code.strip():                       # blank means "leave the PIN alone"
         person.pin_code = _check_pin(pin_code)
 
@@ -1037,13 +1041,14 @@ def edit_staff(
     pin_code: str = Form(""),
     position_id: int = Form(0),
     wage: str = Form("0"),
+    availability: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("staff.manage")),
 ):
     person = db.get(Staff, staff_id)
     if person is None:
         raise HTTPException(404, "Staff member not found")
-    _apply_staff_edit(db, person, name, role, pin_code, position_id, wage)
+    _apply_staff_edit(db, person, name, role, pin_code, position_id, wage, availability)
     db.commit()
     return RedirectResponse("/admin/staff", status_code=303)
 
@@ -1088,6 +1093,7 @@ def save_all_staff(
     pin_code: list[str] = Form([]),
     position_id: list[int] = Form([]),
     wage: list[str] = Form([]),
+    availability: list[str] = Form([]),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("staff.manage")),
 ):
@@ -1099,14 +1105,16 @@ def save_all_staff(
     the lot back, so the operator can always tell which of their edits stuck.
     """
     if len({len(staff_id), len(name), len(role), len(pin_code),
-            len(position_id), len(wage)}) != 1:
+            len(position_id), len(wage), len(availability)}) != 1:
         raise HTTPException(400, "The form did not submit completely — reload and retry.")
     try:
-        for sid, nm, rl, pin, pos, wg in zip(staff_id, name, role, pin_code, position_id, wage):
+        for sid, nm, rl, pin, pos, wg, av in zip(
+            staff_id, name, role, pin_code, position_id, wage, availability
+        ):
             person = db.get(Staff, sid)
             if person is None:
                 raise HTTPException(404, f"Staff id {sid} not found")
-            _apply_staff_edit(db, person, nm, rl, pin, pos, wg)
+            _apply_staff_edit(db, person, nm, rl, pin, pos, wg, av)
             db.flush()
         db.commit()
     except Exception:

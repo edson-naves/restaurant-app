@@ -17,6 +17,7 @@
         <div class="team-meta">
           <b>{{ m.staff.name }}</b>
           <div class="sub">{{ m.staff.role|replace('_',' ') }} · {{ '%.0f'|format(m.weekly_hours) }}h</div>
+          {% if m.staff.availability_note %}<div class="avail">{{ m.staff.availability_note }}</div>{% endif %}
         </div>
       </div>
       {% endfor %}

@@ -833,9 +833,12 @@ r = client.post("/admin/staff/save-all", data={
     "pin_code": ["", ""],
     "position_id": [0, 0],
     "wage": ["0", "18.50"],
+    "availability": ["", "Prefers mornings"],
 })
 check(r.status_code == 200, "save-all saves the staff page in one request")
 check(fresh(Staff, id=p.id).wage_cents == 1850, "save-all stored the hourly wage in cents")
+check(fresh(Staff, id=p.id).availability_note == "Prefers mornings",
+      "save-all stored the availability note")
 check(fresh(Staff, id=p.id).name == "QA Probe Renamed"
       and fresh(Staff, id=p.id).role == Role.WAITER,
       "save-all applied the renamed, re-roled row")
