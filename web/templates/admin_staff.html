@@ -80,7 +80,7 @@
   <div class="card" style="flex:3">
     <div class="between">
       <strong>Team</strong>
-      <button form="saveall" class="btn primary sm">Save all changes</button>
+      <span class="sub">Changes save automatically</span>
     </div>
     {# One form for every row. A <form> is not valid inside <table>, so it is
        declared here and each row binds to it with form="". Rows submit as
@@ -157,16 +157,22 @@
         </tbody>
       </table>
     </div>
-    {% if people or retired %}
-    <div style="margin-top:12px;text-align:right">
-      <button form="saveall" class="btn primary">Save all changes</button>
-    </div>
-    {% endif %}
     <p class="sub" style="margin:12px 0 0">
-      Name, role and PIN are saved together. Staff are never deleted — past
-      orders, payments and the staff report reference them; deactivating just
-      revokes access and removes them from the floor.
+      Every row saves automatically when you change a field. Staff are never
+      deleted — past orders, payments and the staff report reference them;
+      deactivating just revokes access and removes them from the floor.
     </p>
   </div>
 </div>
+
+<script>
+  // Auto-save: changing any staff field submits the whole page (all rows go as
+  // parallel lists, so one change saves everything, then the page reloads).
+  document.querySelectorAll('[form="saveall"]').forEach(function (el) {
+    if (el.type === 'hidden') return;
+    el.addEventListener('change', function () {
+      document.getElementById('saveall').submit();
+    });
+  });
+</script>
 {% endblock %}
