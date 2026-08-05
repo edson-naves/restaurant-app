@@ -95,6 +95,27 @@
   </div>
 
   <div class="card">
+    <strong>Schedule calendar hours</strong>
+    <p class="sub" style="margin:2px 0 12px">
+      The time window the staff schedule shows, in 24-hour time (e.g. 8 = 8am,
+      23 = 11pm, 24 = midnight). The grid still expands automatically to fit any
+      shift that starts earlier or ends later.
+    </p>
+    <div class="row" style="gap:16px">
+      <div class="field" style="max-width:120px">
+        <label>Day starts (0–23)</label>
+        <input type="number" name="schedule_start_hour" min="0" max="23" step="1"
+               value="{{ settings.schedule_start_hour }}">
+      </div>
+      <div class="field" style="max-width:120px">
+        <label>Day ends (1–24)</label>
+        <input type="number" name="schedule_end_hour" min="1" max="24" step="1"
+               value="{{ settings.schedule_end_hour }}">
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
     <strong>Receipt identity</strong>
     <p class="sub" style="margin:2px 0 12px">The heading printed on every receipt.</p>
     <div class="field">

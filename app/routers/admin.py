@@ -1158,6 +1158,8 @@ def save_settings(
     auto_gratuity_rate: str = Form("0"),
     service_charge_rate: str = Form("0"),
     card_surcharge_rate: str = Form("0"),
+    schedule_start_hour: str = Form("8"),
+    schedule_end_hour: str = Form("23"),
     biz_name: str = Form(""),
     biz_address: str = Form(""),
     biz_postal: str = Form(""),
@@ -1179,6 +1181,14 @@ def save_settings(
         except ValueError:
             raise HTTPException(400, f"{label} must be a number, 0 or greater.")
 
+    # Schedule window: whole hours 0–24 with start before end.
+    try:
+        sh_start, sh_end = int(schedule_start_hour), int(schedule_end_hour)
+    except ValueError:
+        raise HTTPException(400, "Schedule hours must be whole numbers.")
+    if not (0 <= sh_start < sh_end <= 24):
+        raise HTTPException(400, "Schedule 'day starts' must be 0–23 and before 'day ends' (1–24).")
+
     settings_svc.save(db, {
         "gst_rate": gst_rate, "gst_number": gst_number,
         "pst_rate": pst_rate, "pst_number": pst_number,
@@ -1186,6 +1196,8 @@ def save_settings(
         "auto_gratuity_rate": auto_gratuity_rate,
         "service_charge_rate": service_charge_rate,
         "card_surcharge_rate": card_surcharge_rate,
+        "schedule_start_hour": str(sh_start),
+        "schedule_end_hour": str(sh_end),
         "biz_name": biz_name, "biz_address": biz_address,
         "biz_postal": biz_postal, "biz_phone": biz_phone,
     })

@@ -31,6 +31,10 @@ DEFAULTS: dict[str, str] = {
     # Optional surcharge added only when the guest pays by card, to pass on the
     # card-processing cost. A percent of the pre-tip bill. 0 disables it.
     "card_surcharge_rate": "0",
+    # Staff schedule calendar's visible window (hours, 0–24). The grid still
+    # expands to fit any shift that falls outside these hours.
+    "schedule_start_hour": "8",
+    "schedule_end_hour": "23",
 }
 
 # What the settings form is allowed to write. Anything else is ignored, so a
@@ -108,6 +112,23 @@ def card_surcharge_rate(db: Session) -> float:
     """The card-payment surcharge percent (0 = off). Applied only when the
     guest settles with a card, to pass on the processing cost."""
     return _rate(_all(db)["card_surcharge_rate"])
+
+
+def schedule_hours(db: Session) -> tuple[int, int]:
+    """The schedule calendar's visible (start_hour, end_hour) — hours 0–24 with
+    start < end. Falls back to 08:00–23:00 for missing/invalid values."""
+    s = _all(db)
+
+    def _h(key: str, default: int) -> int:
+        try:
+            return max(0, min(24, int(float(s[key]))))
+        except (TypeError, ValueError):
+            return default
+
+    start, end = _h("schedule_start_hour", 8), _h("schedule_end_hour", 23)
+    if end <= start:
+        start, end = 8, 23
+    return start, end
 
 
 def save(db: Session, values: dict[str, str]) -> None:

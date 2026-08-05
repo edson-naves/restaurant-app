@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.oltp import Position, Shift, Staff
+from app.services import settings as settings_svc
 
 
 # Default restaurant positions with calendar colours, seeded once if none exist.
@@ -197,15 +198,16 @@ def build_calendar(db: Session, week_start: date, staff_list: list[Staff],
         select(Shift).where(*conds, who).order_by(Shift.starts_at)
     ).scalars().all()
 
-    # Visible time window: a full service day (08:00–23:00) so the calendar
-    # fills the space, expanding to fit any shift outside that window.
+    # Visible time window comes from Settings (default 08:00–23:00) and still
+    # expands to fit any shift that starts earlier or ends later.
+    cfg_start, cfg_end = settings_svc.schedule_hours(db)
     if shifts:
         earliest = min(s.starts_at.hour for s in shifts)
         latest = max(_display_end_hour(s) for s in shifts)
     else:
-        earliest, latest = 9, 17
-    start_hour = max(0, min(earliest, 8))
-    end_hour = min(24, max(latest, 23))
+        earliest, latest = cfg_start, cfg_end
+    start_hour = max(0, min(earliest, cfg_start))
+    end_hour = min(24, max(latest, cfg_end))
     start_min = start_hour * 60
     span_min = (end_hour - start_hour) * 60
 
