@@ -129,6 +129,23 @@ check(r.status_code == 303 and after.clock_out_at is not None, "waiter clocks ou
 r = waiter_c.post(f"/schedule/shifts/{osh.id}/clock-in", follow_redirects=False)
 check(r.status_code == 403, "waiter cannot clock into another member's shift", r.status_code)
 
+# 5b. Repeat a shift across days (same time on other days).
+tue = (mon + timedelta(days=1)).isoformat()
+wed = (mon + timedelta(days=2)).isoformat()
+r = owner_c.post(f"/schedule/shifts/{sh.id}/repeat", follow_redirects=False,
+                 data={"dates": tue + "," + wed})
+check(r.status_code == 303, "repeat across days accepted", r.status_code)
+d = SessionLocal()
+copies = d.query(Shift).filter(
+    Shift.staff_id == waiter.id, Shift.starts_at >= win_start, Shift.starts_at < win_end
+).all()
+for csh in copies:
+    if csh.id != sh.id and csh.starts_at.date().isoformat() in (tue, wed):
+        created.append(csh.id)
+made = {c.starts_at.date().isoformat() for c in copies if c.id != sh.id}
+d.close()
+check(tue in made and wed in made, "shift copied onto Tue and Wed at the same time", made)
+
 # 6. Overlapping shift for the same staff is rejected.
 r = owner_c.post("/schedule/shifts", follow_redirects=False, data={
     "staff_id": waiter.id, "date": day, "start": "18:00", "end": "23:00"})

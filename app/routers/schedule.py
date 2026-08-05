@@ -150,6 +150,45 @@ def edit_shift(
     )
 
 
+@router.post("/schedule/shifts/{shift_id}/repeat")
+def repeat_shift(
+    shift_id: int,
+    dates: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("schedule.manage")),
+):
+    """Copy a shift onto other days (same person, position, time-of-day and
+    length) — the 'works the same hours several days' case. Days that would
+    double-book the person are skipped."""
+    src = db.get(Shift, shift_id)
+    if src is None:
+        raise HTTPException(404, "Shift not found.")
+    dur = src.ends_at - src.starts_at
+    tod = src.starts_at.time()
+    for token in dates.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            d = datetime.strptime(token, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if d == src.starts_at.date():
+            continue
+        new_start = datetime.combine(d, tod)
+        new_end = new_start + dur
+        if src.staff_id and sched.overlaps(db, src.staff_id, new_start, new_end):
+            continue
+        db.add(Shift(
+            staff_id=src.staff_id, position_id=src.position_id,
+            starts_at=new_start, ends_at=new_end, role=src.role, notes=src.notes,
+        ))
+    db.commit()
+    return RedirectResponse(
+        f"/schedule?week={sched.monday_of(src.starts_at.date()).isoformat()}", status_code=303
+    )
+
+
 @router.post("/schedule/shifts/{shift_id}/delete")
 def delete_shift(
     shift_id: int,

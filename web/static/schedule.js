@@ -186,6 +186,44 @@
     });
   });
 
+  // ---- Extend across days: drag the right edge to repeat the shift --------
+  document.querySelectorAll(".cblock .cb-extend").forEach(function (handle) {
+    handle.addEventListener("pointerdown", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var b = handle.closest(".cblock");
+      var srcCol = b.closest(".cal-col");
+      var cols = Array.prototype.slice.call(document.querySelectorAll(".cal-col[data-date]"));
+      var srcIdx = cols.indexOf(srcCol);
+      var covered = [srcCol];
+      handle.setPointerCapture(e.pointerId);
+
+      function onMove(ev) {
+        clearOver();
+        covered = [srcCol];
+        var tgt = columnAt(ev.clientX, ev.clientY);
+        var ti = tgt ? cols.indexOf(tgt) : -1;
+        if (ti >= 0) {
+          covered = cols.slice(Math.min(srcIdx, ti), Math.max(srcIdx, ti) + 1);
+        }
+        covered.forEach(function (c) { c.classList.add("cal-col-over"); });
+      }
+      function onUp() {
+        handle.removeEventListener("pointermove", onMove);
+        handle.removeEventListener("pointerup", onUp);
+        clearOver();
+        var dates = covered
+          .filter(function (c) { return c !== srcCol; })
+          .map(function (c) { return c.dataset.date; });
+        if (dates.length) {
+          post("/schedule/shifts/" + b.dataset.shiftId + "/repeat", { dates: dates.join(",") });
+        }
+      }
+      handle.addEventListener("pointermove", onMove);
+      handle.addEventListener("pointerup", onUp);
+    });
+  });
+
   // Delete a shift (the ✕ on the block corner).
   window.deleteShift = function (e, id) {
     e.preventDefault();

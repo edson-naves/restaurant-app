@@ -128,7 +128,7 @@
               </form>
               {% endif %}
             </div>
-            {% if can('schedule.manage') %}<div class="cb-resize" title="Drag to resize"></div>{% endif %}
+            {% if can('schedule.manage') %}<div class="cb-resize" title="Drag to change hours"></div><div class="cb-extend" title="Drag across days to repeat"></div>{% endif %}
           </details>
           {% endfor %}
         </div>

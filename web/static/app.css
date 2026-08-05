@@ -1107,6 +1107,16 @@ td.pending { color: var(--accent); font-weight: 700; }
 }
 .cblock:hover .cb-resize::after { opacity: .9; }
 .cblock.resizing { z-index: 25; }
+.cb-extend {
+  position: absolute; top: 0; bottom: 0; right: 0; width: 8px;
+  cursor: ew-resize; z-index: 6; touch-action: none;
+}
+.cb-extend::after {
+  content: ""; position: absolute; top: 50%; right: 2px; width: 3px; height: 20px;
+  transform: translateY(-50%); border-radius: 2px; opacity: 0;
+  background: color-mix(in srgb, var(--pc) 80%, #fff);
+}
+.cblock:hover .cb-extend::after { opacity: .9; }
 
 .cb-del {
   position: absolute; top: 1px; right: 1px; z-index: 6;
