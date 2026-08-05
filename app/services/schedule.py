@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.oltp import Position, Shift, Staff
+from app.models.oltp import Position, Shift, Staff, TimeOffRequest, TimeOffStatus
 from app.services import settings as settings_svc
 
 
@@ -25,6 +25,22 @@ DEFAULT_POSITIONS: tuple[tuple[str, str], ...] = (
     ("Prep Cook", "#84cc16"),
     ("Dishwasher", "#9ca3af"),
 )
+
+
+def pending_timeoff(db: Session) -> list[TimeOffRequest]:
+    """All pending time-off requests (for the manager approval panel)."""
+    return db.execute(
+        select(TimeOffRequest).where(TimeOffRequest.status == TimeOffStatus.PENDING)
+        .order_by(TimeOffRequest.starts_at)
+    ).scalars().all()
+
+
+def timeoff_for(db: Session, staff_id: int, limit: int = 6) -> list[TimeOffRequest]:
+    """A person's own recent time-off requests (to show them the status)."""
+    return db.execute(
+        select(TimeOffRequest).where(TimeOffRequest.staff_id == staff_id)
+        .order_by(TimeOffRequest.created_at.desc())
+    ).scalars().all()[:limit]
 
 
 def ensure_default_positions(db: Session) -> None:
@@ -117,7 +133,7 @@ def overlaps(
 class CalBlock:
     """One shift positioned on a day column: top/height as % of the visible time
     window, plus a lane so overlapping shifts sit side by side."""
-    shift: Shift
+    shift: Shift | None
     state: str                # 'scheduled' | 'in' | 'done'
     hours: float
     is_open: bool             # unassigned (staff_id is None)
@@ -127,6 +143,8 @@ class CalBlock:
     lanes: int                # total lanes that day, for width
     top_off: int = 0          # minutes from the window start
     end_off: int = 0          # minutes from the window start (may exceed a day)
+    is_timeoff: bool = False  # an approved time-off band, not a shift
+    label: str = ""           # staff name for a time-off band
 
 
 @dataclass
@@ -217,6 +235,30 @@ def build_calendar(db: Session, week_start: date, staff_list: list[Staff],
         days[idx].labor_hours += h
         if sh.staff_id is not None:
             per_staff[sh.staff_id] = per_staff.get(sh.staff_id, 0.0) + h
+
+    # Approved time off overlapping the week → full-height bands, so a shift laid
+    # over someone's day off is a visible conflict.
+    if ids:
+        offs = db.execute(
+            select(TimeOffRequest).where(
+                TimeOffRequest.staff_id.in_(ids),
+                TimeOffRequest.status == TimeOffStatus.APPROVED,
+                TimeOffRequest.starts_at < end_dt,
+                TimeOffRequest.ends_at >= start_dt,
+            )
+        ).scalars().all()
+        for off in offs:
+            d = max(off.starts_at.date(), week_start)
+            last = min(off.ends_at.date(), week_start + timedelta(days=6))
+            while d <= last:
+                idx = (d - week_start).days
+                if 0 <= idx < 7:
+                    days[idx].blocks.append(CalBlock(
+                        shift=None, state="", hours=0.0, is_open=False,
+                        top_pct=0.0, height_pct=0.0, lane=0, lanes=1,
+                        top_off=0, end_off=span_min, is_timeoff=True, label=off.staff.name,
+                    ))
+                d += timedelta(days=1)
 
     for day in days:
         _layout_day(day.blocks, span_min)

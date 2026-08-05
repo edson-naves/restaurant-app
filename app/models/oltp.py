@@ -984,6 +984,39 @@ class Shift(Base):
     )
 
 
+class TimeOffStatus:
+    PENDING = "pending"
+    APPROVED = "approved"
+    DENIED = "denied"
+
+
+class TimeOffRequest(Base):
+    """A staff member's request to be off for a date range.
+
+    Staff file it; owner/manager approve or deny. Approved time off shows on the
+    schedule and is a visible conflict against any shift placed over it. Money
+    never touches this table.
+    """
+    __tablename__ = "time_off_request"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    staff_id: Mapped[int] = mapped_column(ForeignKey("staff.id"), nullable=False)
+    # Inclusive day range: starts_at = 00:00 of the first day off, ends_at =
+    # 23:59:59 of the last day off, so overlap maths match the shift datetimes.
+    starts_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    reason: Mapped[str] = mapped_column(String(200), default="")
+    status: Mapped[str] = mapped_column(String(20), default=TimeOffStatus.PENDING, nullable=False)
+    decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+    staff: Mapped["Staff"] = relationship(foreign_keys=[staff_id], lazy="joined")
+
+    __table_args__ = (
+        Index("ix_timeoff_status", "status", "starts_at"),
+    )
+
+
 class Position(Base):
     """A schedulable job (Server, Bartender, Host, Line Cook…) with a colour.
 

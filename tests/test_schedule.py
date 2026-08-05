@@ -17,7 +17,7 @@ load_dotenv(ROOT / ".env")
 from fastapi.testclient import TestClient
 from app.main import app
 from app.database import SessionLocal
-from app.models.oltp import Position, Role, Shift, Staff
+from app.models.oltp import Position, Role, Shift, Staff, TimeOffRequest
 from app.services import schedule as sched
 
 fails = 0
@@ -151,12 +151,33 @@ r = owner_c.post("/schedule/shifts", follow_redirects=False, data={
     "staff_id": waiter.id, "date": day, "start": "18:00", "end": "23:00"})
 check(r.status_code == 400, "overlapping shift is rejected", r.status_code)
 
+# 7. Time off: file → pending → approve → shows on the calendar; only managers decide.
+tod = (mon + timedelta(days=2)).isoformat()
+r = waiter_c.post("/schedule/timeoff", follow_redirects=False,
+                  data={"start_date": tod, "end_date": tod, "reason": "QA"})
+check(r.status_code == 303, "staff files a time-off request", r.status_code)
+d = SessionLocal()
+req = d.query(TimeOffRequest).filter(TimeOffRequest.staff_id == waiter.id).order_by(TimeOffRequest.id.desc()).first()
+d.close()
+check(req is not None and req.status == "pending", "time-off request is pending")
+check(waiter_c.post(f"/schedule/timeoff/{req.id}/approve", follow_redirects=False).status_code == 403,
+      "a non-manager cannot decide time off")
+check(owner_c.post(f"/schedule/timeoff/{req.id}/approve", follow_redirects=False).status_code == 303,
+      "owner approves the request")
+d = SessionLocal(); approved = d.get(TimeOffRequest, req.id).status == "approved"; d.close()
+check(approved, "time off is approved")
+check("cblock timeoff" in owner_c.get(f"/schedule?week={day}").text,
+      "approved time off shows as a band on the calendar")
+
 # ---- cleanup --------------------------------------------------------------
 db = SessionLocal()
 for sid in created:
     o = db.get(Shift, sid)
     if o:
         db.delete(o)
+r = db.get(TimeOffRequest, req.id)
+if r:
+    db.delete(r)
 db.commit(); db.close()
 
 print()

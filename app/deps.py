@@ -73,6 +73,8 @@ PERMISSIONS: dict[str, set[str]] = {
     # shifts unless they can manage); owner/manager build and edit the roster.
     "schedule.view":   {Role.OWNER, Role.MANAGER, Role.WAITER, Role.KITCHEN, Role.DELIVERY_COORDINATOR},
     "schedule.manage": {Role.OWNER, Role.MANAGER},
+    # Anyone may file their own requests (time off, swaps); approving is manage.
+    "schedule.request": {Role.OWNER, Role.MANAGER, Role.WAITER, Role.KITCHEN, Role.DELIVERY_COORDINATOR},
 }
 
 # Plain-English name for each permission, in the order they read on the staff

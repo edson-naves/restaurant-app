@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import can, render, require
-from app.models.oltp import Position, Shift, Staff
+from app.models.oltp import Position, Shift, Staff, TimeOffRequest, TimeOffStatus
 from app.services import schedule as sched
 
 router = APIRouter()
@@ -80,8 +80,68 @@ def schedule_page(
         "next_week": (week_start + timedelta(days=7)).isoformat(),
         "this_week": sched.monday_of(datetime.now().date()).isoformat(),
         "today": datetime.now().date(),
+        # Requests panel: managers see everyone's pending time off; everyone sees
+        # their own recent requests + a form to file a new one.
+        "pending_timeoff": sched.pending_timeoff(db) if manage else [],
+        "my_timeoff": sched.timeoff_for(db, staff.id),
         "title": "Schedule",
     })
+
+
+@router.post("/schedule/timeoff")
+def file_timeoff(
+    start_date: str = Form(...),
+    end_date: str = Form(""),
+    reason: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("schedule.request")),
+):
+    """File a time-off request for yourself (a whole-day range)."""
+    try:
+        s = datetime.strptime(start_date, "%Y-%m-%d").date()
+        e = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else s
+    except ValueError:
+        raise HTTPException(400, "Enter valid dates.")
+    if e < s:
+        s, e = e, s
+    db.add(TimeOffRequest(
+        staff_id=staff.id,
+        starts_at=datetime(s.year, s.month, s.day),
+        ends_at=datetime(e.year, e.month, e.day, 23, 59, 59),
+        reason=reason.strip(),
+    ))
+    db.commit()
+    return RedirectResponse("/schedule", status_code=303)
+
+
+def _decide_timeoff(db, staff, req_id, status) -> RedirectResponse:
+    req = db.get(TimeOffRequest, req_id)
+    if req is None:
+        raise HTTPException(404, "Request not found.")
+    req.status = status
+    req.decided_by_id = staff.id
+    db.commit()
+    return RedirectResponse(
+        f"/schedule?week={sched.monday_of(req.starts_at.date()).isoformat()}", status_code=303
+    )
+
+
+@router.post("/schedule/timeoff/{req_id}/approve")
+def approve_timeoff(
+    req_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("schedule.manage")),
+):
+    return _decide_timeoff(db, staff, req_id, TimeOffStatus.APPROVED)
+
+
+@router.post("/schedule/timeoff/{req_id}/deny")
+def deny_timeoff(
+    req_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("schedule.manage")),
+):
+    return _decide_timeoff(db, staff, req_id, TimeOffStatus.DENIED)
 
 
 def _resolve(db, staff_id: int, position_id: int) -> tuple[Staff | None, Position | None]:
