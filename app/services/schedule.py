@@ -197,13 +197,15 @@ def build_calendar(db: Session, week_start: date, staff_list: list[Staff],
         select(Shift).where(*conds, who).order_by(Shift.starts_at)
     ).scalars().all()
 
-    # Visible time window: fit the shifts, with sane defaults and a 6h floor.
+    # Visible time window: a full service day (08:00–23:00) so the calendar
+    # fills the space, expanding to fit any shift outside that window.
     if shifts:
-        start_hour = max(0, min(min(s.starts_at.hour for s in shifts), 10))
-        end_hour = min(24, max(_display_end_hour(s) for s in shifts))
-        end_hour = max(end_hour, start_hour + 6)
+        earliest = min(s.starts_at.hour for s in shifts)
+        latest = max(_display_end_hour(s) for s in shifts)
     else:
-        start_hour, end_hour = 8, 24
+        earliest, latest = 9, 17
+    start_hour = max(0, min(earliest, 8))
+    end_hour = min(24, max(latest, 23))
     start_min = start_hour * 60
     span_min = (end_hour - start_hour) * 60
 

@@ -112,6 +112,7 @@ a:hover { text-decoration: underline; }
   border-radius: 8px; padding: 9px 12px; font: inherit; min-height: 40px;
 }
 .wrap { max-width: 1240px; margin: 0 auto; padding: 22px 22px 60px; width: 100%; }
+.wrap.wrap-wide { max-width: none; }   /* full-bleed pages (e.g. Schedule) */
 .foot { text-align: center; color: var(--muted); font-size: 12px; padding: 24px; }
 
 /* ---------- sidebar "Today's Overview" panel ---------- */

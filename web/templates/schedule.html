@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block wrap_extra %}wrap-wide{% endblock %}
 {% block body %}
 {% macro initials(name) %}{% set p = name.split() %}{{ (p[0][:1] ~ (p[1][:1] if p|length > 1 else ''))|upper }}{% endmacro %}
 {% macro hourlabel(h) %}{% set d = h % 24 %}{% set h12 = d % 12 %}{{ 12 if h12 == 0 else h12 }} {{ 'AM' if d < 12 else 'PM' }}{% endmacro %}

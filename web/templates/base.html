@@ -79,7 +79,7 @@
   {% endif %}
 
   <div class="main-area">
-    <main class="wrap">
+    <main class="wrap {% block wrap_extra %}{% endblock %}">
       {% block body %}{% endblock %}
     </main>
     <footer class="foot">
