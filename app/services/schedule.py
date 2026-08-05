@@ -11,7 +11,9 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.oltp import Position, Shift, Staff, TimeOffRequest, TimeOffStatus
+from app.models.oltp import (
+    Position, Shift, Staff, SwapRequest, SwapStatus, TimeOffRequest, TimeOffStatus,
+)
 from app.services import settings as settings_svc
 
 
@@ -41,6 +43,35 @@ def timeoff_for(db: Session, staff_id: int, limit: int = 6) -> list[TimeOffReque
         select(TimeOffRequest).where(TimeOffRequest.staff_id == staff_id)
         .order_by(TimeOffRequest.created_at.desc())
     ).scalars().all()[:limit]
+
+
+def pending_swaps(db: Session) -> list[SwapRequest]:
+    """All pending swap requests (for the manager approval panel)."""
+    return db.execute(
+        select(SwapRequest).where(SwapRequest.status == SwapStatus.PENDING)
+        .order_by(SwapRequest.created_at)
+    ).scalars().all()
+
+
+def swaps_for(db: Session, staff_id: int, limit: int = 6) -> list[SwapRequest]:
+    """A person's own recent swap requests (to show them the status)."""
+    return db.execute(
+        select(SwapRequest).where(SwapRequest.requested_by_id == staff_id)
+        .order_by(SwapRequest.created_at.desc())
+    ).scalars().all()[:limit]
+
+
+def pending_request_count(db: Session) -> int:
+    """Total pending time-off + swap requests — the schedule nav badge."""
+    n = db.execute(
+        select(func.count()).select_from(TimeOffRequest)
+        .where(TimeOffRequest.status == TimeOffStatus.PENDING)
+    ).scalar() or 0
+    n += db.execute(
+        select(func.count()).select_from(SwapRequest)
+        .where(SwapRequest.status == SwapStatus.PENDING)
+    ).scalar() or 0
+    return n
 
 
 def ensure_default_positions(db: Session) -> None:

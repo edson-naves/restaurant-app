@@ -1017,6 +1017,38 @@ class TimeOffRequest(Base):
     )
 
 
+class SwapStatus:
+    PENDING = "pending"
+    APPROVED = "approved"
+    DENIED = "denied"
+
+
+class SwapRequest(Base):
+    """A staff member offering one of their shifts to someone else (or to anyone).
+
+    Approving reassigns the shift to the target (or opens it if no target).
+    Owner/manager decide. Money never touches this table.
+    """
+    __tablename__ = "swap_request"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    shift_id: Mapped[int] = mapped_column(ForeignKey("shift.id"), nullable=False)
+    requested_by_id: Mapped[int] = mapped_column(ForeignKey("staff.id"), nullable=False)
+    # None = open swap (any teammate can be assigned by a manager on approval).
+    target_staff_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default=SwapStatus.PENDING, nullable=False)
+    decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+    shift: Mapped["Shift"] = relationship(lazy="joined")
+    requested_by: Mapped["Staff"] = relationship(foreign_keys=[requested_by_id], lazy="joined")
+    target: Mapped["Staff | None"] = relationship(foreign_keys=[target_staff_id], lazy="joined")
+
+    __table_args__ = (
+        Index("ix_swap_status", "status", "created_at"),
+    )
+
+
 class Position(Base):
     """A schedulable job (Server, Bartender, Host, Line Cook…) with a colour.
 

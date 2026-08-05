@@ -205,6 +205,10 @@ def render(request: Request, template: str, ctx: dict):
         # shell. Cheap COUNT/SUM queries; skipped when there's no session.
         if staff is not None:
             base["sidebar_ov"] = sidebar_overview(db)
+            # Schedule nav badge: pending time-off + swap requests (managers only).
+            if can(staff, "schedule.manage"):
+                from app.services import schedule as _sched
+                base["pending_requests"] = _sched.pending_request_count(db)
     base.update(ctx)
     base.pop("db", None)
     return templates.TemplateResponse(request, template, base)

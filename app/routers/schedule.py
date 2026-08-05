@@ -16,7 +16,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import can, render, require
-from app.models.oltp import Position, Shift, Staff, TimeOffRequest, TimeOffStatus
+from app.models.oltp import (
+    Position, Shift, Staff, SwapRequest, SwapStatus, TimeOffRequest, TimeOffStatus,
+)
 from app.services import schedule as sched
 
 router = APIRouter()
@@ -84,6 +86,8 @@ def schedule_page(
         # their own recent requests + a form to file a new one.
         "pending_timeoff": sched.pending_timeoff(db) if manage else [],
         "my_timeoff": sched.timeoff_for(db, staff.id),
+        "pending_swaps": sched.pending_swaps(db) if manage else [],
+        "my_swaps": sched.swaps_for(db, staff.id),
         "title": "Schedule",
     })
 
@@ -142,6 +146,74 @@ def deny_timeoff(
     staff: Staff = Depends(require("schedule.manage")),
 ):
     return _decide_timeoff(db, staff, req_id, TimeOffStatus.DENIED)
+
+
+@router.post("/schedule/shifts/{shift_id}/swap")
+def request_swap(
+    shift_id: int,
+    target_staff_id: int = Form(0),           # 0 = open (any teammate)
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("schedule.request")),
+):
+    """Offer one of your shifts for a swap (to a teammate, or open to anyone)."""
+    shift = db.get(Shift, shift_id)
+    if shift is None:
+        raise HTTPException(404, "Shift not found.")
+    if shift.staff_id != staff.id and not can(staff, "schedule.manage"):
+        raise HTTPException(403, "You can only offer your own shift.")
+    target = db.get(Staff, target_staff_id) if target_staff_id else None
+    if target_staff_id and target is None:
+        raise HTTPException(404, "Unknown teammate.")
+    db.add(SwapRequest(
+        shift_id=shift.id, requested_by_id=staff.id,
+        target_staff_id=(target.id if target else None),
+    ))
+    db.commit()
+    return RedirectResponse(
+        f"/schedule?week={sched.monday_of(shift.starts_at.date()).isoformat()}", status_code=303
+    )
+
+
+@router.post("/schedule/swaps/{swap_id}/approve")
+def approve_swap(
+    swap_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("schedule.manage")),
+):
+    """Approve a swap — reassign the shift to the target (or open it)."""
+    sw = db.get(SwapRequest, swap_id)
+    if sw is None:
+        raise HTTPException(404, "Swap not found.")
+    shift = sw.shift
+    new_staff = sw.target_staff_id                # None = open
+    if new_staff and sched.overlaps(db, new_staff, shift.starts_at, shift.ends_at, exclude_id=shift.id):
+        raise HTTPException(400, "That teammate already works an overlapping shift.")
+    shift.staff_id = new_staff
+    if new_staff:
+        member = db.get(Staff, new_staff)
+        if shift.position_id is None and member and member.position_id:
+            shift.position_id = member.position_id
+    sw.status = SwapStatus.APPROVED
+    sw.decided_by_id = staff.id
+    db.commit()
+    return RedirectResponse(
+        f"/schedule?week={sched.monday_of(shift.starts_at.date()).isoformat()}", status_code=303
+    )
+
+
+@router.post("/schedule/swaps/{swap_id}/deny")
+def deny_swap(
+    swap_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("schedule.manage")),
+):
+    sw = db.get(SwapRequest, swap_id)
+    if sw is None:
+        raise HTTPException(404, "Swap not found.")
+    sw.status = SwapStatus.DENIED
+    sw.decided_by_id = staff.id
+    db.commit()
+    return RedirectResponse("/schedule", status_code=303)
 
 
 def _resolve(db, staff_id: int, position_id: int) -> tuple[Staff | None, Position | None]:

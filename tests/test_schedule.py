@@ -17,7 +17,7 @@ load_dotenv(ROOT / ".env")
 from fastapi.testclient import TestClient
 from app.main import app
 from app.database import SessionLocal
-from app.models.oltp import Position, Role, Shift, Staff, TimeOffRequest
+from app.models.oltp import Position, Role, Shift, Staff, SwapRequest, TimeOffRequest
 from app.services import schedule as sched
 
 fails = 0
@@ -169,7 +169,27 @@ check(approved, "time off is approved")
 check("cblock timeoff" in owner_c.get(f"/schedule?week={day}").text,
       "approved time off shows as a band on the calendar")
 
+# 8. Swap: waiter offers their shift to `other`; owner approves → reassigned.
+r = waiter_c.post(f"/schedule/shifts/{sh.id}/swap", follow_redirects=False,
+                  data={"target_staff_id": other.id})
+check(r.status_code == 303, "staff files a swap request", r.status_code)
+d = SessionLocal()
+sw = d.query(SwapRequest).filter(SwapRequest.shift_id == sh.id).order_by(SwapRequest.id.desc()).first()
+d.close()
+check(sw is not None and sw.status == "pending", "swap request is pending")
+check(waiter_c.post(f"/schedule/swaps/{sw.id}/approve", follow_redirects=False).status_code == 403,
+      "a non-manager cannot approve a swap")
+check(owner_c.post(f"/schedule/swaps/{sw.id}/approve", follow_redirects=False).status_code == 303,
+      "owner approves the swap")
+d = SessionLocal(); reassigned = d.get(Shift, sh.id).staff_id == other.id; d.close()
+check(reassigned, "approving the swap reassigns the shift to the target")
+
 # ---- cleanup --------------------------------------------------------------
+db = SessionLocal()
+so = db.get(SwapRequest, sw.id)
+if so:
+    db.delete(so)
+db.commit(); db.close()
 db = SessionLocal()
 for sid in created:
     o = db.get(Shift, sid)

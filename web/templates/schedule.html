@@ -106,6 +106,16 @@
               {% if b.shift.staff_id == staff.id %}
               {% if b.state == 'scheduled' %}<form method="post" action="/schedule/shifts/{{ b.shift.id }}/clock-in"><button class="btn xs good">Clock in</button></form>
               {% elif b.state == 'in' %}<form method="post" action="/schedule/shifts/{{ b.shift.id }}/clock-out"><button class="btn xs warn">Clock out</button></form>{% endif %}
+              <details class="swap-form">
+                <summary class="btn xs">Request swap</summary>
+                <form method="post" action="/schedule/shifts/{{ b.shift.id }}/swap" style="margin-top:6px;display:flex;flex-direction:column;gap:5px">
+                  <select name="target_staff_id">
+                    <option value="0">— Anyone (open) —</option>
+                    {% for m in all_staff %}{% if m.id != staff.id %}<option value="{{ m.id }}">{{ m.name }}</option>{% endif %}{% endfor %}
+                  </select>
+                  <button class="btn xs good">Send request</button>
+                </form>
+              </details>
               {% endif %}
               {% if can('schedule.manage') %}
               {# One-click position/colour picker — sets the block's colour. #}
@@ -164,6 +174,22 @@
     </div>
     {% endif %}
 
+    {% if can('schedule.manage') and pending_swaps %}
+    <div class="req-group">
+      <div class="req-title">Swaps · pending <span class="req-badge">{{ pending_swaps|length }}</span></div>
+      {% for s in pending_swaps %}
+      <div class="req-card">
+        <b>{{ s.requested_by.name }}</b>
+        <div class="sub">{{ s.shift.starts_at.strftime('%a %b') }} {{ s.shift.starts_at.day }} · {{ s.shift.starts_at.strftime('%H:%M') }}–{{ s.shift.ends_at.strftime('%H:%M') }} → {% if s.target %}{{ s.target.name }}{% else %}anyone{% endif %}</div>
+        <div class="req-act">
+          <form method="post" action="/schedule/swaps/{{ s.id }}/approve"><button class="btn xs good">Approve</button></form>
+          <form method="post" action="/schedule/swaps/{{ s.id }}/deny"><button class="btn xs danger">Deny</button></form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
     <details class="req-form">
       <summary class="btn primary sm">+ Request time off</summary>
       <form method="post" action="/schedule/timeoff" style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
@@ -181,6 +207,18 @@
       <div class="req-card">
         <span class="sub">{{ r.starts_at.strftime('%b') }} {{ r.starts_at.day }}{% if r.ends_at.date() != r.starts_at.date() %} – {{ r.ends_at.strftime('%b') }} {{ r.ends_at.day }}{% endif %}</span>
         <span class="pill {{ 'ok' if r.status == 'approved' else ('open' if r.status == 'pending' else '') }}">{{ r.status }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if my_swaps %}
+    <div class="req-group">
+      <div class="req-title">My swaps</div>
+      {% for s in my_swaps %}
+      <div class="req-card">
+        <span class="sub">{{ s.shift.starts_at.strftime('%a %b') }} {{ s.shift.starts_at.day }} → {% if s.target %}{{ s.target.name }}{% else %}anyone{% endif %}</span>
+        <span class="pill {{ 'ok' if s.status == 'approved' else ('open' if s.status == 'pending' else '') }}">{{ s.status }}</span>
       </div>
       {% endfor %}
     </div>

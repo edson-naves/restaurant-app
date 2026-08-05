@@ -30,7 +30,7 @@
       <a href="/reservations" class="{{ 'on' if request.url.path.startswith('/reservations') or request.url.path.startswith('/waitlist') else '' }}"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg><span>Reservations</span></a>
       {% endif %}
       {% if can('schedule.view') %}
-      <a href="/schedule" class="{{ 'on' if request.url.path.startswith('/schedule') else '' }}"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Schedule</span></a>
+      <a href="/schedule" class="{{ 'on' if request.url.path.startswith('/schedule') else '' }}"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Schedule</span>{% if pending_requests %}<span class="nav-badge">{{ pending_requests }}</span>{% endif %}</a>
       {% endif %}
       {% if can('kitchen.view') %}
       <a href="/kitchen" class="{{ 'on' if request.url.path.startswith('/kitchen') else '' }}"><svg viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h6"/></svg><span>Kitchen</span></a>
