@@ -157,7 +157,10 @@
 
   <!-- Requests panel -->
   <aside class="req-panel card">
-    <h3 style="margin:0 0 10px">Requests</h3>
+    <div class="between" style="margin:0 0 10px">
+      <h3 style="margin:0">Requests</h3>
+      <a class="sub" href="/schedule/requests">See all →</a>
+    </div>
 
     {% if can('schedule.manage') and pending_timeoff %}
     <div class="req-group">

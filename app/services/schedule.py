@@ -61,6 +61,22 @@ def swaps_for(db: Session, staff_id: int, limit: int = 6) -> list[SwapRequest]:
     ).scalars().all()[:limit]
 
 
+def all_timeoff(db: Session, staff_id: int | None = None) -> list[TimeOffRequest]:
+    """Every time-off request (newest first). Scoped to one person if given."""
+    q = select(TimeOffRequest).order_by(TimeOffRequest.created_at.desc())
+    if staff_id is not None:
+        q = q.where(TimeOffRequest.staff_id == staff_id)
+    return db.execute(q).scalars().all()
+
+
+def all_swaps(db: Session, staff_id: int | None = None) -> list[SwapRequest]:
+    """Every swap request (newest first). Scoped to one requester if given."""
+    q = select(SwapRequest).order_by(SwapRequest.created_at.desc())
+    if staff_id is not None:
+        q = q.where(SwapRequest.requested_by_id == staff_id)
+    return db.execute(q).scalars().all()
+
+
 def pending_request_count(db: Session) -> int:
     """Total pending time-off + swap requests — the schedule nav badge."""
     n = db.execute(

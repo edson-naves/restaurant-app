@@ -1132,6 +1132,7 @@ td.pending { color: var(--accent); font-weight: 700; }
 }
 .swap-form summary { width: 100%; }
 .swap-form select { width: 100%; min-height: 26px; font-size: 12px; }
+.req-inline { display: inline-block; margin-right: 4px; }
 
 .sched-add { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 10px; }
 .sched-add .field { margin: 0; }

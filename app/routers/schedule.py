@@ -92,6 +92,23 @@ def schedule_page(
     })
 
 
+@router.get("/schedule/requests")
+def requests_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("schedule.view")),
+):
+    """All requests in one place: managers see everyone's, staff see their own."""
+    manage = can(staff, "schedule.manage")
+    scope = None if manage else staff.id
+    return render(request, "schedule_requests.html", {
+        "db": db, "staff": staff,
+        "timeoff": sched.all_timeoff(db, scope),
+        "swaps": sched.all_swaps(db, scope),
+        "title": "Requests",
+    })
+
+
 @router.post("/schedule/timeoff")
 def file_timeoff(
     start_month: int = Form(...),

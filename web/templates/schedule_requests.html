@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block body %}
+{% macro statuspill(s) %}<span class="pill {{ 'ok' if s == 'approved' else ('open' if s == 'pending' else '') }}">{{ s }}</span>{% endmacro %}
+
+<div class="between">
+  <div>
+    <h1>Requests</h1>
+    <p class="sub">{% if can('schedule.manage') %}All staff{% else %}Your requests{% endif %} · time off &amp; swaps</p>
+  </div>
+  <a class="btn" href="/schedule">← Schedule</a>
+</div>
+
+<div class="card">
+  <strong>Shift swaps</strong>
+  <div class="scroll" style="margin-top:10px">
+    <table>
+      <thead><tr><th>Requested by</th><th>Shift</th><th>To</th><th>Status</th>{% if can('schedule.manage') %}<th></th>{% endif %}</tr></thead>
+      <tbody>
+      {% for s in swaps %}
+      <tr>
+        <td>{{ s.requested_by.name }}</td>
+        <td>{{ s.shift.starts_at.strftime('%a %b') }} {{ s.shift.starts_at.day }} · {{ s.shift.starts_at.strftime('%H:%M') }}–{{ s.shift.ends_at.strftime('%H:%M') }}</td>
+        <td>{% if s.target %}{{ s.target.name }}{% else %}anyone{% endif %}</td>
+        <td>{{ statuspill(s.status) }}</td>
+        {% if can('schedule.manage') %}
+        <td style="white-space:nowrap">
+          {% if s.status == 'pending' %}
+          <form method="post" action="/schedule/swaps/{{ s.id }}/approve" class="req-inline"><button class="btn xs good">Approve</button></form>
+          <form method="post" action="/schedule/swaps/{{ s.id }}/deny" class="req-inline"><button class="btn xs danger">Deny</button></form>
+          {% else %}<span class="sub">by {{ s.decided_by_id and 'manager' or '—' }}</span>{% endif %}
+        </td>
+        {% endif %}
+      </tr>
+      {% else %}
+      <tr><td colspan="{{ 5 if can('schedule.manage') else 4 }}" class="empty">No swap requests.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <strong>Time off</strong>
+  <div class="scroll" style="margin-top:10px">
+    <table>
+      <thead><tr><th>Staff</th><th>Dates</th><th>Reason</th><th>Status</th>{% if can('schedule.manage') %}<th></th>{% endif %}</tr></thead>
+      <tbody>
+      {% for r in timeoff %}
+      <tr>
+        <td>{{ r.staff.name }}</td>
+        <td>{{ r.starts_at.strftime('%b') }} {{ r.starts_at.day }}{% if r.ends_at.date() != r.starts_at.date() %} – {{ r.ends_at.strftime('%b') }} {{ r.ends_at.day }}{% endif %}</td>
+        <td>{{ r.reason or '—' }}</td>
+        <td>{{ statuspill(r.status) }}</td>
+        {% if can('schedule.manage') %}
+        <td style="white-space:nowrap">
+          {% if r.status == 'pending' %}
+          <form method="post" action="/schedule/timeoff/{{ r.id }}/approve" class="req-inline"><button class="btn xs good">Approve</button></form>
+          <form method="post" action="/schedule/timeoff/{{ r.id }}/deny" class="req-inline"><button class="btn xs danger">Deny</button></form>
+          {% else %}—{% endif %}
+        </td>
+        {% endif %}
+      </tr>
+      {% else %}
+      <tr><td colspan="{{ 5 if can('schedule.manage') else 4 }}" class="empty">No time-off requests.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  // Approve/deny in place — post and refresh this page, no navigation away.
+  document.querySelectorAll("form.req-inline").forEach(function (f) {
+    f.addEventListener("submit", function (e) {
+      e.preventDefault();
+      fetch(f.action, { method: "POST", body: new FormData(f) })
+        .then(function () { location.reload(); })
+        .catch(function () { location.reload(); });
+    });
+  });
+</script>
+{% endblock %}

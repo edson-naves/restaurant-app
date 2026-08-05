@@ -236,6 +236,21 @@
     });
   });
 
+  // Request/clock actions post in the background and refresh the current view
+  // in place — so approving a request updates the calendar without navigating
+  // away or making you hit refresh.
+  document.querySelectorAll(
+    'form[action^="/schedule/timeoff"], form[action^="/schedule/swaps"],'
+    + ' form[action*="/swap"], form[action*="/clock-"]'
+  ).forEach(function (f) {
+    f.addEventListener("submit", function (e) {
+      e.preventDefault();
+      fetch(f.action, { method: "POST", body: new FormData(f) })
+        .then(function () { location.reload(); })
+        .catch(function () { location.reload(); });
+    });
+  });
+
   // Pencil ✎ — open/close a block's options menu (colour + notes / clock).
   // Clicking the block itself no longer opens anything; only the pencil does.
   window.toggleMenu = function (e, btn) {
