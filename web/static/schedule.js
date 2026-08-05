@@ -62,22 +62,30 @@
   function beginDrag(type, source, e, data) {
     var ghost = document.createElement("div");
     ghost.className = "cal-ghost" + (type === "new" ? " new" : "");
-    var offY = 0, w = 150, h = 40;
+    var w = 150, h = 40, dur = DEFAULT_MIN, name = data.name || "New shift";
     if (type === "move") {
       var r = source.getBoundingClientRect();
-      offY = e.clientY - r.top; w = r.width; h = r.height;
+      w = r.width; h = r.height;
+      dur = parseInt(source.dataset.duration || String(DEFAULT_MIN), 10);
       ghost.style.setProperty("--pc", getComputedStyle(source).getPropertyValue("--pc") || "#3b82f6");
-      var nm = source.querySelector(".cb-name"), tm = source.querySelector(".cb-time");
-      ghost.innerHTML = "<b>" + (tm ? tm.textContent : "") + "</b><br>" + (nm ? nm.textContent : "");
-      ghost.style.height = h + "px";
+      var nm = source.querySelector(".cb-name"); name = nm ? nm.textContent : "";
     } else {
-      ghost.textContent = data.name || "New shift";
+      h = Math.max(30, DEFAULT_MIN / 60 * PPH);   // fresh shift looks like its 4h
     }
     ghost.style.width = w + "px";
-    drag = { type: type, source: source, data: data, offY: offY,
+    ghost.style.height = h + "px";
+    ghost.innerHTML = '<b class="g-time"></b><span class="g-name"></span>';
+    ghost.querySelector(".g-name").textContent = name;
+    // Hold the middle of the block: cursor sits at the ghost's centre.
+    drag = { type: type, source: source, data: data, w: w, h: h, dur: dur,
              startX: e.clientX, startY: e.clientY, moved: false, ghost: ghost };
     document.addEventListener("pointermove", onDragMove);
     document.addEventListener("pointerup", onDragUp);
+  }
+
+  function dropStart(col, clientY, h) {
+    // The block's TOP is half its height above the cursor (centre-held).
+    return minuteFromY(col, clientY - h / 2);
   }
 
   function onDragMove(e) {
@@ -88,11 +96,18 @@
       document.body.appendChild(drag.ghost);
       if (drag.type === "move") drag.source.style.visibility = "hidden";
     }
-    drag.ghost.style.left = (e.clientX + 8) + "px";
-    drag.ghost.style.top = (e.clientY - drag.offY) + "px";
+    drag.ghost.style.left = (e.clientX - drag.w / 2) + "px";
+    drag.ghost.style.top = (e.clientY - drag.h / 2) + "px";
     clearOver();
     var col = columnAt(e.clientX, e.clientY);
-    if (col) col.classList.add("cal-col-over");
+    var gt = drag.ghost.querySelector(".g-time");
+    if (col) {
+      col.classList.add("cal-col-over");
+      var s = dropStart(col, e.clientY, drag.h);
+      gt.textContent = hhmm(s) + "–" + hhmm(s + drag.dur);   // live time, so you see where it lands
+    } else {
+      gt.textContent = "—";
+    }
   }
 
   function onDragUp(e) {
@@ -106,17 +121,17 @@
     if (!d.moved) return;               // a click, not a drag — leave it alone
     var col = columnAt(e.clientX, e.clientY);
     if (!col) return;
-    var start = minuteFromY(col, e.clientY - d.offY);
+    var start = dropStart(col, e.clientY, d.h);
     if (d.type === "new") {
       post("/schedule/shifts", {
         staff_id: d.data.staff, position_id: 0, date: col.dataset.date,
-        start: hhmm(start), end: hhmm(start + DEFAULT_MIN), notes: "",
+        start: hhmm(start), end: hhmm(start + d.dur), notes: "",
       });
     } else {
-      var b = d.source, dur = parseInt(b.dataset.duration || String(DEFAULT_MIN), 10);
+      var b = d.source;
       post("/schedule/shifts/" + b.dataset.shiftId + "/edit", {
         staff_id: b.dataset.staffId || "0", position_id: b.dataset.positionId || "0",
-        date: col.dataset.date, start: hhmm(start), end: hhmm(start + dur),
+        date: col.dataset.date, start: hhmm(start), end: hhmm(start + d.dur),
         notes: b.dataset.notes || "",
       });
     }
@@ -154,6 +169,8 @@
         endMin = minuteFromY(col, ev.clientY);
         if (endMin < startMin + SNAP) endMin = startMin + SNAP;
         b.style.height = ((endMin - startMin) / 60 * PPH) + "px";
+        var t = b.querySelector(".cb-time");       // live time while resizing
+        if (t) t.textContent = hhmm(startMin) + "–" + hhmm(endMin);
       }
       function onUp() {
         handle.removeEventListener("pointermove", onMove);

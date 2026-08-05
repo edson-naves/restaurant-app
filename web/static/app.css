@@ -1094,6 +1094,8 @@ td.pending { color: var(--accent); font-weight: 700; }
   box-shadow: 0 6px 20px rgba(0, 0, 0, .45);
 }
 .cal-ghost.new { background: var(--accent); color: #fff; border: none; font-weight: 700; }
+.cal-ghost .g-time { display: block; font-weight: 800; }
+.cal-ghost .g-name { display: block; }
 .cb-resize {
   position: absolute; left: 0; right: 0; bottom: 0; height: 9px;
   cursor: ns-resize; z-index: 5; touch-action: none;
