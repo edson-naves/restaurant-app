@@ -26,7 +26,7 @@
     <div class="team-list">
       {% for m in cal.team %}
       <div class="team-row" data-name="{{ m.staff.name|lower }}"
-           {% if can('schedule.manage') %}draggable="true" data-staff-id="{{ m.staff.id }}" title="Drag onto a day to schedule"{% endif %}>
+           {% if can('schedule.manage') %}data-staff-id="{{ m.staff.id }}" title="Drag onto a day to schedule"{% endif %}>
         <span class="avatar">{{ initials(m.staff.name) }}</span>
         <div class="team-meta">
           <b>{{ m.staff.name }}</b>
@@ -77,7 +77,7 @@
         {% endfor %}
       </div>
 
-      <div class="cal-body" style="--rows: {{ cal.end_hour - cal.start_hour }}" data-start-hour="{{ cal.start_hour }}">
+      <div class="cal-body" style="--rows: {{ cal.end_hour - cal.start_hour }}" data-start-hour="{{ cal.start_hour }}" data-manage="{{ 1 if can('schedule.manage') else 0 }}">
         <div class="cal-gutter" style="height:calc(var(--rows) * 44px)">
           {% for h in cal.hours %}
           <div class="cal-hour" style="top:{{ loop.index0 * 44 }}px">{{ hourlabel(h) }}</div>
@@ -88,7 +88,6 @@
           {% for b in day.blocks %}
           {% set pcolor = b.shift.position.color if b.shift.position else '#64748b' %}
           <details class="cblock {{ 'open-shift' if b.is_open else '' }}"
-                   {% if can('schedule.manage') %}draggable="true"{% endif %}
                    data-shift-id="{{ b.shift.id }}"
                    data-staff-id="{{ b.shift.staff_id or 0 }}"
                    data-position-id="{{ b.shift.position_id or 0 }}"

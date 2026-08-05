@@ -1,10 +1,11 @@
-/* Schedule drag-and-drop.
+/* Schedule drag-and-drop (pointer-based).
  *
  * Managers schedule by dragging: drop a teammate from the Team panel onto a day
  * to create a shift, drag a shift block to move it, and drag a block's bottom
- * edge to resize. Every gesture just posts to the existing create/edit routes
- * and reloads — no client-side state to drift out of sync. Non-managers have no
- * draggable elements, so this is a no-op for them.
+ * edge to resize. Uses pointer events (not native HTML5 drag) so there's a live
+ * ghost, a highlighted target column, and a precise drop — and no fight with the
+ * block's click-to-open. Every gesture posts to the create/edit routes and
+ * reloads, so there's no client state to drift. Non-managers can't drag.
  */
 (function () {
   "use strict";
@@ -23,21 +24,20 @@
   var PPH = 44;                       // pixels per hour (matches the CSS grid)
   var SNAP = 5;                       // snap dropped/resized times to 5 minutes
   var DEFAULT_MIN = 240;              // a fresh dragged-in shift is 4h
+  var THRESH = 4;                     // px of movement before a press becomes a drag
   var startHour = parseInt(body.dataset.startHour || "8", 10);
+  var canManage = body.dataset.manage === "1";
 
   function minuteFromY(col, clientY) {
     var rect = col.getBoundingClientRect();
     var min = startHour * 60 + ((clientY - rect.top) / PPH) * 60;
-    min = Math.round(min / SNAP) * SNAP;
-    return Math.max(startHour * 60, min);
+    return Math.max(startHour * 60, Math.round(min / SNAP) * SNAP);
   }
-
   function hhmm(min) {
-    min = ((Math.round(min) % 1440) + 1440) % 1440;   // wrap past midnight
+    min = ((Math.round(min) % 1440) + 1440) % 1440;
     var h = Math.floor(min / 60), m = min % 60;
     return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
   }
-
   function post(url, data) {
     fetch(url, {
       method: "POST",
@@ -46,61 +46,99 @@
     }).then(function () { location.reload(); })
       .catch(function () { location.reload(); });
   }
-
-  // ---- Drag sources -------------------------------------------------------
-  document.querySelectorAll('.team-row[draggable="true"]').forEach(function (row) {
-    row.addEventListener("dragstart", function (e) {
-      e.dataTransfer.setData("text/plain", JSON.stringify({ t: "new", staff: row.dataset.staffId }));
+  function columnAt(x, y) {
+    var el = document.elementFromPoint(x, y);
+    return el ? el.closest(".cal-col[data-date]") : null;
+  }
+  function clearOver() {
+    document.querySelectorAll(".cal-col-over").forEach(function (c) {
+      c.classList.remove("cal-col-over");
     });
-  });
+  }
 
-  document.querySelectorAll('.cblock[draggable="true"]').forEach(function (b) {
-    b.addEventListener("dragstart", function (e) {
-      e.stopPropagation();
-      e.dataTransfer.setData("text/plain", JSON.stringify({
-        t: "move",
-        id: b.dataset.shiftId,
-        staff: b.dataset.staffId || "0",
-        pos: b.dataset.positionId || "0",
+  // ---- Unified pointer drag (move a block, or create from a teammate) -----
+  var drag = null;
+
+  function beginDrag(type, source, e, data) {
+    var ghost = document.createElement("div");
+    ghost.className = "cal-ghost" + (type === "new" ? " new" : "");
+    var offY = 0, w = 150, h = 40;
+    if (type === "move") {
+      var r = source.getBoundingClientRect();
+      offY = e.clientY - r.top; w = r.width; h = r.height;
+      ghost.style.setProperty("--pc", getComputedStyle(source).getPropertyValue("--pc") || "#3b82f6");
+      var nm = source.querySelector(".cb-name"), tm = source.querySelector(".cb-time");
+      ghost.innerHTML = "<b>" + (tm ? tm.textContent : "") + "</b><br>" + (nm ? nm.textContent : "");
+      ghost.style.height = h + "px";
+    } else {
+      ghost.textContent = data.name || "New shift";
+    }
+    ghost.style.width = w + "px";
+    drag = { type: type, source: source, data: data, offY: offY,
+             startX: e.clientX, startY: e.clientY, moved: false, ghost: ghost };
+    document.addEventListener("pointermove", onDragMove);
+    document.addEventListener("pointerup", onDragUp);
+  }
+
+  function onDragMove(e) {
+    if (!drag) return;
+    if (!drag.moved) {
+      if (Math.abs(e.clientX - drag.startX) < THRESH && Math.abs(e.clientY - drag.startY) < THRESH) return;
+      drag.moved = true;
+      document.body.appendChild(drag.ghost);
+      if (drag.type === "move") drag.source.style.visibility = "hidden";
+    }
+    drag.ghost.style.left = (e.clientX + 8) + "px";
+    drag.ghost.style.top = (e.clientY - drag.offY) + "px";
+    clearOver();
+    var col = columnAt(e.clientX, e.clientY);
+    if (col) col.classList.add("cal-col-over");
+  }
+
+  function onDragUp(e) {
+    document.removeEventListener("pointermove", onDragMove);
+    document.removeEventListener("pointerup", onDragUp);
+    var d = drag; drag = null;
+    clearOver();
+    if (!d) return;
+    if (d.ghost.parentNode) d.ghost.parentNode.removeChild(d.ghost);
+    if (d.type === "move") d.source.style.visibility = "";
+    if (!d.moved) return;               // a click, not a drag — leave it alone
+    var col = columnAt(e.clientX, e.clientY);
+    if (!col) return;
+    var start = minuteFromY(col, e.clientY - d.offY);
+    if (d.type === "new") {
+      post("/schedule/shifts", {
+        staff_id: d.data.staff, position_id: 0, date: col.dataset.date,
+        start: hhmm(start), end: hhmm(start + DEFAULT_MIN), notes: "",
+      });
+    } else {
+      var b = d.source, dur = parseInt(b.dataset.duration || String(DEFAULT_MIN), 10);
+      post("/schedule/shifts/" + b.dataset.shiftId + "/edit", {
+        staff_id: b.dataset.staffId || "0", position_id: b.dataset.positionId || "0",
+        date: col.dataset.date, start: hhmm(start), end: hhmm(start + dur),
         notes: b.dataset.notes || "",
-        dur: b.dataset.duration || String(DEFAULT_MIN),
-      }));
-    });
-  });
+      });
+    }
+  }
 
-  // ---- Drop targets: the day columns -------------------------------------
-  document.querySelectorAll(".cal-col[data-date]").forEach(function (col) {
-    col.addEventListener("dragover", function (e) {
-      e.preventDefault();
-      col.classList.add("cal-col-over");
+  if (canManage) {
+    document.querySelectorAll(".cblock").forEach(function (b) {
+      var face = b.querySelector(".cb-face");
+      if (face) face.addEventListener("pointerdown", function (e) {
+        if (e.button === 0) beginDrag("move", b, e, {});
+      });
     });
-    col.addEventListener("dragleave", function () { col.classList.remove("cal-col-over"); });
-    col.addEventListener("drop", function (e) {
-      e.preventDefault();
-      col.classList.remove("cal-col-over");
-      var raw = e.dataTransfer.getData("text/plain");
-      if (!raw) return;
-      var d = JSON.parse(raw);
-      var start = minuteFromY(col, e.clientY);
-      if (d.t === "new") {
-        post("/schedule/shifts", {
-          staff_id: d.staff, position_id: 0, date: col.dataset.date,
-          start: hhmm(start), end: hhmm(start + DEFAULT_MIN), notes: "",
-        });
-      } else if (d.t === "move") {
-        var dur = parseInt(d.dur || String(DEFAULT_MIN), 10);
-        post("/schedule/shifts/" + d.id + "/edit", {
-          staff_id: d.staff, position_id: d.pos, date: col.dataset.date,
-          start: hhmm(start), end: hhmm(start + dur), notes: d.notes,
-        });
-      }
+    document.querySelectorAll(".team-row[data-staff-id]").forEach(function (row) {
+      row.addEventListener("pointerdown", function (e) {
+        if (e.button !== 0) return;
+        var nm = row.querySelector("b");
+        beginDrag("new", row, e, { staff: row.dataset.staffId, name: nm ? nm.textContent : "" });
+      });
     });
-  });
+  }
 
   // ---- Resize by dragging a block's bottom edge --------------------------
-  // The block is natively draggable (for moving), which would otherwise hijack
-  // an edge drag — so we turn draggable off for the duration of the resize and
-  // preview the new height live, then post the new end time on release.
   document.querySelectorAll(".cblock .cb-resize").forEach(function (handle) {
     handle.addEventListener("pointerdown", function (e) {
       e.preventDefault();
@@ -109,8 +147,6 @@
       var col = b.closest(".cal-col");
       var startMin = parseInt(b.dataset.startMin, 10);
       var endMin = startMin + parseInt(b.dataset.duration || "60", 10);
-
-      b.draggable = false;
       b.classList.add("resizing");
       handle.setPointerCapture(e.pointerId);
 
@@ -122,7 +158,6 @@
       function onUp() {
         handle.removeEventListener("pointermove", onMove);
         handle.removeEventListener("pointerup", onUp);
-        b.draggable = true;
         post("/schedule/shifts/" + b.dataset.shiftId + "/edit", {
           staff_id: b.dataset.staffId || "0", position_id: b.dataset.positionId || "0",
           date: col.dataset.date, start: hhmm(startMin), end: hhmm(endMin),
@@ -138,9 +173,7 @@
   window.deleteShift = function (e, id) {
     e.preventDefault();
     e.stopPropagation();
-    if (window.confirm("Delete this shift?")) {
-      post("/schedule/shifts/" + id + "/delete", {});
-    }
+    if (window.confirm("Delete this shift?")) post("/schedule/shifts/" + id + "/delete", {});
   };
 
   // One-click position/colour picker — preserves the shift's person and times.
