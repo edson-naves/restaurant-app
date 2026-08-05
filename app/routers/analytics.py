@@ -53,6 +53,8 @@ def hub(
         "payments": reports.payment_breakdown(db, s, e),
         "top": reports.best_sellers(db, s, e, limit=5),
         "staff_rows": reports.staff_performance(db, s, e),
+        "swaps_by_staff": reports.swap_requests_by_staff(db, s, e),
+        "missed_by_staff": reports.missed_shifts_by_staff(db, s, e),
         "busiest": summary_day,
         "title": "Reports & analytics",
     })

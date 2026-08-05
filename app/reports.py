@@ -12,10 +12,12 @@ rolled up across rows.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import Integer, case, func, select
 from sqlalchemy.orm import Session
+
+from app.models.oltp import Shift, Staff, SwapRequest
 
 from app.models.star import (
     DimChannel,
@@ -432,3 +434,45 @@ def busiest_day(db: Session, start: date, end: date) -> dict | None:
         .limit(1)
     ).first()
     return {"date": row[0], "revenue_cents": row[1]} if row else None
+
+
+# --------------------------------------------------------------------------
+# Scheduling reports (read live from the OLTP, not the star schema)
+# --------------------------------------------------------------------------
+
+def _dt_bounds(start: date, end: date) -> tuple[datetime, datetime]:
+    """[start 00:00, end+1 00:00) — an inclusive day range as datetimes."""
+    lo = datetime(start.year, start.month, start.day)
+    hi = datetime(end.year, end.month, end.day) + timedelta(days=1)
+    return lo, hi
+
+
+def swap_requests_by_staff(db: Session, start: date, end: date) -> list[dict]:
+    """How many shift swaps each person asked for in the range, most first."""
+    lo, hi = _dt_bounds(start, end)
+    rows = db.execute(
+        select(Staff.name, func.count(SwapRequest.id))
+        .join(SwapRequest, SwapRequest.requested_by_id == Staff.id)
+        .where(SwapRequest.created_at >= lo, SwapRequest.created_at < hi)
+        .group_by(Staff.id)
+        .order_by(func.count(SwapRequest.id).desc(), Staff.name)
+    ).all()
+    return [{"name": n, "count": c} for n, c in rows]
+
+
+def missed_shifts_by_staff(db: Session, start: date, end: date) -> list[dict]:
+    """How many shifts each person was scheduled for but never clocked into
+    (the shift has already ended) — a no-show proxy — most first."""
+    lo, hi = _dt_bounds(start, end)
+    rows = db.execute(
+        select(Staff.name, func.count(Shift.id))
+        .join(Shift, Shift.staff_id == Staff.id)
+        .where(
+            Shift.starts_at >= lo, Shift.starts_at < hi,
+            Shift.ends_at < datetime.now(),
+            Shift.clock_in_at.is_(None),
+        )
+        .group_by(Staff.id)
+        .order_by(func.count(Shift.id).desc(), Staff.name)
+    ).all()
+    return [{"name": n, "count": c} for n, c in rows]

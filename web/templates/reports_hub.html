@@ -121,4 +121,40 @@
   </div>
   <p class="sub" style="margin:10px 0 0;font-size:11px">Hover a bar for the day’s revenue. Click through for the full daily summary.</p>
 </div>
+
+<div class="row">
+  <div class="card">
+    <h2>Swap requests by staff</h2>
+    <p class="sub" style="margin:2px 0 10px;font-size:11px">Who asked to swap shifts most in this range (live from the schedule).</p>
+    {% set swap_top = swaps_by_staff|map(attribute='count')|max if swaps_by_staff else 1 %}
+    <table>
+      {% for r in swaps_by_staff %}
+      <tr>
+        <td style="width:130px">{{ r.name }}</td>
+        <td><div class="bar"><i style="width:{{ (r.count * 100 // swap_top) if swap_top else 0 }}%"></i></div></td>
+        <td class="num" style="width:44px">{{ r.count }}</td>
+      </tr>
+      {% else %}
+      <tr><td class="empty">No swap requests in this range.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>Missed shifts by staff</h2>
+    <p class="sub" style="margin:2px 0 10px;font-size:11px">Ended shifts they were scheduled for but never clocked into (no-show).</p>
+    {% set miss_top = missed_by_staff|map(attribute='count')|max if missed_by_staff else 1 %}
+    <table>
+      {% for r in missed_by_staff %}
+      <tr>
+        <td style="width:130px">{{ r.name }}</td>
+        <td><div class="bar"><i style="width:{{ (r.count * 100 // miss_top) if miss_top else 0 }}%;background:#ef4444"></i></div></td>
+        <td class="num" style="width:44px">{{ r.count }}</td>
+      </tr>
+      {% else %}
+      <tr><td class="empty">No missed shifts in this range. 🎉</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+</div>
 {% endblock %}
