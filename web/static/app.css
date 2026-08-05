@@ -1120,11 +1120,10 @@ td.pending { color: var(--accent); font-weight: 700; }
 .req-act { display: flex; gap: 6px; }
 .req-form summary { width: 100%; }
 .req-form label { min-width: 0; }
-.req-form input[type="date"], .req-form input[type="text"] { width: 100%; min-width: 0; box-sizing: border-box; }
-/* Hide the year in the time-off date fields (only near-term requests) — the
-   value still carries the year, defaulted to this year. */
-.req-form input[type="date"]::-webkit-datetime-edit-year-field,
-.req-form input[type="date"]::-webkit-datetime-edit-text:last-child { display: none; }
+.req-form input[type="text"] { width: 100%; min-width: 0; box-sizing: border-box; }
+/* Month/day pickers — no year, so a short-notice request never asks for one. */
+.req-form .md-row { display: flex; gap: 4px; }
+.req-form .md-row select { flex: 1; min-width: 0; font-size: 12px; min-height: 30px; padding: 2px 4px; }
 
 .nav-badge {
   margin-left: auto; background: #ef4444; color: #fff; border-radius: 10px;

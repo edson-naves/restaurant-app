@@ -7,7 +7,7 @@ page; POSTs take Form(...), mutate, redirect 303). Money never touches this.
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
@@ -94,20 +94,33 @@ def schedule_page(
 
 @router.post("/schedule/timeoff")
 def file_timeoff(
-    start_date: str = Form(...),
-    end_date: str = Form(""),
+    start_month: int = Form(...),
+    start_day: int = Form(...),
+    end_month: int = Form(0),
+    end_day: int = Form(0),
     reason: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("schedule.request")),
 ):
-    """File a time-off request for yourself (a whole-day range)."""
-    try:
-        s = datetime.strptime(start_date, "%Y-%m-%d").date()
-        e = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else s
-    except ValueError:
-        raise HTTPException(400, "Enter valid dates.")
-    if e < s:
-        s, e = e, s
+    """File a time-off request as month/day — the year is inferred (this year, or
+    next if the date already passed), so the form never shows a year."""
+    today = date.today()
+
+    def _make(m: int, d: int, year: int) -> date:
+        try:
+            return date(year, m, d)
+        except ValueError:
+            raise HTTPException(400, "Enter a valid date.")
+
+    s = _make(start_month, start_day, today.year)
+    if s < today:
+        s = _make(start_month, start_day, today.year + 1)
+    if end_month and end_day:
+        e = _make(end_month, end_day, s.year)
+        if e < s:                                  # range wraps into the new year
+            e = _make(end_month, end_day, s.year + 1)
+    else:
+        e = s
     db.add(TimeOffRequest(
         staff_id=staff.id,
         starts_at=datetime(s.year, s.month, s.day),

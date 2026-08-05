@@ -152,9 +152,9 @@ r = owner_c.post("/schedule/shifts", follow_redirects=False, data={
 check(r.status_code == 400, "overlapping shift is rejected", r.status_code)
 
 # 7. Time off: file → pending → approve → shows on the calendar; only managers decide.
-tod = (mon + timedelta(days=2)).isoformat()
+tod = date.today() + timedelta(days=3)
 r = waiter_c.post("/schedule/timeoff", follow_redirects=False,
-                  data={"start_date": tod, "end_date": tod, "reason": "QA"})
+                  data={"start_month": tod.month, "start_day": tod.day, "reason": "QA"})
 check(r.status_code == 303, "staff files a time-off request", r.status_code)
 d = SessionLocal()
 req = d.query(TimeOffRequest).filter(TimeOffRequest.staff_id == waiter.id).order_by(TimeOffRequest.id.desc()).first()
@@ -166,7 +166,7 @@ check(owner_c.post(f"/schedule/timeoff/{req.id}/approve", follow_redirects=False
       "owner approves the request")
 d = SessionLocal(); approved = d.get(TimeOffRequest, req.id).status == "approved"; d.close()
 check(approved, "time off is approved")
-check("cblock timeoff" in owner_c.get(f"/schedule?week={day}").text,
+check("cblock timeoff" in owner_c.get(f"/schedule?week={sched.monday_of(tod).isoformat()}").text,
       "approved time off shows as a band on the calendar")
 
 # 8. Swap: waiter offers their shift to `other`; owner approves → reassigned.
