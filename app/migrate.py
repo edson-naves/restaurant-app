@@ -61,6 +61,10 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("shift", "position_id", "INTEGER REFERENCES position(id)"),
     # A staff member's default/usual position, so their dragged shifts auto-colour.
     ("staff", "position_id", "INTEGER REFERENCES position(id)"),
+    # Phase 2: hourly pay (labor cost) and an optional avatar (data-URI TEXT, so
+    # it works on SQLite and Postgres alike and needs no upload disk).
+    ("staff", "wage_cents", "INTEGER NOT NULL DEFAULT 0"),
+    ("staff", "photo", "TEXT"),
 )
 
 DEFAULT_FLOOR = "1st floor"

@@ -13,7 +13,7 @@
       {% for m in cal.team %}
       <div class="team-row" data-name="{{ m.staff.name|lower }}"
            {% if can('schedule.manage') %}data-staff-id="{{ m.staff.id }}" title="Drag onto a day to schedule"{% endif %}>
-        <span class="avatar">{{ initials(m.staff.name) }}</span>
+        <span class="avatar">{% if m.staff.photo %}<img src="{{ m.staff.photo }}" alt="">{% else %}{{ initials(m.staff.name) }}{% endif %}</span>
         <div class="team-meta">
           <b>{{ m.staff.name }}</b>
           <div class="sub">{{ m.staff.role|replace('_',' ') }} · {{ '%.0f'|format(m.weekly_hours) }}h</div>

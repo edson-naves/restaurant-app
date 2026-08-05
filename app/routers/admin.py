@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import WEB_DIR, render, require, role_capabilities
 from app.services import settings as settings_svc
-from app.services.images import save_image
+from app.services.images import resize_to_data_uri, save_image
 from app.models.oltp import (
     Floor,
     MenuCategory,
@@ -981,12 +981,21 @@ def _check_role(role: str) -> str:
     return role
 
 
+def _wage_cents(raw: str) -> int:
+    """Parse a pay-rate in dollars to whole cents (0 or greater)."""
+    try:
+        return max(0, int(round(float(raw or 0) * 100)))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Pay rate must be a number.")
+
+
 @router.post("/staff/create")
 def create_staff(
     name: str = Form(...),
     role: str = Form(...),
     pin_code: str = Form(...),
     position_id: int = Form(0),
+    wage: str = Form("0"),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("staff.manage")),
 ):
@@ -995,14 +1004,14 @@ def create_staff(
         raise HTTPException(400, "Name is required.")
     db.add(Staff(
         name=name, role=_check_role(role), pin_code=_check_pin(pin_code),
-        position_id=(position_id or None), is_active=True,
+        position_id=(position_id or None), wage_cents=_wage_cents(wage), is_active=True,
     ))
     db.commit()
     return RedirectResponse("/admin/staff", status_code=303)
 
 
 def _apply_staff_edit(db: Session, person: Staff, name: str, role: str,
-                      pin_code: str, position_id: int = 0) -> None:
+                      pin_code: str, position_id: int = 0, wage: str = "0") -> None:
     """Apply one person's edits. Shared by the single-row and save-all routes."""
     name = name.strip()
     if not name:
@@ -1015,6 +1024,7 @@ def _apply_staff_edit(db: Session, person: Staff, name: str, role: str,
     person.name = name
     person.role = role
     person.position_id = position_id or None
+    person.wage_cents = _wage_cents(wage)
     if pin_code.strip():                       # blank means "leave the PIN alone"
         person.pin_code = _check_pin(pin_code)
 
@@ -1026,14 +1036,47 @@ def edit_staff(
     role: str = Form(...),
     pin_code: str = Form(""),
     position_id: int = Form(0),
+    wage: str = Form("0"),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("staff.manage")),
 ):
     person = db.get(Staff, staff_id)
     if person is None:
         raise HTTPException(404, "Staff member not found")
-    _apply_staff_edit(db, person, name, role, pin_code, position_id)
+    _apply_staff_edit(db, person, name, role, pin_code, position_id, wage)
     db.commit()
+    return RedirectResponse("/admin/staff", status_code=303)
+
+
+@router.post("/staff/{staff_id}/photo")
+def upload_staff_photo(
+    staff_id: int,
+    photo: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("staff.manage")),
+):
+    """Attach a resized avatar, stored inline as a data-URI (no upload disk)."""
+    person = db.get(Staff, staff_id)
+    if person is None:
+        raise HTTPException(404, "Staff member not found")
+    uri = resize_to_data_uri(photo.file.read(), fallback_mime=photo.content_type or "image/png")
+    if uri is None:
+        raise HTTPException(400, "Please upload a valid image (JPG/PNG/WEBP).")
+    person.photo = uri
+    db.commit()
+    return RedirectResponse("/admin/staff", status_code=303)
+
+
+@router.post("/staff/{staff_id}/photo/remove")
+def remove_staff_photo(
+    staff_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("staff.manage")),
+):
+    person = db.get(Staff, staff_id)
+    if person is not None:
+        person.photo = None
+        db.commit()
     return RedirectResponse("/admin/staff", status_code=303)
 
 
@@ -1044,6 +1087,7 @@ def save_all_staff(
     role: list[str] = Form([]),
     pin_code: list[str] = Form([]),
     position_id: list[int] = Form([]),
+    wage: list[str] = Form([]),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("staff.manage")),
 ):
@@ -1054,14 +1098,15 @@ def save_all_staff(
     another, so the whole batch is refused. All-or-nothing: one bad row rolls
     the lot back, so the operator can always tell which of their edits stuck.
     """
-    if len({len(staff_id), len(name), len(role), len(pin_code), len(position_id)}) != 1:
+    if len({len(staff_id), len(name), len(role), len(pin_code),
+            len(position_id), len(wage)}) != 1:
         raise HTTPException(400, "The form did not submit completely — reload and retry.")
     try:
-        for sid, nm, rl, pin, pos in zip(staff_id, name, role, pin_code, position_id):
+        for sid, nm, rl, pin, pos, wg in zip(staff_id, name, role, pin_code, position_id, wage):
             person = db.get(Staff, sid)
             if person is None:
                 raise HTTPException(404, f"Staff id {sid} not found")
-            _apply_staff_edit(db, person, nm, rl, pin, pos)
+            _apply_staff_edit(db, person, nm, rl, pin, pos, wg)
             db.flush()
         db.commit()
     except Exception:

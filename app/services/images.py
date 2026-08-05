@@ -9,11 +9,41 @@ the production image (which installs Pillow) gets the resizing.
 """
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 # Longest edge, in pixels. The order screen and menu admin render these far
 # smaller; 512 keeps them crisp on high-DPI screens with room to spare.
 MAX_SIDE = 512
+
+# Avatars are tiny and stored inline (as data-URIs) in the DB, so keep them small.
+AVATAR_SIDE = 160
+
+
+def resize_to_data_uri(data: bytes, fallback_mime: str = "image/png",
+                       max_side: int = AVATAR_SIDE) -> str | None:
+    """Resize an uploaded image and return it as a `data:` URI for storage in the
+    database (no upload disk needed). Falls back to the raw bytes, size-capped,
+    when Pillow is unavailable or the file isn't a decodable image."""
+    if not data:
+        return None
+    try:
+        from io import BytesIO
+
+        from PIL import Image
+
+        im = Image.open(BytesIO(data))
+        im.load()
+        if im.mode != "RGB":
+            im = im.convert("RGB")
+        im.thumbnail((max_side, max_side))
+        buf = BytesIO()
+        im.save(buf, "JPEG", quality=80, optimize=True)
+        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+    except Exception:
+        if len(data) > 300_000:          # too big to inline un-resized
+            return None
+        return f"data:{fallback_mime};base64," + base64.b64encode(data).decode("ascii")
 
 
 def save_image(source, dest: Path, max_side: int = MAX_SIDE) -> None:

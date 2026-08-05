@@ -178,6 +178,10 @@ class Staff(Base):
     # The person's usual job on the schedule (Server, Bartender…). Distinct from
     # `role`, which is their access level. Used to colour their shifts by default.
     position_id: Mapped[int | None] = mapped_column(ForeignKey("position.id"), nullable=True)
+    # Hourly pay in cents (owner-only), feeds schedule labor cost. Optional photo
+    # stored as a small resized data-URI so it survives redeploys without a disk.
+    wage_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    photo: Mapped[str | None] = mapped_column(Text, nullable=True)
     hired_on: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     position: Mapped["Position | None"] = relationship(lazy="joined")

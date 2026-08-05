@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block body %}
 {% include "admin_nav.html" %}
+{% macro avatar(p) %}<span class="avatar">{% if p.photo %}<img src="{{ p.photo }}" alt="">{% else %}{% set n = p.name.split() %}{{ (n[0][:1] ~ (n[1][:1] if n|length > 1 else ''))|upper }}{% endif %}</span>{% endmacro %}
 
 <div class="between">
   <div>
@@ -61,6 +62,10 @@
         </select>
       </div>
       <div class="field">
+        <label>Pay / hour ($)</label>
+        <input type="number" name="wage" min="0" step="0.01" value="0">
+      </div>
+      <div class="field">
         <label>PIN (4–8 digits)</label>
         <input type="text" name="pin_code" inputmode="numeric" pattern="[0-9]{4,8}" required>
       </div>
@@ -85,16 +90,26 @@
       <table>
         <thead>
           <tr>
-            <th>Name</th><th>Role</th><th>Position</th><th>New PIN</th>
-            <th class="num">Open orders</th><th></th>
+            <th>Photo</th><th>Name</th><th>Role</th><th>Position</th><th>Pay/hr</th>
+            <th>New PIN</th><th class="num">Open orders</th><th></th>
           </tr>
         </thead>
         <tbody>
         {% for p in people + retired %}
           <tr class="{{ '' if p.is_active else 'dim' }}">
             <td>
+              {{ avatar(p) }}
+              <div class="photo-actions">
+                <form method="post" action="/admin/staff/{{ p.id }}/photo" enctype="multipart/form-data" style="margin:0;display:flex;gap:3px;align-items:center">
+                  <input type="file" name="photo" accept="image/*" class="photo-file">
+                  <button class="btn xs" title="Upload photo">↑</button>
+                </form>
+                {% if p.photo %}<form method="post" action="/admin/staff/{{ p.id }}/photo/remove" style="margin:0"><button class="btn xs danger" title="Remove photo">✕</button></form>{% endif %}
+              </div>
+            </td>
+            <td>
               <input form="saveall" type="hidden" name="staff_id" value="{{ p.id }}">
-              <input form="saveall" type="text" name="name" value="{{ p.name }}" style="width:170px">
+              <input form="saveall" type="text" name="name" value="{{ p.name }}" style="width:150px">
               {% if not p.is_active %}<span class="pill open">inactive</span>{% endif %}
             </td>
             <td>
@@ -105,10 +120,14 @@
               </select>
             </td>
             <td>
-              <select form="saveall" name="position_id" style="width:150px">
+              <select form="saveall" name="position_id" style="width:140px">
                 <option value="0">— none —</option>
                 {% for pos in positions %}<option value="{{ pos.id }}" {{ 'selected' if pos.id == p.position_id else '' }}>{{ pos.name }}</option>{% endfor %}
               </select>
+            </td>
+            <td>
+              <input form="saveall" type="number" name="wage" min="0" step="0.01"
+                     value="{{ '%.2f'|format(p.wage_cents / 100) }}" style="width:90px">
             </td>
             <td>
               <input form="saveall" type="text" name="pin_code" placeholder="unchanged"
@@ -133,7 +152,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="6" class="empty">No staff yet.</td></tr>
+          <tr><td colspan="8" class="empty">No staff yet.</td></tr>
         {% endfor %}
         </tbody>
       </table>
