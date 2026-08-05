@@ -195,20 +195,18 @@
       <summary class="btn primary sm">+ Request time off</summary>
       {% set MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'] %}
       <form method="post" action="/schedule/timeoff" style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
-        <div style="display:flex;gap:8px">
-          <label class="sub" style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">From
-            <div class="md-row">
-              <select name="start_month" required>{% for i in range(1,13) %}<option value="{{ i }}" {{ 'selected' if i == today.month else '' }}>{{ MONTHS[i-1] }}</option>{% endfor %}</select>
-              <select name="start_day" required>{% for d in range(1,32) %}<option value="{{ d }}" {{ 'selected' if d == today.day else '' }}>{{ d }}</option>{% endfor %}</select>
-            </div>
-          </label>
-          <label class="sub" style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">To <span class="sub">(optional)</span>
-            <div class="md-row">
-              <select name="end_month"><option value="0">—</option>{% for i in range(1,13) %}<option value="{{ i }}">{{ MONTHS[i-1] }}</option>{% endfor %}</select>
-              <select name="end_day"><option value="0">—</option>{% for d in range(1,32) %}<option value="{{ d }}">{{ d }}</option>{% endfor %}</select>
-            </div>
-          </label>
-        </div>
+        <label class="sub" style="display:flex;flex-direction:column;gap:3px">From
+          <div class="md-row">
+            <select name="start_month" required>{% for i in range(1,13) %}<option value="{{ i }}" {{ 'selected' if i == today.month else '' }}>{{ MONTHS[i-1] }}</option>{% endfor %}</select>
+            <select name="start_day" required>{% for d in range(1,32) %}<option value="{{ d }}" {{ 'selected' if d == today.day else '' }}>{{ d }}</option>{% endfor %}</select>
+          </div>
+        </label>
+        <label class="sub" style="display:flex;flex-direction:column;gap:3px">To (optional)
+          <div class="md-row">
+            <select name="end_month"><option value="0">—</option>{% for i in range(1,13) %}<option value="{{ i }}">{{ MONTHS[i-1] }}</option>{% endfor %}</select>
+            <select name="end_day"><option value="0">—</option>{% for d in range(1,32) %}<option value="{{ d }}">{{ d }}</option>{% endfor %}</select>
+          </div>
+        </label>
         <input type="text" name="reason" placeholder="Reason (optional)">
         <button class="btn good">Request</button>
       </form>
