@@ -1027,6 +1027,12 @@ td.pending { color: var(--accent); font-weight: 700; }
 .team-meta b { font-size: 13px; }
 
 .cal { flex: 1; min-width: 0; }
+.cal-toolbar {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 10px;
+}
+.cal-week { font-weight: 700; font-size: 15px; }
+.cal-nav { display: flex; gap: 6px; }
 .cal-add { margin-bottom: 10px; }
 .cal-scroll { overflow-x: auto; }
 .cal-head, .cal-body {

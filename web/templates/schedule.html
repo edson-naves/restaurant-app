@@ -4,21 +4,6 @@
 {% macro initials(name) %}{% set p = name.split() %}{{ (p[0][:1] ~ (p[1][:1] if p|length > 1 else ''))|upper }}{% endmacro %}
 {% macro hourlabel(h) %}{% set d = h % 24 %}{% set h12 = d % 12 %}{{ 12 if h12 == 0 else h12 }} {{ 'AM' if d < 12 else 'PM' }}{% endmacro %}
 
-<div class="between">
-  <div>
-    <h1>Schedule</h1>
-    <p class="sub">
-      Week of {{ week_start.strftime('%b') }} {{ week_start.day }} – {{ cal.days[6].date.strftime('%b') }} {{ cal.days[6].date.day }}, {{ cal.days[6].date.year }}
-      {% if not can('schedule.manage') %} · your shifts only{% endif %}
-    </p>
-  </div>
-  <div style="display:flex;gap:8px">
-    <a class="btn" href="/schedule?week={{ this_week }}">Today</a>
-    <a class="btn" href="/schedule?week={{ prev_week }}">‹</a>
-    <a class="btn" href="/schedule?week={{ next_week }}">›</a>
-  </div>
-</div>
-
 <div class="sched-wrap">
   <!-- Team panel -->
   <aside class="team-panel card">
@@ -41,6 +26,14 @@
 
   <!-- Calendar -->
   <div class="cal card">
+    <div class="cal-toolbar">
+      <span class="cal-week">Week of {{ week_start.strftime('%b') }} {{ week_start.day }} – {{ cal.days[6].date.strftime('%b') }} {{ cal.days[6].date.day }}, {{ cal.days[6].date.year }}{% if not can('schedule.manage') %} · your shifts{% endif %}</span>
+      <div class="cal-nav">
+        <a class="btn sm" href="/schedule?week={{ this_week }}">Today</a>
+        <a class="btn sm" href="/schedule?week={{ prev_week }}">‹</a>
+        <a class="btn sm" href="/schedule?week={{ next_week }}">›</a>
+      </div>
+    </div>
     {% if can('schedule.manage') %}
     <details class="cal-add">
       <summary class="btn primary sm">+ Add shift</summary>
