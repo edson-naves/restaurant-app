@@ -46,11 +46,18 @@
         <input type="text" name="name" required>
       </div>
       <div class="field">
-        <label>Role</label>
+        <label>Role <span class="sub">(access)</span></label>
         <select name="role">
           {% for r in roles %}
           <option value="{{ r }}" {{ 'selected' if r == 'waiter' else '' }}>{{ r.replace('_',' ') }}</option>
           {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label>Position <span class="sub">(schedule job)</span></label>
+        <select name="position_id">
+          <option value="0">— none —</option>
+          {% for pos in positions %}<option value="{{ pos.id }}">{{ pos.name }}</option>{% endfor %}
         </select>
       </div>
       <div class="field">
@@ -78,7 +85,7 @@
       <table>
         <thead>
           <tr>
-            <th>Name</th><th>Role</th><th>New PIN</th>
+            <th>Name</th><th>Role</th><th>Position</th><th>New PIN</th>
             <th class="num">Open orders</th><th></th>
           </tr>
         </thead>
@@ -91,10 +98,16 @@
               {% if not p.is_active %}<span class="pill open">inactive</span>{% endif %}
             </td>
             <td>
-              <select form="saveall" name="role" style="width:170px">
+              <select form="saveall" name="role" style="width:150px">
                 {% for r in roles %}
                 <option value="{{ r }}" {{ 'selected' if r == p.role else '' }}>{{ r.replace('_',' ') }}</option>
                 {% endfor %}
+              </select>
+            </td>
+            <td>
+              <select form="saveall" name="position_id" style="width:150px">
+                <option value="0">— none —</option>
+                {% for pos in positions %}<option value="{{ pos.id }}" {{ 'selected' if pos.id == p.position_id else '' }}>{{ pos.name }}</option>{% endfor %}
               </select>
             </td>
             <td>
@@ -120,7 +133,7 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="5" class="empty">No staff yet.</td></tr>
+          <tr><td colspan="6" class="empty">No staff yet.</td></tr>
         {% endfor %}
         </tbody>
       </table>

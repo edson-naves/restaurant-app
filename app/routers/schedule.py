@@ -105,6 +105,10 @@ def create_shift(
     staff: Staff = Depends(require("schedule.manage")),
 ):
     member, pos = _resolve(db, staff_id, position_id)
+    # No position picked (e.g. a dragged-in shift) → use the person's usual one,
+    # so their shifts auto-colour without a manual pick.
+    if pos is None and member is not None and member.position_id:
+        pos = member.position
     starts, ends = _parse_window(date, start, end)
     _guard_overlap(db, member.id if member else None, starts, ends)
     db.add(Shift(

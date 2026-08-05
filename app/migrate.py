@@ -59,6 +59,8 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # Schedule positions. The shift table was created without this column in an
     # earlier deploy; add it (the position table itself is created by create_all).
     ("shift", "position_id", "INTEGER REFERENCES position(id)"),
+    # A staff member's default/usual position, so their dragged shifts auto-colour.
+    ("staff", "position_id", "INTEGER REFERENCES position(id)"),
 )
 
 DEFAULT_FLOOR = "1st floor"

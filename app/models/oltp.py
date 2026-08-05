@@ -175,7 +175,12 @@ class Staff(Base):
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     pin_code: Mapped[str] = mapped_column(String(8), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # The person's usual job on the schedule (Server, Bartender…). Distinct from
+    # `role`, which is their access level. Used to colour their shifts by default.
+    position_id: Mapped[int | None] = mapped_column(ForeignKey("position.id"), nullable=True)
     hired_on: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+    position: Mapped["Position | None"] = relationship(lazy="joined")
 
     __table_args__ = (
         CheckConstraint(

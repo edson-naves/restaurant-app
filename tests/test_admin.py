@@ -831,6 +831,7 @@ r = client.post("/admin/staff/save-all", data={
     "name": [owner.name, "QA Probe Renamed"],
     "role": [Role.OWNER, Role.WAITER],
     "pin_code": ["", ""],
+    "position_id": [0, 0],
 })
 check(r.status_code == 200, "save-all saves the staff page in one request")
 check(fresh(Staff, id=p.id).name == "QA Probe Renamed"
