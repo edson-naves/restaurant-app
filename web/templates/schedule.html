@@ -109,22 +109,17 @@
               {% elif b.state == 'in' %}<form method="post" action="/schedule/shifts/{{ b.shift.id }}/clock-out"><button class="btn xs warn">Clock out</button></form>{% endif %}
               {% endif %}
               {% if can('schedule.manage') %}
+              {# Notes only — person, position and times are set by dragging, so
+                 they ride along as hidden fields and stay unchanged on save. #}
               <form method="post" action="/schedule/shifts/{{ b.shift.id }}/edit" class="shift-edit">
-                <select name="staff_id">
-                  <option value="0" {{ 'selected' if not b.shift.staff_id else '' }}>— Open —</option>
-                  {% for m in all_staff %}<option value="{{ m.id }}" {{ 'selected' if m.id == b.shift.staff_id else '' }}>{{ m.name }}</option>{% endfor %}
-                </select>
-                <select name="position_id">
-                  <option value="0">—</option>
-                  {% for p in positions %}<option value="{{ p.id }}" {{ 'selected' if p.id == b.shift.position_id else '' }}>{{ p.name }}</option>{% endfor %}
-                </select>
-                <input type="date" name="date" value="{{ b.shift.starts_at.strftime('%Y-%m-%d') }}" required>
-                <input type="time" name="start" value="{{ b.shift.starts_at.strftime('%H:%M') }}" required>
-                <input type="time" name="end" value="{{ b.shift.ends_at.strftime('%H:%M') }}" required>
-                <input type="text" name="notes" value="{{ b.shift.notes }}" placeholder="notes">
-                <button class="btn xs good">Save</button>
+                <input type="hidden" name="staff_id" value="{{ b.shift.staff_id or 0 }}">
+                <input type="hidden" name="position_id" value="{{ b.shift.position_id or 0 }}">
+                <input type="hidden" name="date" value="{{ b.shift.starts_at.strftime('%Y-%m-%d') }}">
+                <input type="hidden" name="start" value="{{ b.shift.starts_at.strftime('%H:%M') }}">
+                <input type="hidden" name="end" value="{{ b.shift.ends_at.strftime('%H:%M') }}">
+                <input type="text" name="notes" value="{{ b.shift.notes }}" placeholder="Notes">
+                <button class="btn xs good">Save notes</button>
               </form>
-              <form method="post" action="/schedule/shifts/{{ b.shift.id }}/delete" onsubmit="return confirm('Delete this shift?')"><button class="btn xs danger">Delete</button></form>
               {% endif %}
             </div>
             {% if can('schedule.manage') %}<div class="cb-resize" title="Drag to resize"></div>{% endif %}

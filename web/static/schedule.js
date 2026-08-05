@@ -21,7 +21,7 @@
   if (!body) return;
 
   var PPH = 44;                       // pixels per hour (matches the CSS grid)
-  var SNAP = 15;                      // snap dropped times to 15 minutes
+  var SNAP = 5;                       // snap dropped/resized times to 5 minutes
   var DEFAULT_MIN = 240;              // a fresh dragged-in shift is 4h
   var startHour = parseInt(body.dataset.startHour || "8", 10);
 
