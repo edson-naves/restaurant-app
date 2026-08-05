@@ -88,7 +88,7 @@
         <div class="cal-col {{ 'is-today' if day.date == today else '' }}" style="height:calc(var(--rows) * 44px)" data-date="{{ day.date.isoformat() }}">
           {% for b in day.blocks %}
           {% set pcolor = b.shift.position.color if b.shift.position else '#64748b' %}
-          <details class="cblock {{ 'open-shift' if b.is_open else '' }}"
+          <div class="cblock {{ 'open-shift' if b.is_open else '' }}"
                    data-shift-id="{{ b.shift.id }}"
                    data-staff-id="{{ b.shift.staff_id or 0 }}"
                    data-position-id="{{ b.shift.position_id or 0 }}"
@@ -96,13 +96,14 @@
                    data-duration="{{ ((b.shift.ends_at - b.shift.starts_at).total_seconds() / 60)|int }}"
                    data-start-min="{{ b.shift.starts_at.hour * 60 + b.shift.starts_at.minute }}"
                    style="top:{{ b.top_pct }}%;height:{{ b.height_pct }}%;left:calc({{ b.lane * 100 / b.lanes }}% + 1px);width:calc({{ 100 / b.lanes }}% - 2px);--pc:{{ pcolor }}">
-            <summary class="cb-face">
+            <div class="cb-face">
               <span class="cb-time">{{ b.shift.starts_at.strftime('%H:%M') }}–{{ b.shift.ends_at.strftime('%H:%M') }}</span>
               <span class="cb-name">{% if b.is_open %}OPEN SHIFT{% else %}{{ b.shift.staff.name }}{% endif %}</span>
               <span class="cb-pos">{{ b.shift.position.name if b.shift.position else b.shift.role }}</span>
               {% if b.state == 'in' %}<span class="sbadge in">● on</span>{% elif b.state == 'done' %}<span class="sbadge done">✓</span>{% endif %}
-            </summary>
+            </div>
             {% if can('schedule.manage') %}<button type="button" class="cb-del" title="Delete shift" onclick="deleteShift(event, {{ b.shift.id }})">✕</button>{% endif %}
+            {% if can('schedule.manage') or b.shift.staff_id == staff.id %}<button type="button" class="cb-edit" title="Edit shift" onclick="toggleMenu(event, this)">✎</button>{% endif %}
             <div class="cb-menu">
               {% if b.shift.staff_id == staff.id %}
               {% if b.state == 'scheduled' %}<form method="post" action="/schedule/shifts/{{ b.shift.id }}/clock-in"><button class="btn xs good">Clock in</button></form>
@@ -130,7 +131,7 @@
               {% endif %}
             </div>
             {% if can('schedule.manage') %}<div class="cb-resize" title="Drag to change hours"></div><div class="cb-extend" title="Drag across days to repeat"></div>{% endif %}
-          </details>
+          </div>
           {% endfor %}
         </div>
         {% endfor %}

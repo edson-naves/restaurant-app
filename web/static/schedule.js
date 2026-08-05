@@ -224,6 +224,22 @@
     });
   });
 
+  // Pencil ✎ — open/close a block's options menu (colour + notes / clock).
+  // Clicking the block itself no longer opens anything; only the pencil does.
+  window.toggleMenu = function (e, btn) {
+    e.preventDefault();
+    e.stopPropagation();
+    var block = btn.closest(".cblock");
+    var open = block.classList.contains("menu-open");
+    document.querySelectorAll(".cblock.menu-open").forEach(function (b) { b.classList.remove("menu-open"); });
+    if (!open) block.classList.add("menu-open");
+  };
+  // A press anywhere else (including starting a drag) closes an open menu.
+  document.addEventListener("pointerdown", function (e) {
+    if (e.target.closest(".cb-edit") || e.target.closest(".cb-menu")) return;
+    document.querySelectorAll(".cblock.menu-open").forEach(function (b) { b.classList.remove("menu-open"); });
+  });
+
   // Delete a shift (the ✕ on the block corner).
   window.deleteShift = function (e, id) {
     e.preventDefault();
