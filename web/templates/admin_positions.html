@@ -13,7 +13,7 @@
   <strong>Add a position</strong>
   <form method="post" action="/admin/positions" class="row" style="gap:10px;align-items:flex-end;margin-top:10px;flex-wrap:wrap">
     <div class="field"><label>Name</label><input type="text" name="name" placeholder="e.g. Barista" required></div>
-    <div class="field"><label>Colour</label><input type="color" name="color" value="#3b82f6"></div>
+    <div class="field"><label>Colour</label><input type="color" name="color" value="#3b82f6" class="pos-color"></div>
     <button class="btn good">Add position</button>
   </form>
 </div>
@@ -21,10 +21,9 @@
 <div class="card">
   {% for p in positions %}
   <div class="between" style="border-bottom:1px solid var(--line);padding:8px 0;gap:10px;flex-wrap:wrap;{{ 'opacity:.5' if not p.is_active else '' }}">
-    <form method="post" action="/admin/positions/{{ p.id }}/edit" class="row" style="gap:8px;align-items:center;flex-wrap:wrap">
-      <span style="width:16px;height:16px;border-radius:4px;background:{{ p.color }};display:inline-block"></span>
-      <input type="color" name="color" value="{{ p.color }}" title="colour">
-      <input type="text" name="name" value="{{ p.name }}" style="min-width:150px">
+    <form method="post" action="/admin/positions/{{ p.id }}/edit" class="row" style="gap:10px;align-items:center;flex-wrap:wrap">
+      <input type="color" name="color" value="{{ p.color }}" title="colour" class="pos-color">
+      <input type="text" name="name" value="{{ p.name }}" class="pos-name">
       <label class="tick" style="margin:0"><input type="checkbox" name="is_active" value="1" {{ 'checked' if p.is_active else '' }}> active</label>
       <button class="btn sm">Save</button>
     </form>

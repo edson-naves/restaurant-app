@@ -1080,6 +1080,13 @@ td.pending { color: var(--accent); font-weight: 700; }
 .sched-add { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 10px; }
 .sched-add .field { margin: 0; }
 
+/* Positions admin: small colour swatch instead of a full-width bar */
+input.pos-color {
+  flex: none; width: 46px; min-width: 46px; height: 34px; padding: 2px;
+  border-radius: 8px; cursor: pointer;
+}
+input.pos-name { flex: none; width: 190px; max-width: 60vw; }
+
 /* Drag-and-drop affordances (pointer-based) */
 .cal-hint { margin: 4px 0 10px; font-size: 12px; }
 .cal-body[data-manage="1"] .team-row[data-staff-id] { cursor: grab; }
