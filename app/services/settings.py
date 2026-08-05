@@ -125,10 +125,9 @@ def schedule_hours(db: Session) -> tuple[int, int]:
         except (TypeError, ValueError):
             return default
 
-    start, end = _h("schedule_start_hour", 8), _h("schedule_end_hour", 23)
-    if end <= start:
-        start, end = 8, 23
-    return start, end
+    # end may be <= start: an overnight window that runs into the next morning
+    # (e.g. 07:00–04:00). build_calendar handles the wrap.
+    return _h("schedule_start_hour", 8), _h("schedule_end_hour", 23)
 
 
 def save(db: Session, values: dict[str, str]) -> None:

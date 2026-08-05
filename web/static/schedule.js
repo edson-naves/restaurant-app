@@ -88,6 +88,17 @@
     return minuteFromY(col, clientY - h / 2);
   }
 
+  // Minutes past the column's midnight can exceed a day on an overnight window
+  // (e.g. a 2 AM slot in a 07:00–04:00 view); roll onto the next date so the
+  // shift is stored with a real datetime.
+  function dropDateTime(colDateStr, absMin) {
+    absMin = Math.round(absMin);
+    var d = new Date(colDateStr + "T00:00:00");
+    d.setDate(d.getDate() + Math.floor(absMin / 1440));
+    var y = d.getFullYear(), m = ("0" + (d.getMonth() + 1)).slice(-2), day = ("0" + d.getDate()).slice(-2);
+    return { date: y + "-" + m + "-" + day, time: hhmm(absMin) };
+  }
+
   function onDragMove(e) {
     if (!drag) return;
     if (!drag.moved) {
@@ -122,16 +133,17 @@
     var col = columnAt(e.clientX, e.clientY);
     if (!col) return;
     var start = dropStart(col, e.clientY, d.h);
+    var st = dropDateTime(col.dataset.date, start);
     if (d.type === "new") {
       post("/schedule/shifts", {
-        staff_id: d.data.staff, position_id: 0, date: col.dataset.date,
-        start: hhmm(start), end: hhmm(start + d.dur), notes: "",
+        staff_id: d.data.staff, position_id: 0, date: st.date,
+        start: st.time, end: hhmm(start + d.dur), notes: "",
       });
     } else {
       var b = d.source;
       post("/schedule/shifts/" + b.dataset.shiftId + "/edit", {
         staff_id: b.dataset.staffId || "0", position_id: b.dataset.positionId || "0",
-        date: col.dataset.date, start: hhmm(start), end: hhmm(start + d.dur),
+        date: st.date, start: st.time, end: hhmm(start + d.dur),
         notes: b.dataset.notes || "",
       });
     }

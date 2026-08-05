@@ -125,6 +125,8 @@ class CalBlock:
     height_pct: float
     lane: int
     lanes: int                # total lanes that day, for width
+    top_off: int = 0          # minutes from the window start
+    end_off: int = 0          # minutes from the window start (may exceed a day)
 
 
 @dataclass
@@ -150,35 +152,25 @@ class Calendar:
     team: list[TeamMember]
 
 
-def _display_end_hour(sh: Shift) -> int:
-    """The block's end hour on its start day (an overnight shift caps at 24)."""
-    if sh.ends_at.date() > sh.starts_at.date():
-        return 24
-    return sh.ends_at.hour + (1 if sh.ends_at.minute else 0)
-
-
-def _layout_day(blocks: list[CalBlock], start_min: int, span_min: int) -> None:
+def _layout_day(blocks: list[CalBlock], span_min: int) -> None:
     """Greedy interval partition: give overlapping blocks distinct lanes so they
-    render side by side. Sets .lane/.lanes/.top_pct/.height_pct in place."""
+    render side by side. Positions from precomputed minute offsets, so it works
+    the same for overnight windows that run past midnight."""
     lane_end: list[int] = []
     for b in blocks:                                   # already start-sorted
-        s = b.shift.starts_at.hour * 60 + b.shift.starts_at.minute
-        e = _display_end_hour(b.shift) * 60
         for i, end in enumerate(lane_end):
-            if s >= end:
-                lane_end[i] = e
+            if b.top_off >= end:
+                lane_end[i] = b.end_off
                 b.lane = i
                 break
         else:
             b.lane = len(lane_end)
-            lane_end.append(e)
+            lane_end.append(b.end_off)
     ncols = max(1, len(lane_end))
     for b in blocks:
-        s = b.shift.starts_at.hour * 60 + b.shift.starts_at.minute
-        e = _display_end_hour(b.shift) * 60
-        top = max(0.0, (s - start_min) / span_min * 100)
+        top = max(0.0, b.top_off / span_min * 100)
         b.top_pct = min(top, 98.0)
-        b.height_pct = max(4.0, min(100 - b.top_pct, (e - max(s, start_min)) / span_min * 100))
+        b.height_pct = max(4.0, min(100 - b.top_pct, (b.end_off - max(b.top_off, 0)) / span_min * 100))
         b.lanes = ncols
 
 
@@ -198,28 +190,28 @@ def build_calendar(db: Session, week_start: date, staff_list: list[Staff],
         select(Shift).where(*conds, who).order_by(Shift.starts_at)
     ).scalars().all()
 
-    # Visible time window comes from Settings (default 08:00–23:00) and still
-    # expands to fit any shift that starts earlier or ends later.
+    # Visible window from Settings. An end at or before the start is an OVERNIGHT
+    # window that runs into the next morning (e.g. 07:00–04:00 → hours 7..28).
     cfg_start, cfg_end = settings_svc.schedule_hours(db)
-    if shifts:
-        earliest = min(s.starts_at.hour for s in shifts)
-        latest = max(_display_end_hour(s) for s in shifts)
-    else:
-        earliest, latest = cfg_start, cfg_end
-    start_hour = max(0, min(earliest, cfg_start))
-    end_hour = min(24, max(latest, cfg_end))
-    start_min = start_hour * 60
-    span_min = (end_hour - start_hour) * 60
+    win_start = cfg_start
+    win_end = cfg_end if cfg_end > cfg_start else cfg_end + 24
+    win_start_min = win_start * 60
+    span_min = max(60, (win_end - win_start) * 60)
 
     per_staff: dict[int, float] = {}
     for sh in shifts:
         idx = (sh.starts_at.date() - week_start).days
         if not (0 <= idx < 7):
             continue
+        smin = sh.starts_at.hour * 60 + sh.starts_at.minute
+        emin = sh.ends_at.hour * 60 + sh.ends_at.minute
+        if sh.ends_at.date() > sh.starts_at.date():
+            emin += 24 * 60                            # crosses midnight
         h = shift_hours(sh)
         blk = CalBlock(
             shift=sh, state=clock_state(sh), hours=h, is_open=sh.staff_id is None,
             top_pct=0.0, height_pct=0.0, lane=0, lanes=1,
+            top_off=smin - win_start_min, end_off=emin - win_start_min,
         )
         days[idx].blocks.append(blk)
         days[idx].labor_hours += h
@@ -227,11 +219,11 @@ def build_calendar(db: Session, week_start: date, staff_list: list[Staff],
             per_staff[sh.staff_id] = per_staff.get(sh.staff_id, 0.0) + h
 
     for day in days:
-        _layout_day(day.blocks, start_min, span_min)
+        _layout_day(day.blocks, span_min)
 
     team = [TeamMember(staff=m, weekly_hours=per_staff.get(m.id, 0.0)) for m in staff_list]
     return Calendar(
         week_start=week_start, days=days,
-        start_hour=start_hour, end_hour=end_hour,
-        hours=list(range(start_hour, end_hour + 1)), team=team,
+        start_hour=win_start, end_hour=win_end,
+        hours=list(range(win_start, win_end + 1)), team=team,
     )

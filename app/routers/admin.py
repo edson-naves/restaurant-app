@@ -1181,13 +1181,14 @@ def save_settings(
         except ValueError:
             raise HTTPException(400, f"{label} must be a number, 0 or greater.")
 
-    # Schedule window: whole hours 0–24 with start before end.
+    # Schedule window: whole hours. An end at/before the start is an overnight
+    # window (e.g. 7 to 4 runs into the next morning), so only the ranges matter.
     try:
         sh_start, sh_end = int(schedule_start_hour), int(schedule_end_hour)
     except ValueError:
         raise HTTPException(400, "Schedule hours must be whole numbers.")
-    if not (0 <= sh_start < sh_end <= 24):
-        raise HTTPException(400, "Schedule 'day starts' must be 0–23 and before 'day ends' (1–24).")
+    if not (0 <= sh_start <= 23 and 1 <= sh_end <= 24):
+        raise HTTPException(400, "Schedule 'day starts' must be 0–23 and 'day ends' 1–24.")
 
     settings_svc.save(db, {
         "gst_rate": gst_rate, "gst_number": gst_number,
