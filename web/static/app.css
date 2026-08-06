@@ -1105,6 +1105,19 @@ td.pending { color: var(--accent); font-weight: 700; }
   background: rgba(0, 0, 0, .5); color: #fff;
 }
 .cblock:hover .cb-edit, .cblock.menu-open .cb-edit { opacity: 1; pointer-events: auto; }
+
+/* Clock in/out straight on the block (bottom-left) — always visible so staff
+   don't have to open the pencil menu to punch in. Green = clock in, amber =
+   currently on shift (clock out). */
+.cb-clock-form { position: absolute; bottom: 2px; left: 2px; z-index: 8; margin: 0; }
+.cb-clock {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: 5px; padding: 2px; line-height: 0; cursor: pointer;
+  background: #16a34a; color: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+}
+.cb-clock.on { background: #d97706; }
+.cb-clock:hover { filter: brightness(1.12); }
+.cb-clock:active { transform: translateY(1px); }
 .shift-edit { display: flex; flex-direction: column; gap: 5px; }
 .shift-edit input, .shift-edit select { min-height: 26px; font-size: 12px; padding: 2px 6px; }
 .cb-pos-pick { display: flex; flex-wrap: wrap; gap: 4px; }

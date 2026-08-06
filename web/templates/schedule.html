@@ -103,10 +103,19 @@
             </div>
             {% if can('schedule.manage') %}<button type="button" class="cb-del" title="Delete shift" onclick="deleteShift(event, {{ b.shift.id }})">✕</button>{% endif %}
             {% if can('schedule.manage') or b.shift.staff_id == staff.id %}<button type="button" class="cb-edit" title="Edit shift" onclick="toggleMenu(event, this)">✎</button>{% endif %}
+            {# Clock in/out straight from the block — no need to open the pencil menu. #}
+            {% if b.shift.staff_id == staff.id and b.state in ('scheduled', 'in') %}
+            <form method="post" action="/schedule/shifts/{{ b.shift.id }}/{{ 'clock-out' if b.state == 'in' else 'clock-in' }}" class="cb-clock-form">
+              <button type="submit" class="cb-clock {{ 'on' if b.state == 'in' else '' }}" title="{{ 'Clock out' if b.state == 'in' else 'Clock in' }}">
+                <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" focusable="false">
+                  <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/>
+                  <path d="M12 7.5V12l3 1.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </form>
+            {% endif %}
             <div class="cb-menu">
               {% if b.shift.staff_id == staff.id %}
-              {% if b.state == 'scheduled' %}<form method="post" action="/schedule/shifts/{{ b.shift.id }}/clock-in"><button class="btn xs good">Clock in</button></form>
-              {% elif b.state == 'in' %}<form method="post" action="/schedule/shifts/{{ b.shift.id }}/clock-out"><button class="btn xs warn">Clock out</button></form>{% endif %}
               <details class="swap-form">
                 <summary class="btn xs">Request swap</summary>
                 <form method="post" action="/schedule/shifts/{{ b.shift.id }}/swap" style="margin-top:6px;display:flex;flex-direction:column;gap:5px">
