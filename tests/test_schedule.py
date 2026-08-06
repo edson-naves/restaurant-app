@@ -17,7 +17,9 @@ load_dotenv(ROOT / ".env")
 from fastapi.testclient import TestClient
 from app.main import app
 from app.database import SessionLocal
-from app.models.oltp import Position, Role, Shift, Staff, SwapRequest, TimeOffRequest
+from app.models.oltp import (
+    Position, Role, SalesForecast, Shift, Staff, SwapRequest, TimeOffRequest,
+)
 from app.services import schedule as sched
 
 fails = 0
@@ -184,7 +186,57 @@ check(owner_c.post(f"/schedule/swaps/{sw.id}/approve", follow_redirects=False).s
 d = SessionLocal(); reassigned = d.get(Shift, sh.id).staff_id == other.id; d.close()
 check(reassigned, "approving the swap reassigns the shift to the target")
 
+# 9. Labor cost & coverage (Phase 4). `sh` now belongs to `other` (6h) after
+#    the swap above; give them a wage and set a sales forecast for the week.
+d = SessionLocal()
+other_row = d.get(Staff, other.id)
+prev_wage = other_row.wage_cents
+other_row.wage_cents = 2500  # $25.00/hr
+d.commit(); d.close()
+
+# A non-manager cannot set the forecast.
+check(waiter_c.post("/schedule/forecast", follow_redirects=False,
+                    data={"week": day, "dates": day, "amounts": "1000"}).status_code == 403,
+      "a non-manager cannot set the sales forecast")
+
+# Owner sets a forecast: $1000 on Monday, $500 on Tuesday.
+r = owner_c.post("/schedule/forecast", follow_redirects=False, data={
+    "week": day,
+    "dates": [day, tue],
+    "amounts": ["1000", "500"]})
+check(r.status_code == 303, "owner sets the sales forecast", r.status_code)
+d = SessionLocal()
+fc_mon = d.query(SalesForecast).filter(SalesForecast.date == mon).first()
+d.close()
+check(fc_mon is not None and fc_mon.forecast_cents == 100000,
+      "forecast saved as cents ($1000 -> 100000)", fc_mon.forecast_cents if fc_mon else None)
+
+d = SessionLocal()
+summary = sched.labor_summary(d, mon)
+d.close()
+# `other` works 6h @ $25 on Monday (the swapped shift). Cost includes only
+# assigned shifts; the open shift adds hours to none of it.
+check(summary["cost_cents"] >= 15000, "labor cost includes wage x hours", summary["cost_cents"])
+check(summary["forecast_cents"] == 150000, "forecast totals the week ($1500)", summary["forecast_cents"])
+expected_pct = round(summary["cost_cents"] / 150000 * 100, 1)
+check(summary["pct"] == expected_pct, "labor % = cost / forecast", summary["pct"])
+check(summary["open_count"] >= 1, "coverage counts the open shift", summary["open_count"])
+
+# The Labor summary panel shows for a manager, and is hidden from a waiter.
+r = owner_c.get(f"/schedule?week={day}")
+check("Labor summary" in r.text and "Coverage alerts" in r.text,
+      "labor + coverage panels render for a manager")
+r = waiter_c.get(f"/schedule?week={day}")
+check("Labor summary" not in r.text, "wages/labor stay hidden from a waiter")
+
+# Restore the wage.
+d = SessionLocal(); d.get(Staff, other.id).wage_cents = prev_wage; d.commit(); d.close()
+
 # ---- cleanup --------------------------------------------------------------
+db = SessionLocal()
+for fc in db.query(SalesForecast).filter(SalesForecast.date.in_([mon, mon + timedelta(days=1)])).all():
+    db.delete(fc)
+db.commit(); db.close()
 db = SessionLocal()
 so = db.get(SwapRequest, sw.id)
 if so:

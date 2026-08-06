@@ -1017,9 +1017,29 @@ td.pending { color: var(--accent); font-weight: 700; }
 .sched-wrap {
   display: grid; gap: 16px; align-items: start;
   grid-template-columns: 320px minmax(0, 1fr);
-  grid-template-areas: "team cal" "req cal";
+  grid-template-areas: "team cal" "req cal" "labor cal" "cov cal";
 }
 .team-panel { grid-area: team; }
+.labor-panel { grid-area: labor; min-width: 0; }
+.cov-panel { grid-area: cov; min-width: 0; }
+.labor-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.labor-kpis .lk {
+  background: color-mix(in srgb, var(--muted) 10%, transparent);
+  border-radius: 8px; padding: 8px 10px;
+}
+.labor-kpis .lk small { display: block; color: var(--muted); font-size: 11px; }
+.labor-kpis .lk b { font-size: 17px; }
+.labor-kpis .lk .pill { font-size: 10px; margin-left: 4px; }
+.cov-alerts { display: flex; flex-direction: column; gap: 6px; }
+.cov {
+  border-radius: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.35;
+  border: 1px solid transparent;
+}
+.cov.warn { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+.cov.high { background: #fee2e2; color: #991b1b; border-color: #fca5a5; }
+.cov.ok   { background: #dcfce7; color: #166534; border-color: #86efac; }
+.fc-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.fc-row input { width: 92px; }
 .team-search { width: 100%; margin-bottom: 8px; }
 .team-list { display: flex; flex-direction: column; gap: 6px; max-height: 72vh; overflow-y: auto; }
 .team-row { display: flex; gap: 8px; align-items: center; }
@@ -1191,5 +1211,5 @@ input.pos-name { flex: none; width: 190px; max-width: 60vw; }
 .cblock:hover .cb-del, .cblock.menu-open .cb-del { opacity: 1; pointer-events: auto; }
 
 @media (max-width: 900px) {
-  .sched-wrap { grid-template-columns: 1fr; grid-template-areas: "team" "cal" "req"; }
+  .sched-wrap { grid-template-columns: 1fr; grid-template-areas: "team" "cal" "req" "labor" "cov"; }
 }

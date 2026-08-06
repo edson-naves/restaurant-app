@@ -241,6 +241,50 @@
     </div>
     {% endif %}
   </aside>
+
+  {% if labor %}
+  <aside class="labor-panel card">
+    <h3 style="margin:0 0 10px">Labor summary</h3>
+    <div class="labor-kpis">
+      <div class="lk"><small>Labor hours</small><b>{{ '%g'|format(labor.hours) }}h</b></div>
+      <div class="lk"><small>Labor cost</small><b>${{ labor.cost_cents|money }}</b></div>
+      <div class="lk"><small>Sales forecast</small><b>${{ labor.forecast_cents|money }}</b></div>
+      <div class="lk"><small>Labor %</small>
+        {% if labor.forecast_cents %}
+        <b>{{ labor.pct }}%</b><span class="pill {{ 'open' if labor.is_high else 'ok' }}">{{ 'High' if labor.is_high else 'Good' }}</span>
+        {% else %}<b>—</b>{% endif %}
+      </div>
+    </div>
+    <p class="sub" style="margin:8px 0 0;font-size:11px">Target ≤ {{ '%g'|format(labor.target) }}% of sales. Set pay rates on Manage → Staff.</p>
+
+    <details style="margin-top:10px">
+      <summary class="btn sm" style="cursor:pointer">Set sales forecast</summary>
+      <form method="post" action="/schedule/forecast" style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
+        <input type="hidden" name="week" value="{{ week_start.isoformat() }}">
+        {% for d, cents in labor.forecast_by_day.items() %}
+        <label class="fc-row sub">
+          <span>{{ d.strftime('%a') }} {{ d.day }}</span>
+          <span>$ <input type="number" min="0" step="1" name="amounts" value="{{ '%g'|format(cents / 100) }}"></span>
+          <input type="hidden" name="dates" value="{{ d.isoformat() }}">
+        </label>
+        {% endfor %}
+        <button class="btn good sm" style="align-self:flex-start">Save forecast</button>
+      </form>
+    </details>
+  </aside>
+
+  <aside class="cov-panel card">
+    <h3 style="margin:0 0 10px">Coverage alerts</h3>
+    <div class="cov-alerts">
+      {% if labor.open_count %}<div class="cov warn">⚠ {{ labor.open_count }} open shift{{ 's' if labor.open_count != 1 }} still unassigned.</div>{% endif %}
+      {% if labor.is_high %}<div class="cov high">⚠ Labor is high — {{ labor.pct }}% of forecast (target ≤ {{ '%g'|format(labor.target) }}%).</div>{% endif %}
+      {% if labor.uncovered %}<div class="cov warn">⚠ No one scheduled:
+        {% for d in labor.uncovered %}{{ d.strftime('%a') }} {{ d.day }}{% if not loop.last %}, {% endif %}{% endfor %}.
+      </div>{% endif %}
+      {% if not labor.open_count and not labor.is_high and not labor.uncovered %}<div class="cov ok">✓ No coverage issues this week.</div>{% endif %}
+    </div>
+  </aside>
+  {% endif %}
 </div>
 
 <script src="/static/schedule.js?v={{ asset_v() }}"></script>

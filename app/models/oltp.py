@@ -4,11 +4,12 @@ This is the operational side of the system: what waiters, kitchen staff and
 the delivery coordinator touch during service. It is the source of truth and
 the source system for the dimensional model in star.py.
 """
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -1050,6 +1051,16 @@ class SwapRequest(Base):
     __table_args__ = (
         Index("ix_swap_status", "status", "created_at"),
     )
+
+
+class SalesForecast(Base):
+    """An owner's forecast sales for a day, used to compute the schedule's labor
+    percentage (labor cost ÷ forecast). Money-planning input, not actual sales."""
+    __tablename__ = "sales_forecast"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    date: Mapped[date] = mapped_column(Date, unique=True, nullable=False)
+    forecast_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 class Position(Base):

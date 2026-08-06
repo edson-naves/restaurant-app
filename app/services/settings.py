@@ -35,6 +35,9 @@ DEFAULTS: dict[str, str] = {
     # expands to fit any shift that falls outside these hours.
     "schedule_start_hour": "8",
     "schedule_end_hour": "23",
+    # Target labor cost as a percent of forecast sales. The schedule flags a week
+    # over this as "High".
+    "labor_pct_target": "30",
 }
 
 # What the settings form is allowed to write. Anything else is ignored, so a
@@ -112,6 +115,11 @@ def card_surcharge_rate(db: Session) -> float:
     """The card-payment surcharge percent (0 = off). Applied only when the
     guest settles with a card, to pass on the processing cost."""
     return _rate(_all(db)["card_surcharge_rate"])
+
+
+def labor_pct_target(db: Session) -> float:
+    """Target labor % of forecast sales; a week above this is flagged High."""
+    return _rate(_all(db)["labor_pct_target"]) or 30.0
 
 
 def schedule_hours(db: Session) -> tuple[int, int]:

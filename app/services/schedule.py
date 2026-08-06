@@ -12,7 +12,8 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.oltp import (
-    Position, Shift, Staff, SwapRequest, SwapStatus, TimeOffRequest, TimeOffStatus,
+    Position, SalesForecast, Shift, Staff, SwapRequest, SwapStatus,
+    TimeOffRequest, TimeOffStatus,
 )
 from app.services import settings as settings_svc
 
@@ -75,6 +76,52 @@ def all_swaps(db: Session, staff_id: int | None = None) -> list[SwapRequest]:
     if staff_id is not None:
         q = q.where(SwapRequest.requested_by_id == staff_id)
     return db.execute(q).scalars().all()
+
+
+def week_forecast(db: Session, week_start: date) -> dict[date, int]:
+    """{day: forecast_cents} for the week (0 where unset)."""
+    days = week_days(week_start)
+    rows = db.execute(
+        select(SalesForecast).where(SalesForecast.date.in_(days))
+    ).scalars().all()
+    have = {r.date: r.forecast_cents for r in rows}
+    return {d: have.get(d, 0) for d in days}
+
+
+def labor_summary(db: Session, week_start: date) -> dict:
+    """Week labor cost/hours vs forecast sales, plus coverage alerts."""
+    start_dt = datetime(week_start.year, week_start.month, week_start.day)
+    end_dt = start_dt + timedelta(days=7)
+    shifts = db.execute(
+        select(Shift).where(Shift.starts_at >= start_dt, Shift.starts_at < end_dt)
+    ).scalars().all()
+
+    assigned = [s for s in shifts if s.staff_id is not None]
+    hours = sum(shift_hours(s) for s in assigned)
+    cost_cents = int(round(sum(
+        shift_hours(s) * (s.staff.wage_cents or 0) for s in assigned
+    )))
+    open_count = sum(1 for s in shifts if s.staff_id is None)
+
+    fc = week_forecast(db, week_start)
+    forecast_cents = sum(fc.values())
+    pct = round(cost_cents / forecast_cents * 100, 1) if forecast_cents else 0.0
+    target = settings_svc.labor_pct_target(db)
+
+    covered = {s.starts_at.date() for s in shifts if s.staff_id is not None}
+    uncovered = [d for d in week_days(week_start) if d not in covered]
+
+    return {
+        "hours": hours,
+        "cost_cents": cost_cents,
+        "forecast_cents": forecast_cents,
+        "pct": pct,
+        "target": target,
+        "is_high": bool(forecast_cents) and pct > target,
+        "open_count": open_count,
+        "uncovered": uncovered,
+        "forecast_by_day": fc,
+    }
 
 
 def pending_request_count(db: Session) -> int:

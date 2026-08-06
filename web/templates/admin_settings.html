@@ -113,7 +113,15 @@
         <input type="number" name="schedule_end_hour" min="1" max="24" step="1"
                value="{{ settings.schedule_end_hour }}">
       </div>
+      <div class="field" style="max-width:160px">
+        <label>Labor target (% of sales)</label>
+        <input type="number" name="labor_pct_target" min="1" max="100" step="1"
+               value="{{ settings.labor_pct_target }}">
+      </div>
     </div>
+    <p class="sub" style="margin:10px 0 0;font-size:11px">
+      The schedule's Labor summary flags a week above this percentage as <b>High</b>.
+    </p>
   </div>
 
   <div class="card">

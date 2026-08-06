@@ -1213,6 +1213,7 @@ def save_settings(
     card_surcharge_rate: str = Form("0"),
     schedule_start_hour: str = Form("8"),
     schedule_end_hour: str = Form("23"),
+    labor_pct_target: str = Form("30"),
     biz_name: str = Form(""),
     biz_address: str = Form(""),
     biz_postal: str = Form(""),
@@ -1227,6 +1228,7 @@ def save_settings(
         ("Auto-gratuity rate", auto_gratuity_rate),
         ("Service charge", service_charge_rate),
         ("Card fee", card_surcharge_rate),
+        ("Labor target", labor_pct_target),
     ):
         try:
             if float(raw) < 0:
@@ -1252,6 +1254,7 @@ def save_settings(
         "card_surcharge_rate": card_surcharge_rate,
         "schedule_start_hour": str(sh_start),
         "schedule_end_hour": str(sh_end),
+        "labor_pct_target": labor_pct_target,
         "biz_name": biz_name, "biz_address": biz_address,
         "biz_postal": biz_postal, "biz_phone": biz_phone,
     })

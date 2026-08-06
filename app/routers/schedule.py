@@ -17,7 +17,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import can, render, require
 from app.models.oltp import (
-    Position, Shift, Staff, SwapRequest, SwapStatus, TimeOffRequest, TimeOffStatus,
+    Position, SalesForecast, Shift, Staff, SwapRequest, SwapStatus,
+    TimeOffRequest, TimeOffStatus,
 )
 from app.services import schedule as sched
 
@@ -88,8 +89,37 @@ def schedule_page(
         "my_timeoff": sched.timeoff_for(db, staff.id),
         "pending_swaps": sched.pending_swaps(db) if manage else [],
         "my_swaps": sched.swaps_for(db, staff.id),
+        # Labor cost / coverage (owner-manager only — wages are sensitive).
+        "labor": sched.labor_summary(db, week_start) if manage else None,
         "title": "Schedule",
     })
+
+
+@router.post("/schedule/forecast")
+def set_forecast(
+    week: str = Form(""),
+    dates: list[str] = Form(default=[]),
+    amounts: list[str] = Form(default=[]),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("schedule.manage")),
+):
+    """Set the forecast sales for each day of the week (dollars → cents)."""
+    existing = {
+        f.date: f for f in db.execute(select(SalesForecast)).scalars().all()
+    }
+    for ds, amt in zip(dates, amounts):
+        try:
+            d = datetime.strptime(ds, "%Y-%m-%d").date()
+            cents = max(0, int(round(float(amt or 0) * 100)))
+        except ValueError:
+            continue
+        row = existing.get(d)
+        if row is None:
+            db.add(SalesForecast(date=d, forecast_cents=cents))
+        else:
+            row.forecast_cents = cents
+    db.commit()
+    return RedirectResponse(f"/schedule?week={week or sched.monday_of(datetime.now().date()).isoformat()}", status_code=303)
 
 
 @router.get("/schedule/requests")
