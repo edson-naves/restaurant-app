@@ -315,6 +315,22 @@ def _validate_instrument(order: Order, instrument: PaymentInstrument) -> None:
         )
 
 
+def _lock_order(db: Session, order: Order) -> None:
+    """Serialize settlement of one order so two tablets can't double-pay it.
+
+    Taking payment is a read-modify-write: read what's outstanding, then write
+    allocations. Two concurrent requests on the same seat/order could each read
+    it as unpaid and both record a payment. A row lock on the order makes the
+    second request wait for the first to commit, at which point it re-reads the
+    now-settled balance and is correctly rejected as nothing-outstanding.
+
+    On Postgres this emits SELECT ... FOR UPDATE. On SQLite it's a harmless
+    no-op (SQLAlchemy omits the clause) — SQLite already serializes writers, so
+    the guarantee holds there too.
+    """
+    db.execute(select(Order.id).where(Order.id == order.id).with_for_update()).first()
+
+
 def pay_seat(
     db: Session,
     order: Order,
@@ -346,6 +362,7 @@ def pay_seat(
     if instrument is None:
         raise PaymentError("Unknown payment instrument.")
     _validate_instrument(order, instrument)
+    _lock_order(db, order)          # serialize concurrent settlement of this order
 
     ledgers, _ = build_ledgers(db, order)
     ledger = ledgers.get(seat.id)
@@ -462,6 +479,7 @@ def pay_whole_order(
     if instrument is None:
         raise PaymentError("Unknown payment instrument.")
     _validate_instrument(order, instrument)
+    _lock_order(db, order)          # serialize concurrent settlement of this order
 
     outstanding: list[tuple[OrderItem, int]] = []
     for item in order.items:
@@ -608,6 +626,7 @@ def void_payment(db: Session, payment: Payment, staff_id: int, reason: str) -> N
         raise PaymentError("This payment is already voided.")
 
     order = payment.order
+    _lock_order(db, order)          # serialize against a concurrent settlement
     for alloc in list(payment.allocations):
         db.delete(alloc)
     receipt = db.execute(

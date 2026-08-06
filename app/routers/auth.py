@@ -20,7 +20,9 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import templates
 from app.models.oltp import Role, Staff
-from app.security import hash_pin, is_legacy_pin, sign_session, verify_pin
+from app.security import (
+    cookie_secure, hash_pin, is_legacy_pin, sign_session, verify_pin,
+)
 
 router = APIRouter()
 
@@ -66,7 +68,7 @@ def do_login(
     max_age = REMEMBER_AGE if remember else MAX_AGE
     resp.set_cookie(
         COOKIE, sign_session(person.id),
-        max_age=max_age, httponly=True, samesite="lax",
+        max_age=max_age, httponly=True, samesite="lax", secure=cookie_secure(),
     )
     return resp
 
@@ -74,5 +76,6 @@ def do_login(
 @router.get("/logout")
 def logout():
     resp = RedirectResponse("/login", status_code=303)
-    resp.delete_cookie(COOKIE)
+    # Match the attributes the cookie was set with so the browser clears it.
+    resp.delete_cookie(COOKIE, httponly=True, samesite="lax", secure=cookie_secure())
     return resp

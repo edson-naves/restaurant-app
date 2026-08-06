@@ -18,9 +18,11 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.database import SessionLocal
 from app.models.oltp import Role, Staff
+import os
+
 from app.routers.pay import _discount_approver_id
 from app.security import (
-    hash_pin, is_legacy_pin, sign_session, verify_pin, verify_session,
+    cookie_secure, hash_pin, is_legacy_pin, sign_session, verify_pin, verify_session,
 )
 
 fails = 0
@@ -51,6 +53,19 @@ check(verify_pin(h, "4321") and not verify_pin(h, "0000"), "verify_pin checks ag
 check(verify_pin("4321", "4321") and is_legacy_pin("4321"),
       "a legacy plaintext PIN still verifies (so it can be upgraded on login)")
 check(not is_legacy_pin(h), "a hashed PIN is not treated as legacy")
+
+# ---- Secure cookie flag (HTTPS-only in prod) -------------------------------
+_prev = os.environ.get("COOKIE_SECURE")
+for val, want in (("", False), ("1", True), ("true", True), ("0", False), ("off", False)):
+    if val:
+        os.environ["COOKIE_SECURE"] = val
+    else:
+        os.environ.pop("COOKIE_SECURE", None)
+    check(cookie_secure() is want, f"COOKIE_SECURE={val!r} -> secure={want}")
+if _prev is None:
+    os.environ.pop("COOKIE_SECURE", None)
+else:
+    os.environ["COOKIE_SECURE"] = _prev
 
 # ---- integration: forged and deactivated sessions --------------------------
 db = SessionLocal()

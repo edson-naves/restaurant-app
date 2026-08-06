@@ -38,6 +38,18 @@ def _secret() -> bytes:
     return (os.environ.get("SECRET_KEY") or _DEV_SECRET).encode("utf-8")
 
 
+def cookie_secure() -> bool:
+    """Whether the session cookie should carry the Secure flag (HTTPS-only).
+
+    Off by default so local HTTP development and the test server work; set
+    COOKIE_SECURE=1 in production (behind HTTPS, e.g. Render) so the cookie is
+    never transmitted over a plaintext connection.
+    """
+    return (os.environ.get("COOKIE_SECURE") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 # --------------------------------------------------------------------------
 # Session cookie signing
 # --------------------------------------------------------------------------
