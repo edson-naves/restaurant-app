@@ -233,7 +233,86 @@ check("Labor summary" not in r.text, "wages/labor stay hidden from a waiter")
 # Restore the wage.
 d = SessionLocal(); d.get(Staff, other.id).wage_cents = prev_wage; d.commit(); d.close()
 
+# 10. Phase 5 — position/staff filters, day + month views, and copy last week.
+p5_created: list[int] = []
+def _mk(staff_id, start_dt, end_dt, position_id=None):
+    dd = SessionLocal()
+    s = Shift(staff_id=staff_id, position_id=position_id, starts_at=start_dt, ends_at=end_dt)
+    dd.add(s); dd.commit(); sid = s.id; dd.close()
+    p5_created.append(sid)
+    return sid
+
+src_week = mon + timedelta(days=7)
+tgt_week = mon + timedelta(days=14)
+p5_week = mon + timedelta(days=21)
+# Clear these future weeks so the counts below are deterministic.
+d = SessionLocal()
+for sh in d.query(Shift).filter(
+    Shift.starts_at >= datetime(src_week.year, src_week.month, src_week.day),
+    Shift.starts_at < datetime(p5_week.year, p5_week.month, p5_week.day) + timedelta(days=7),
+).all():
+    d.delete(sh)
+d.commit(); d.close()
+
+# Two shifts on the same day: waiter (Server position) and other (no position).
+p5_mon = datetime(p5_week.year, p5_week.month, p5_week.day, 10, 0)
+_mk(waiter.id, p5_mon, p5_mon + timedelta(hours=4), position_id=pos_id)
+_mk(other.id, p5_mon + timedelta(hours=5), p5_mon + timedelta(hours=8), None)
+
+d = SessionLocal()
+def _blocks(cal):
+    return [b for b in cal.days[0].blocks if not b.is_timeoff]
+cal_all = sched.build_calendar(d, p5_week, [waiter, other], include_open=True)
+check(len(_blocks(cal_all)) == 2, "unfiltered week shows both shifts", len(_blocks(cal_all)))
+cal_pos = sched.build_calendar(d, p5_week, [waiter, other], include_open=True, position_id=pos_id)
+check(len(_blocks(cal_pos)) == 1 and _blocks(cal_pos)[0].shift.staff_id == waiter.id,
+      "position filter shows only that position's shift")
+cal_who = sched.build_calendar(d, p5_week, [waiter, other], include_open=True, only_staff_id=other.id)
+check(len(_blocks(cal_who)) == 1 and _blocks(cal_who)[0].shift.staff_id == other.id,
+      "staff filter shows only that person's shift")
+
+day_cal = sched.build_day(d, p5_week, [waiter, other], include_open=True)
+check(len(day_cal.days) == 1 and len(_blocks(day_cal)) == 2,
+      "day view holds a single day with its shifts")
+
+mv = sched.build_month(d, p5_week, [waiter, other], include_open=True)
+month_has_chip = any(
+    cell.date == p5_week and cell.chips for wk in mv.weeks for cell in wk
+)
+check(month_has_chip, "month view places chips on the scheduled day")
+d.close()
+
+# Copy last week: clone src_week into tgt_week.
+src_mon = datetime(src_week.year, src_week.month, src_week.day, 9, 0)
+_mk(waiter.id, src_mon, src_mon + timedelta(hours=5), position_id=pos_id)
+d = SessionLocal(); n = sched.copy_last_week(d, tgt_week); d.close()
+check(n == 1, "copy last week clones the source week's shift", n)
+d = SessionLocal()
+copied_sh = d.query(Shift).filter(
+    Shift.staff_id == waiter.id, Shift.starts_at == src_mon + timedelta(days=7)
+).first()
+if copied_sh:
+    p5_created.append(copied_sh.id)
+d.close()
+check(copied_sh is not None, "the cloned shift lands a week later at the same time")
+d = SessionLocal(); n2 = sched.copy_last_week(d, tgt_week); d.close()
+check(n2 == 0, "copy last week skips shifts that would clash", n2)
+
+# Routes: the day and month views load; a non-manager cannot copy a week.
+check(owner_c.get(f"/schedule?view=day&date={p5_week.isoformat()}").status_code == 200,
+      "day view route loads")
+check(owner_c.get(f"/schedule?view=month&date={p5_week.isoformat()}").status_code == 200,
+      "month view route loads")
+check(waiter_c.post("/schedule/copy-week", data={"week": day}, follow_redirects=False).status_code == 403,
+      "a non-manager cannot copy last week")
+
 # ---- cleanup --------------------------------------------------------------
+db = SessionLocal()
+for sid in p5_created:
+    o = db.get(Shift, sid)
+    if o:
+        db.delete(o)
+db.commit(); db.close()
 db = SessionLocal()
 for fc in db.query(SalesForecast).filter(SalesForecast.date.in_([mon, mon + timedelta(days=1)])).all():
     db.delete(fc)

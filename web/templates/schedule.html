@@ -10,7 +10,7 @@
     <h3 style="margin:0 0 8px">Team</h3>
     <input type="search" class="team-search" placeholder="Search team…" oninput="filterTeam(this.value)">
     <div class="team-list">
-      {% for m in cal.team %}
+      {% for m in team %}
       <div class="team-row" data-name="{{ m.staff.name|lower }}"
            {% if can('schedule.manage') %}data-staff-id="{{ m.staff.id }}" title="Drag onto a day to schedule"{% endif %}>
         <span class="avatar">{% if m.staff.photo %}<img src="{{ m.staff.photo }}" alt="">{% else %}{{ initials(m.staff.name) }}{% endif %}</span>
@@ -21,20 +21,50 @@
         </div>
       </div>
       {% endfor %}
-      {% if not cal.team %}<p class="sub">No staff.</p>{% endif %}
+      {% if not team %}<p class="sub">No staff.</p>{% endif %}
     </div>
   </aside>
 
   <!-- Calendar -->
   <div class="cal card">
     <div class="cal-toolbar">
-      <span class="cal-week">Week of {{ week_start.strftime('%b') }} {{ week_start.day }} – {{ cal.days[6].date.strftime('%b') }} {{ cal.days[6].date.day }}{% if not can('schedule.manage') %} · your shifts{% endif %}</span>
-      <div class="cal-nav">
-        <a class="btn sm" href="/schedule?week={{ this_week }}">Today</a>
-        <a class="btn sm" href="/schedule?week={{ prev_week }}">‹</a>
-        <a class="btn sm" href="/schedule?week={{ next_week }}">›</a>
+      <span class="cal-week">{{ period_label }}{% if not can('schedule.manage') %} · your shifts{% endif %}</span>
+      <div class="cal-controls">
+        <div class="view-toggle">
+          <a class="btn sm {{ 'on' if view == 'week' else '' }}" href="{{ week_url }}">Week</a>
+          <a class="btn sm {{ 'on' if view == 'day' else '' }}" href="{{ day_url }}">Day</a>
+          <a class="btn sm {{ 'on' if view == 'month' else '' }}" href="{{ month_url }}">Month</a>
+        </div>
+        {% if can('schedule.manage') %}
+        <form class="cal-filters" method="get" action="/schedule">
+          <input type="hidden" name="view" value="{{ view }}">
+          <input type="hidden" name="date" value="{{ focus.isoformat() }}">
+          <select name="pos" onchange="this.form.submit()" title="Filter by position">
+            <option value="0">All positions</option>
+            {% for p in positions %}<option value="{{ p.id }}" {{ 'selected' if pos == p.id else '' }}>{{ p.name }}</option>{% endfor %}
+          </select>
+          <select name="who" onchange="this.form.submit()" title="Filter by person">
+            <option value="0">All staff</option>
+            {% for m in all_staff %}<option value="{{ m.id }}" {{ 'selected' if who == m.id else '' }}>{{ m.name }}</option>{% endfor %}
+          </select>
+        </form>
+        {% endif %}
+        <div class="cal-nav">
+          <a class="btn sm" href="{{ today_url }}">Today</a>
+          <a class="btn sm" href="{{ prev_url }}" title="Previous">‹</a>
+          <a class="btn sm" href="{{ next_url }}" title="Next">›</a>
+        </div>
+        {% if can('schedule.manage') and view == 'week' %}
+        <form method="post" action="/schedule/copy-week" class="copy-week">
+          <input type="hidden" name="week" value="{{ week_start.isoformat() }}">
+          <button class="btn sm" title="Clone last week's shifts into this week">⧉ Copy last week</button>
+        </form>
+        {% endif %}
       </div>
     </div>
+    {% if copied is defined and copied >= 0 %}
+    <div class="note copy-note">Copied {{ copied }} shift{{ 's' if copied != 1 }} from last week.{% if copied == 0 %} Nothing to copy, or they’d all clash.{% endif %}</div>
+    {% endif %}
     {% if can('schedule.manage') %}
     <details class="cal-add">
       <summary class="btn primary sm">+ Add shift</summary>
@@ -58,10 +88,32 @@
         <button class="btn good">Add</button>
       </form>
     </details>
-    <p class="sub cal-hint">↔ Drag a teammate onto a day to schedule them · drag a shift to move it · drag its bottom edge to resize.</p>
+    {% if view != 'month' %}<p class="sub cal-hint">↔ Drag a teammate onto a day to schedule them · drag a shift to move it · drag its bottom edge to resize.</p>{% endif %}
     {% endif %}
 
-    <div class="cal-scroll">
+    {% if view == 'month' %}
+    <div class="month-grid">
+      <div class="month-head">
+        {% for d in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}<div class="mh">{{ d }}</div>{% endfor %}
+      </div>
+      <div class="month-body">
+        {% for week in month.weeks %}{% for day in week %}
+        <div class="month-cell {{ 'out' if not day.in_month else '' }} {{ 'is-today' if day.is_today else '' }}">
+          <a class="month-date" href="/schedule?view=day&date={{ day.date.isoformat() }}{% if pos %}&pos={{ pos }}{% endif %}{% if who and can('schedule.manage') %}&who={{ who }}{% endif %}">{{ day.date.day }}</a>
+          <div class="month-chips">
+            {% for c in day.chips %}
+            <div class="mchip {{ 'open' if c.is_open else '' }}" style="--pc:{{ c.color }}" title="{{ c.label }} {{ c.time }}">
+              <span class="mchip-label">{{ c.label }}</span><span class="mchip-time">{{ c.time }}</span>
+            </div>
+            {% endfor %}
+            {% if day.more %}<div class="mchip-more">+{{ day.more }} more</div>{% endif %}
+          </div>
+        </div>
+        {% endfor %}{% endfor %}
+      </div>
+    </div>
+    {% else %}
+    <div class="cal-scroll" style="--ndays: {{ cal.days|length }}">
       <div class="cal-head">
         <div class="cal-gutter"></div>
         {% for day in cal.days %}
@@ -156,6 +208,7 @@
         {% endfor %}
       </div>
     </div>
+    {% endif %}
 
     <div class="cal-legend">
       {% for p in positions %}<span class="leg"><span class="dot" style="background:{{ p.color }}"></span>{{ p.name }}</span>{% endfor %}

@@ -1061,10 +1061,51 @@ td.pending { color: var(--accent); font-weight: 700; }
 }
 .cal-week { font-weight: 700; font-size: 15px; }
 .cal-nav { display: flex; gap: 6px; }
+.cal-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* Week / Day / Month segmented toggle */
+.view-toggle { display: inline-flex; }
+.view-toggle .btn { border-radius: 0; }
+.view-toggle .btn:first-child { border-radius: 6px 0 0 6px; }
+.view-toggle .btn:last-child { border-radius: 0 6px 6px 0; }
+.view-toggle .btn.on { background: var(--accent); color: #fff; }
+
+.cal-filters { display: inline-flex; gap: 6px; margin: 0; }
+.cal-filters select { font-size: 12px; padding: 3px 6px; max-width: 150px; }
+.copy-week { margin: 0; }
+.copy-note { margin-bottom: 10px; }
+
+/* Month view — a calendar grid of day cells with shift chips */
+.month-head, .month-body { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 3px; }
+.month-head { margin-bottom: 3px; }
+.month-head .mh { text-align: center; font-size: 11px; font-weight: 700; color: var(--muted); padding: 4px 0; }
+.month-cell {
+  min-height: 96px; border: 1px solid var(--line); border-radius: 7px; padding: 3px 3px 4px;
+  background: var(--panel); display: flex; flex-direction: column; min-width: 0;
+}
+.month-cell.out { opacity: .4; }
+.month-cell.is-today { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.month-date {
+  font-size: 11px; font-weight: 700; align-self: flex-end; color: var(--fg);
+  text-decoration: none; padding: 0 4px; border-radius: 4px; line-height: 1.5;
+}
+.month-date:hover { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.month-chips { display: flex; flex-direction: column; gap: 2px; margin-top: 2px; min-width: 0; }
+.mchip {
+  display: flex; align-items: center; gap: 4px; font-size: 10px; line-height: 1.35;
+  border-radius: 3px; padding: 1px 4px; min-width: 0; white-space: nowrap;
+  background: color-mix(in srgb, var(--pc) 20%, var(--panel)); border-left: 2px solid var(--pc);
+}
+.mchip.open { border-left: 2px dashed #ef4444; background: color-mix(in srgb, #ef4444 8%, var(--panel)); }
+.mchip-label { font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
+.mchip-time { color: var(--muted); margin-left: auto; font-size: 9px; }
+.mchip-more { font-size: 10px; color: var(--muted); padding: 1px 4px; }
 .cal-add { margin-bottom: 10px; }
 .cal-scroll { overflow-x: auto; }
 .cal-head, .cal-body {
-  display: grid; grid-template-columns: 52px repeat(7, minmax(120px, 1fr)); min-width: 760px;
+  display: grid;
+  grid-template-columns: 52px repeat(var(--ndays, 7), minmax(120px, 1fr));
+  min-width: calc(52px + var(--ndays, 7) * 120px);
 }
 .cal-dayhead { text-align: center; font-size: 12px; padding: 6px 2px; border-bottom: 1px solid var(--line); }
 .cal-dayhead.is-today { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 8px 8px 0 0; }

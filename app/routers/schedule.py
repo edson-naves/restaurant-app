@@ -52,47 +52,120 @@ def _guard_overlap(db, staff_id, starts, ends, exclude_id=None) -> None:
         )
 
 
+def _parse_date(s: str):
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+
+
 @router.get("/schedule")
 def schedule_page(
     request: Request,
+    view: str = "week",
     week: str = "",
+    date: str = "",
+    pos: int = 0,
+    who: int = 0,
+    copied: int = -1,
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("schedule.view")),
 ):
-    """The week calendar. Managers see every active staff member plus open
-    shifts; anyone else sees only their own week and clocks in/out."""
-    week_start = sched.week_start_for(week or None)
+    """The schedule, in a Week, Day, or Month view. Managers see every active
+    staff member plus open shifts and can filter by position/person; anyone else
+    sees only their own shifts and clocks in/out."""
     manage = can(staff, "schedule.manage")
+    if view not in ("week", "day", "month"):
+        view = "week"
 
-    if manage:
-        staff_list = db.execute(
-            select(Staff).where(Staff.is_active.is_(True)).order_by(Staff.name)
-        ).scalars().all()
-    else:
-        staff_list = [staff]
+    # Focal date drives every view: ?date wins, then the legacy ?week, then today.
+    focus = _parse_date(date) or _parse_date(week) or datetime.now().date()
+    today = datetime.now().date()
 
-    cal = sched.build_calendar(db, week_start, staff_list, include_open=manage)
+    staff_list = (
+        db.execute(select(Staff).where(Staff.is_active.is_(True)).order_by(Staff.name))
+        .scalars().all()
+        if manage else [staff]
+    )
     positions = db.execute(
         select(Position).where(Position.is_active.is_(True)).order_by(Position.sort_order)
     ).scalars().all()
-    return render(request, "schedule.html", {
-        "db": db, "staff": staff,
-        "cal": cal, "positions": positions,
-        "week_start": week_start,
-        "prev_week": (week_start - timedelta(days=7)).isoformat(),
-        "next_week": (week_start + timedelta(days=7)).isoformat(),
-        "this_week": sched.monday_of(datetime.now().date()).isoformat(),
-        "today": datetime.now().date(),
-        # Requests panel: managers see everyone's pending time off; everyone sees
-        # their own recent requests + a form to file a new one.
+
+    # Filters. A regular member only ever sees themselves, so the staff filter is
+    # manager-only; the position filter is available to everyone.
+    position_id = pos or None
+    only_staff_id = (who or None) if manage else None
+
+    def url(v, d):
+        u = f"/schedule?view={v}&date={d.isoformat()}"
+        if pos:
+            u += f"&pos={pos}"
+        if who and manage:
+            u += f"&who={who}"
+        return u
+
+    ctx = {
+        "db": db, "staff": staff, "view": view, "positions": positions,
+        "focus": focus, "today": today,
+        # The team panel renders in every view, so it's built once here rather
+        # than pulled off the (view-specific) calendar object.
+        "team": sched.team_for(db, sched.monday_of(focus), staff_list),
+        "pos": pos, "who": who,
+        "week_url": url("week", focus), "day_url": url("day", focus),
+        "month_url": url("month", focus), "today_url": url(view, today),
+        "copied": copied,
+        # Requests panel (unchanged): managers see everyone's pending items.
         "pending_timeoff": sched.pending_timeoff(db) if manage else [],
         "my_timeoff": sched.timeoff_for(db, staff.id),
         "pending_swaps": sched.pending_swaps(db) if manage else [],
         "my_swaps": sched.swaps_for(db, staff.id),
-        # Labor cost / coverage (owner-manager only — wages are sensitive).
-        "labor": sched.labor_summary(db, week_start) if manage else None,
+        "labor": None,
         "title": "Schedule",
-    })
+    }
+
+    if view == "month":
+        month = sched.build_month(db, focus, staff_list, include_open=manage,
+                                  position_id=position_id, only_staff_id=only_staff_id)
+        prev_focus = (focus.replace(day=1) - timedelta(days=1)).replace(day=1)
+        next_focus = sched._first_of_next_month(focus.replace(day=1))
+        ctx.update(month=month, period_label=month.label,
+                   prev_url=url("month", prev_focus), next_url=url("month", next_focus))
+    elif view == "day":
+        cal = sched.build_day(db, focus, staff_list, include_open=manage,
+                              position_id=position_id, only_staff_id=only_staff_id)
+        ctx.update(cal=cal, period_label=f"{focus.strftime('%A, %b')} {focus.day}",
+                   prev_url=url("day", focus - timedelta(days=1)),
+                   next_url=url("day", focus + timedelta(days=1)))
+    else:
+        week_start = sched.monday_of(focus)
+        cal = sched.build_calendar(db, week_start, staff_list, include_open=manage,
+                                   position_id=position_id, only_staff_id=only_staff_id)
+        end = week_start + timedelta(days=6)
+        ctx.update(
+            cal=cal, week_start=week_start,
+            period_label=f"{week_start.strftime('%b')} {week_start.day} – {end.strftime('%b')} {end.day}",
+            prev_url=url("week", week_start - timedelta(days=7)),
+            next_url=url("week", week_start + timedelta(days=7)),
+            # Labor cost / coverage (owner-manager only, week-based).
+            labor=sched.labor_summary(db, week_start) if manage else None,
+        )
+
+    return render(request, "schedule.html", ctx)
+
+
+@router.post("/schedule/copy-week")
+def copy_week(
+    week: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("schedule.manage")),
+):
+    """Clone last week's roster into this week (skipping clashes)."""
+    week_start = sched.week_start_for(week or None)
+    created = sched.copy_last_week(db, week_start)
+    return RedirectResponse(
+        f"/schedule?view=week&date={week_start.isoformat()}&copied={created}",
+        status_code=303,
+    )
 
 
 @router.post("/schedule/forecast")

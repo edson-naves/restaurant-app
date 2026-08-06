@@ -286,18 +286,42 @@ def _layout_day(blocks: list[CalBlock], span_min: int) -> None:
         b.lanes = ncols
 
 
-def build_calendar(db: Session, week_start: date, staff_list: list[Staff],
-                   include_open: bool) -> Calendar:
-    """The week's shifts laid out on day columns by time. `staff_list` is the
-    rows for the team panel; managers also see open (unassigned) shifts."""
-    days = [CalDay(date=d) for d in week_days(week_start)]
-    start_dt = datetime(week_start.year, week_start.month, week_start.day)
-    end_dt = start_dt + timedelta(days=7)
+def _week_hours(db: Session, week_start: date, ids: list[int]) -> dict[int, float]:
+    """Scheduled hours per staff over the week containing the view, so the team
+    panel always reads weekly totals even when the calendar shows a single day."""
+    if not ids:
+        return {}
+    s = datetime(week_start.year, week_start.month, week_start.day)
+    e = s + timedelta(days=7)
+    rows = db.execute(
+        select(Shift).where(Shift.staff_id.in_(ids), Shift.starts_at >= s, Shift.starts_at < e)
+    ).scalars().all()
+    out: dict[int, float] = {}
+    for sh in rows:
+        if sh.staff_id is not None:
+            out[sh.staff_id] = out.get(sh.staff_id, 0.0) + shift_hours(sh)
+    return out
+
+
+def _build_span(db: Session, dates: list[date], staff_list: list[Staff],
+                include_open: bool, position_id: int | None = None,
+                only_staff_id: int | None = None) -> Calendar:
+    """Lay out shifts on one or more day columns by time-of-day. Shared by the
+    week and day views. `position_id`/`only_staff_id` filter which shifts show."""
+    days = [CalDay(date=d) for d in dates]
+    index = {d: i for i, d in enumerate(dates)}
+    start_dt = datetime(dates[0].year, dates[0].month, dates[0].day)
+    end_dt = datetime(dates[-1].year, dates[-1].month, dates[-1].day) + timedelta(days=1)
 
     ids = [s.id for s in staff_list]
     conds = [Shift.starts_at >= start_dt, Shift.starts_at < end_dt]
-    who = Shift.staff_id.in_(ids)
-    who = (who | Shift.staff_id.is_(None)) if include_open else who
+    if only_staff_id:
+        who = Shift.staff_id == only_staff_id
+    else:
+        who = Shift.staff_id.in_(ids)
+        who = (who | Shift.staff_id.is_(None)) if include_open else who
+    if position_id:
+        conds.append(Shift.position_id == position_id)
     shifts = db.execute(
         select(Shift).where(*conds, who).order_by(Shift.starts_at)
     ).scalars().all()
@@ -310,43 +334,41 @@ def build_calendar(db: Session, week_start: date, staff_list: list[Staff],
     win_start_min = win_start * 60
     span_min = max(60, (win_end - win_start) * 60)
 
-    per_staff: dict[int, float] = {}
     for sh in shifts:
-        idx = (sh.starts_at.date() - week_start).days
-        if not (0 <= idx < 7):
+        idx = index.get(sh.starts_at.date())
+        if idx is None:
             continue
         smin = sh.starts_at.hour * 60 + sh.starts_at.minute
         emin = sh.ends_at.hour * 60 + sh.ends_at.minute
         if sh.ends_at.date() > sh.starts_at.date():
             emin += 24 * 60                            # crosses midnight
         h = shift_hours(sh)
-        blk = CalBlock(
+        days[idx].blocks.append(CalBlock(
             shift=sh, state=clock_state(sh), hours=h, is_open=sh.staff_id is None,
             top_pct=0.0, height_pct=0.0, lane=0, lanes=1,
             top_off=smin - win_start_min, end_off=emin - win_start_min,
-        )
-        days[idx].blocks.append(blk)
+        ))
         days[idx].labor_hours += h
-        if sh.staff_id is not None:
-            per_staff[sh.staff_id] = per_staff.get(sh.staff_id, 0.0) + h
 
-    # Approved time off overlapping the week → full-height bands, so a shift laid
-    # over someone's day off is a visible conflict.
-    if ids:
+    # Approved time off → full-height bands, so a shift laid over someone's day
+    # off is a visible conflict. Hidden when a position filter is active (bands
+    # have no position); scoped to the selected person when filtering by staff.
+    band_ids = [only_staff_id] if only_staff_id else ids
+    if band_ids and not position_id:
         offs = db.execute(
             select(TimeOffRequest).where(
-                TimeOffRequest.staff_id.in_(ids),
+                TimeOffRequest.staff_id.in_(band_ids),
                 TimeOffRequest.status == TimeOffStatus.APPROVED,
                 TimeOffRequest.starts_at < end_dt,
                 TimeOffRequest.ends_at >= start_dt,
             )
         ).scalars().all()
         for off in offs:
-            d = max(off.starts_at.date(), week_start)
-            last = min(off.ends_at.date(), week_start + timedelta(days=6))
+            d = max(off.starts_at.date(), dates[0])
+            last = min(off.ends_at.date(), dates[-1])
             while d <= last:
-                idx = (d - week_start).days
-                if 0 <= idx < 7:
+                idx = index.get(d)
+                if idx is not None:
                     days[idx].blocks.append(CalBlock(
                         shift=None, state="", hours=0.0, is_open=False,
                         top_pct=0.0, height_pct=0.0, lane=0, lanes=1,
@@ -357,9 +379,156 @@ def build_calendar(db: Session, week_start: date, staff_list: list[Staff],
     for day in days:
         _layout_day(day.blocks, span_min)
 
-    team = [TeamMember(staff=m, weekly_hours=per_staff.get(m.id, 0.0)) for m in staff_list]
+    week_start = monday_of(dates[0])
+    team_hours = _week_hours(db, week_start, ids)
+    team = [TeamMember(staff=m, weekly_hours=team_hours.get(m.id, 0.0)) for m in staff_list]
     return Calendar(
         week_start=week_start, days=days,
         start_hour=win_start, end_hour=win_end,
         hours=list(range(win_start, win_end + 1)), team=team,
     )
+
+
+def team_for(db: Session, week_start: date, staff_list: list[Staff]) -> list[TeamMember]:
+    """The team-panel rows (each with their weekly scheduled hours). Shared by
+    every view so the panel renders the same in week, day and month."""
+    hrs = _week_hours(db, week_start, [s.id for s in staff_list])
+    return [TeamMember(staff=m, weekly_hours=hrs.get(m.id, 0.0)) for m in staff_list]
+
+
+def build_calendar(db: Session, week_start: date, staff_list: list[Staff],
+                   include_open: bool, position_id: int | None = None,
+                   only_staff_id: int | None = None) -> Calendar:
+    """The week's shifts laid out on day columns by time (7 columns)."""
+    return _build_span(db, week_days(week_start), staff_list, include_open,
+                       position_id, only_staff_id)
+
+
+def build_day(db: Session, day: date, staff_list: list[Staff], include_open: bool,
+              position_id: int | None = None, only_staff_id: int | None = None) -> Calendar:
+    """A single day laid out as one wide column (the Day view)."""
+    return _build_span(db, [day], staff_list, include_open, position_id, only_staff_id)
+
+
+# --------------------------------------------------------------------------
+# Month view (a calendar grid of day cells with shift chips)
+# --------------------------------------------------------------------------
+
+@dataclass
+class MonthChip:
+    label: str                # staff name, or "Open"
+    time: str                 # "09:00–14:05" (empty for a time-off chip)
+    color: str
+    is_open: bool = False
+    is_timeoff: bool = False
+
+
+@dataclass
+class MonthDay:
+    date: date
+    in_month: bool            # False for the greyed lead/trail days of adjacent months
+    is_today: bool
+    chips: list[MonthChip] = field(default_factory=list)
+    more: int = 0             # shifts beyond the chip cap, shown as "+N"
+
+
+@dataclass
+class MonthView:
+    year: int
+    month: int
+    label: str                # "August 2026"
+    anchor: date              # the first of the month (for day/week links)
+    weeks: list[list[MonthDay]]
+
+
+def _first_of_next_month(d: date) -> date:
+    return date(d.year + 1, 1, 1) if d.month == 12 else date(d.year, d.month + 1, 1)
+
+
+def build_month(db: Session, anchor: date, staff_list: list[Staff], include_open: bool,
+                position_id: int | None = None, only_staff_id: int | None = None,
+                max_chips: int = 4) -> MonthView:
+    """A month grid (Mon-first weeks) with each day's shifts as coloured chips."""
+    first = anchor.replace(day=1)
+    last = _first_of_next_month(first) - timedelta(days=1)
+    grid_start = monday_of(first)
+    grid_end = monday_of(last) + timedelta(days=7)      # exclusive; whole weeks
+    n_days = (grid_end - grid_start).days
+    today = date.today()
+
+    ids = [s.id for s in staff_list]
+    start_dt = datetime(grid_start.year, grid_start.month, grid_start.day)
+    end_dt = datetime(grid_end.year, grid_end.month, grid_end.day)
+    conds = [Shift.starts_at >= start_dt, Shift.starts_at < end_dt]
+    if only_staff_id:
+        who = Shift.staff_id == only_staff_id
+    else:
+        who = Shift.staff_id.in_(ids)
+        who = (who | Shift.staff_id.is_(None)) if include_open else who
+    if position_id:
+        conds.append(Shift.position_id == position_id)
+    shifts = db.execute(
+        select(Shift).where(*conds, who).order_by(Shift.starts_at)
+    ).scalars().all()
+
+    by_day: dict[date, list[MonthChip]] = {}
+    for sh in shifts:
+        chip = MonthChip(
+            label="Open" if sh.staff_id is None else (sh.staff.name.split()[0] if sh.staff else "?"),
+            time=f"{sh.starts_at.strftime('%H:%M')}–{sh.ends_at.strftime('%H:%M')}",
+            color=sh.position.color if sh.position else "#64748b",
+            is_open=sh.staff_id is None,
+        )
+        by_day.setdefault(sh.starts_at.date(), []).append(chip)
+
+    weeks: list[list[MonthDay]] = []
+    for w in range(n_days // 7):
+        row: list[MonthDay] = []
+        for i in range(7):
+            d = grid_start + timedelta(days=w * 7 + i)
+            chips = by_day.get(d, [])
+            row.append(MonthDay(
+                date=d, in_month=(d.month == first.month), is_today=(d == today),
+                chips=chips[:max_chips], more=max(0, len(chips) - max_chips),
+            ))
+        weeks.append(row)
+
+    return MonthView(
+        year=first.year, month=first.month,
+        label=first.strftime("%B %Y"), anchor=first, weeks=weeks,
+    )
+
+
+def copy_last_week(db: Session, week_start: date) -> int:
+    """Clone the previous week's shifts into `week_start` (same weekday + time,
+    staff, position and notes), skipping any that would overlap an existing shift
+    or exactly duplicate an open one. Clock times are not copied. Returns the
+    number of shifts created."""
+    src_start = week_start - timedelta(days=7)
+    s = datetime(src_start.year, src_start.month, src_start.day)
+    e = s + timedelta(days=7)
+    src = db.execute(
+        select(Shift).where(Shift.starts_at >= s, Shift.starts_at < e)
+        .order_by(Shift.starts_at)
+    ).scalars().all()
+
+    created = 0
+    for sh in src:
+        ns = sh.starts_at + timedelta(days=7)
+        ne = sh.ends_at + timedelta(days=7)
+        if sh.staff_id is not None:
+            if overlaps(db, sh.staff_id, ns, ne) is not None:
+                continue
+        else:
+            dup = db.execute(select(Shift).where(
+                Shift.staff_id.is_(None), Shift.starts_at == ns, Shift.ends_at == ne,
+            )).scalars().first()
+            if dup is not None:
+                continue
+        db.add(Shift(
+            staff_id=sh.staff_id, position_id=sh.position_id,
+            starts_at=ns, ends_at=ne, role=sh.role, notes=sh.notes,
+        ))
+        created += 1
+    db.commit()
+    return created
