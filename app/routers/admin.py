@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import WEB_DIR, render, require, role_capabilities
+from app.security import hash_pin
 from app.services import settings as settings_svc
 from app.services.images import resize_to_data_uri, save_image
 from app.models.oltp import (
@@ -1004,7 +1005,7 @@ def create_staff(
     if not name:
         raise HTTPException(400, "Name is required.")
     db.add(Staff(
-        name=name, role=_check_role(role), pin_code=_check_pin(pin_code),
+        name=name, role=_check_role(role), pin_code=hash_pin(_check_pin(pin_code)),
         position_id=(position_id or None), wage_cents=_wage_cents(wage),
         availability_note=availability.strip()[:60], is_active=True,
     ))
@@ -1030,7 +1031,7 @@ def _apply_staff_edit(db: Session, person: Staff, name: str, role: str,
     person.wage_cents = _wage_cents(wage)
     person.availability_note = availability.strip()[:60]
     if pin_code.strip():                       # blank means "leave the PIN alone"
-        person.pin_code = _check_pin(pin_code)
+        person.pin_code = hash_pin(_check_pin(pin_code))
 
 
 @router.post("/staff/{staff_id}/edit")

@@ -117,6 +117,28 @@ def _tip_for(db: Session, tip_mode: str, tip_custom: str, base: int) -> int:
     return 0
 
 
+def _discount_approver_id(
+    db: Session, staff: Staff, approved_by_id: int | None, has_discount: bool
+) -> int | None:
+    """Section 4.2.6 — resolve (and authorize) who approved a discount.
+
+    A manager/owner self-approves. Otherwise ``approved_by_id`` must name an
+    active staff member who actually holds ``discount.approve`` — a waiter can't
+    grant themselves a discount by putting any id in the form. Enforced here on
+    the server because the discount UI is only rendered for managers, so a raw
+    POST is the only path an unapproved discount could take. Returns the approver
+    id, or None when there is no discount.
+    """
+    if not has_discount:
+        return None
+    if can(staff, "discount.approve"):
+        return staff.id
+    approver = db.get(Staff, approved_by_id) if approved_by_id else None
+    if approver is not None and approver.is_active and can(approver, "discount.approve"):
+        return approver.id
+    raise HTTPException(403, "A discount requires approval by a manager.")
+
+
 @router.get("/orders/{order_id}/pay")
 def payment_screen(
     order_id: int,
@@ -338,8 +360,7 @@ def take_seat_payment(
     discount_cents = pct(base, discount_pct) if discount_pct else 0
     # 4.2.6 — mandatory service charge on the net items being paid.
     service_charge_cents = pct(base - discount_cents, settings_svc.service_charge_rate(db))
-    if discount_cents and not can(staff, "discount.approve") and not approved_by_id:
-        raise HTTPException(403, "A discount requires manager approval.")
+    approver_id = _discount_approver_id(db, staff, approved_by_id, discount_cents > 0)
 
     try:
         payment = pay_seat(
@@ -351,9 +372,7 @@ def take_seat_payment(
             card_surcharge_rate=settings_svc.card_surcharge_rate(db),
             item_ids=selected,
             discount_cents=discount_cents,
-            discount_approved_by_id=(
-                approved_by_id or (staff.id if can(staff, "discount.approve") else None)
-            ),
+            discount_approved_by_id=approver_id,
             discount_reason=f"{discount_pct}% discount",
             card_last4=(card_last4.strip()[-4:] or None) if card_last4.strip() else None,
             is_partial_close=bool(partial),
@@ -620,6 +639,7 @@ def take_full_payment(
 
     discount_cents = pct(outstanding, discount_pct) if discount_pct else 0
     service_charge_cents = pct(outstanding - discount_cents, settings_svc.service_charge_rate(db))
+    approver_id = _discount_approver_id(db, staff, approved_by_id, discount_cents > 0)
     try:
         payment = pay_whole_order(
             db, order,
@@ -629,9 +649,7 @@ def take_full_payment(
             service_charge_cents=max(0, service_charge_cents),
             card_surcharge_rate=settings_svc.card_surcharge_rate(db),
             discount_cents=discount_cents,
-            discount_approved_by_id=(
-                approved_by_id or (staff.id if can(staff, "discount.approve") else None)
-            ),
+            discount_approved_by_id=approver_id,
             card_last4=(card_last4.strip()[-4:] or None) if card_last4.strip() else None,
         )
     except PaymentError as e:

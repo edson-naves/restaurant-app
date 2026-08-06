@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models.oltp import Role, Staff
+from app.security import verify_session
 from app.models.oltp import (
     ALLERGEN_OPTIONS, COURSE_LABELS, category_emoji, course_label,
     order_status_label, seat_color,
@@ -108,18 +109,20 @@ def role_capabilities() -> dict[str, list[str]]:
 
 
 def current_staff(request: Request, db: Session = Depends(get_db)) -> Staff:
-    """The logged-in staff, from the session cookie set at /login.
+    """The logged-in staff, from the *signed* session cookie set at /login.
+
+    The cookie carries the staff id plus an HMAC signature (see security.py), so
+    it cannot be forged into another identity — an unsigned or tampered cookie
+    verifies to None and is treated as unauthenticated. Deactivated staff are
+    also rejected here on every request, so revoking someone mid-shift takes
+    effect on their next action rather than waiting out the cookie.
 
     No fallback: an unauthenticated request raises 401, which the app turns into
-    a redirect to /login (see main.http_error). The cookie is the session — the
-    PIN is checked once at login, not on every request — so a member deactivated
-    mid-shift keeps their session until it expires or they log out.
+    a redirect to /login (see main.http_error).
     """
-    staff_id = request.cookies.get("staff_id")
-    staff = None
-    if staff_id and staff_id.isdigit():
-        staff = db.get(Staff, int(staff_id))
-    if staff is None:
+    staff_id = verify_session(request.cookies.get("staff_id"))
+    staff = db.get(Staff, staff_id) if staff_id is not None else None
+    if staff is None or not staff.is_active:
         raise HTTPException(401, "Please sign in.")
     return staff
 

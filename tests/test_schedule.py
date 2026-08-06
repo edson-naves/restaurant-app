@@ -20,6 +20,7 @@ from app.database import SessionLocal
 from app.models.oltp import (
     Position, Role, SalesForecast, Shift, Staff, SwapRequest, TimeOffRequest,
 )
+from app.security import sign_session
 from app.services import schedule as sched
 
 fails = 0
@@ -64,8 +65,8 @@ for sh in db.query(Shift).filter(
 db.commit()
 db.close()
 
-owner_c = TestClient(app); owner_c.cookies.set("staff_id", str(owner.id))
-waiter_c = TestClient(app); waiter_c.cookies.set("staff_id", str(waiter.id))
+owner_c = TestClient(app); owner_c.cookies.set("staff_id", sign_session(owner.id))
+waiter_c = TestClient(app); waiter_c.cookies.set("staff_id", sign_session(waiter.id))
 created: list[int] = []
 
 def week_shift(staff_id):

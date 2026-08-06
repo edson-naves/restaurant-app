@@ -24,6 +24,7 @@ from sqlalchemy import select  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
+from app.security import sign_session, verify_pin  # noqa: E402
 from app.models.oltp import (  # noqa: E402
     Floor,
     MenuCategory,
@@ -60,7 +61,7 @@ client = TestClient(app, follow_redirects=True)
 
 
 def as_owner():
-    client.cookies.set("staff_id", str(owner.id))
+    client.cookies.set("staff_id", sign_session(owner.id))
 
 
 def fresh(model, **where):
@@ -109,7 +110,7 @@ for path in ["/admin", "/admin/tables", "/admin/staff", "/admin/menu"]:
 # ------------------------------------------------------------------ permission
 print("\n--- access control (section 3) ---")
 if waiter is not None:
-    client.cookies.set("staff_id", str(waiter.id))
+    client.cookies.set("staff_id", sign_session(waiter.id))
     for path in ["/admin/tables", "/admin/staff", "/admin/menu"]:
         r = client.get(path)
         check(r.status_code == 403, f"waiter is refused {path}", str(r.status_code))
@@ -820,8 +821,9 @@ r = client.post(f"/admin/staff/{p.id}/edit", data={
     "name": TEST_STAFF, "role": Role.KITCHEN, "pin_code": "",
 })
 p = fresh(Staff, name=TEST_STAFF)
-check(p.role == Role.KITCHEN and p.pin_code == "4321",
+check(p.role == Role.KITCHEN and verify_pin(p.pin_code, "4321"),
       "edit role, blank PIN leaves it unchanged")
+check(p.pin_code != "4321", "the PIN is stored hashed, not in plaintext")
 
 # Save-all: one button saves every row as parallel lists.
 p = fresh(Staff, name=TEST_STAFF)

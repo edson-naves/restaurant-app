@@ -6,8 +6,9 @@ These routes deliberately do not depend on current_staff, so the login page is
 reachable when signed out (no redirect loop).
 
 Authentication itself was out of scope for v1's first pass; this closes that
-gap. PINs are compared as stored — hashing them is the obvious next hardening
-step, noted but not done here.
+gap. PINs are stored as salted PBKDF2 hashes (security.hash_pin); a login with a
+legacy plaintext PIN still works and is transparently upgraded to a hash. The
+session cookie is signed (security.sign_session) so it cannot be forged.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.deps import templates
 from app.models.oltp import Role, Staff
+from app.security import hash_pin, is_legacy_pin, sign_session, verify_pin
 
 router = APIRouter()
 
@@ -47,15 +49,25 @@ def do_login(
     remember: str = Form(""),
     db: Session = Depends(get_db),
 ):
+    pin = pin.strip()
     person = db.get(Staff, staff_id)
-    ok = person is not None and person.is_active and person.pin_code == pin.strip()
+    ok = person is not None and person.is_active and verify_pin(person.pin_code, pin)
     if not ok:
         return RedirectResponse("/login?error=1", status_code=303)
+    # Transparently upgrade a legacy plaintext PIN to a salted hash on the first
+    # successful login, so stored PINs migrate off plaintext without a reset.
+    if is_legacy_pin(person.pin_code):
+        person.pin_code = hash_pin(pin)
+        db.commit()
     resp = RedirectResponse("/", status_code=303)
     # "Remember me on this device" keeps the session for 30 days; otherwise it
-    # lasts a single 12-hour shift.
+    # lasts a single 12-hour shift. The cookie value is signed so it can't be
+    # edited into another staff id.
     max_age = REMEMBER_AGE if remember else MAX_AGE
-    resp.set_cookie(COOKIE, str(person.id), max_age=max_age, httponly=True, samesite="lax")
+    resp.set_cookie(
+        COOKIE, sign_session(person.id),
+        max_age=max_age, httponly=True, samesite="lax",
+    )
     return resp
 
 

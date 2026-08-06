@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlalchemy import select  # noqa: E402
 
 from app.database import SessionLocal  # noqa: E402
+from app.security import sign_session  # noqa: E402
 from app.models.oltp import (  # noqa: E402
     AuditEvent,
     Order,
@@ -70,7 +71,7 @@ def serve(order_id):
     if not o or o.status not in ("open", "preparing", "ready"):
         return
     saved = client.cookies.get("staff_id")
-    client.cookies.set("staff_id", str(owner.id))
+    client.cookies.set("staff_id", sign_session(owner.id))
     client.post(f"/orders/{order_id}/send")                                # -> preparing
     client.post(f"/kitchen/{order_id}/status", data={"status": "ready"})   # -> ready
     client.post(f"/orders/{order_id}/served")                              # -> served
@@ -97,7 +98,7 @@ check(r.status_code == 303 and r.headers.get("location") == "/"
       and "staff_id" in r.cookies, "the right PIN signs in and sets the session")
 # The session then reaches a protected page, and sign-out clears it.
 authed = httpx.Client(base_url=BASE, follow_redirects=False, timeout=30)
-authed.cookies.set("staff_id", str(owner.id))
+authed.cookies.set("staff_id", sign_session(owner.id))
 check(authed.get("/").status_code == 200, "the signed-in session reaches the floor plan")
 r = authed.get("/logout")
 check(r.status_code == 303 and r.headers.get("location") == "/login", "sign-out redirects to /login")
@@ -109,7 +110,7 @@ print("--- pages render ---")
 for path in ["/", "/kitchen", "/delivery", "/reports", "/reports/daily",
              "/reports/best-sellers", "/reports/payments", "/reports/staff",
              "/reports/channels", "/reports/activity"]:
-    client.cookies.set("staff_id", str(owner.id))
+    client.cookies.set("staff_id", sign_session(owner.id))
     r = client.get(path)
     check(r.status_code == 200, f"GET {path}", f"{r.status_code}, {len(r.text)}b")
 
@@ -128,7 +129,7 @@ check(
 
 # ---------------------------------------------------- section 3: access control
 print("\n--- role-based access control (section 3) ---")
-client.cookies.set("staff_id", str(kitchen.id))
+client.cookies.set("staff_id", sign_session(kitchen.id))
 r = client.get("/reports")
 check(r.status_code == 403, "kitchen staff blocked from reports", f"{r.status_code}")
 
@@ -137,7 +138,7 @@ check(r.status_code == 200, "kitchen staff can see the kitchen display")
 
 # Kitchen status filter (4.1.3): each status shows only its own tickets, and
 # the channel view is preserved alongside it.
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 all_k = client.get("/kitchen?view=all&kstatus=all")
 n_all = all_k.text.count('class="ticket ')
 # Un-fired (pending) orders are not shown on the board — only fired tickets
@@ -173,7 +174,7 @@ if sample is not None:
     want = sum(i.quantity for i in sample.items)
     check(f"Total items: {want}" in kd.text or want == 0,
           "the item total matches the order's line quantities", f"expected {want}")
-client.cookies.set("staff_id", str(kitchen.id))
+client.cookies.set("staff_id", sign_session(kitchen.id))
 
 free_table = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
@@ -184,13 +185,13 @@ r = client.post(
 )
 check(r.status_code == 403, "kitchen staff cannot open a table", f"{r.status_code}")
 
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 r = client.get("/reports")
 check(r.status_code == 200, "owner can see reports")
 
 # ------------------------------------------- workflow 6.1: dine-in end to end
 print("\n--- dine-in workflow (section 6.1) ---")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 
 table = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
@@ -319,20 +320,20 @@ order = db.get(Order, order_id)
 check(order.kitchen_status == "preparing", "step 4: sent to kitchen, status = Preparing")
 
 # The ticket must appear on the kitchen display.
-client.cookies.set("staff_id", str(kitchen.id))
+client.cookies.set("staff_id", sign_session(kitchen.id))
 r = client.get("/kitchen")
 check(f"Table {table_no}" in r.text, "step 4: ticket appears on the kitchen display")
 
 # 4.1.1 — Ready to pay is a post-served action (mandatory-served workflow):
 # flagging it while the food is still cooking is rejected, and the table is
 # left untouched. The waiter flags it after serving, tested at step 5b below.
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 r = client.post(f"/orders/{order_id}/ready-to-pay", data={"ready": 1})
 db.expire_all()
 check(r.status_code == 400, "flagging Ready to pay before serving is rejected")
 check(db.get(RestaurantTable, table_id).status != TableStatus.READY_TO_PAY,
       "the table is not flagged Ready to pay until the order is served")
-client.cookies.set("staff_id", str(kitchen.id))   # step 5 acts as the kitchen
+client.cookies.set("staff_id", sign_session(kitchen.id))   # step 5 acts as the kitchen
 
 # Step 5: kitchen marks ready -> order is "ready to serve" (the table is NOT
 # auto-flipped to Ready to Pay any more; serving comes first).
@@ -345,7 +346,7 @@ check(order.status == "ready", "step 5: order -> Ready to serve")
 check(table.status == TableStatus.OCCUPIED, "step 5: table stays Occupied until served")
 
 # Step 5b: payment is blocked until the order is served (mandatory step).
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 r = client.post(f"/orders/{order_id}/pay-all", data={"instrument_id": 0})
 check(r.status_code == 400, "payment blocked before the order is served")
 # The waiter serves the food, then flags the table Ready to Pay.
@@ -508,12 +509,12 @@ order = db.get(Order, order_id)
 p2 = next(p for p in order.payments if p.seat and p.seat.seat_number == 2 and not p.voided)
 
 # A waiter cannot void.
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 r = client.post(f"/payments/{p2.id}/void", data={"reason": "test"})
 check(r.status_code == 403, "a waiter cannot void a payment", str(r.status_code))
 
 # A manager can. Voiding reopens seat 2's items.
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 before_collected = balance_panel(db, order).collected_cents
 r = client.post(f"/payments/{p2.id}/void", data={"reason": "charged the wrong seat"})
 check(r.status_code == 200, "a manager voids the payment")
@@ -534,7 +535,7 @@ check(db.get(RestaurantTable, table_id).status == TableStatus.READY_TO_PAY,
 seat2b = db.execute(select(Seat).where(Seat.order_id == order_id, Seat.seat_number == 2)).scalar_one()
 r = client.post(f"/orders/{order_id}/seats/{seat2b.id}/pay", data={"instrument_id": cash.id, "tip_mode": "none"})
 check(r.status_code == 200, "seat 2 can be re-paid after the void")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 
 # Seat 3 settles by e-transfer -> order closes, table frees (step 10).
 seat3 = db.execute(select(Seat).where(Seat.order_id == order_id, Seat.seat_number == 3)).scalar_one()
@@ -583,10 +584,10 @@ p1 = db.get(type(order.payments[0]), p1.id)
 check(order.status == "paid", "the order is settled, so refund (not void) applies")
 
 # A waiter cannot refund.
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 check(client.post(f"/payments/{p1.id}/refund", data={"amount": "1.00"}).status_code == 403,
       "a waiter cannot refund")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 
 # Refund $5 of seat 1's Visa payment.
 r = client.post(f"/payments/{p1.id}/refund", data={"amount": "5.00", "reason": "comped app"})
@@ -613,7 +614,7 @@ check(refund_svc.refunded_so_far(db, p1.id) == 500, "the refused over-refund cha
 
 # --- course firing (4.1.3) ------------------------------------------------
 print("\n--- course firing ---")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 free_c = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
 ).scalars().first()
@@ -638,7 +639,7 @@ check(co.kitchen_status == "preparing" and co.status == "preparing",
       "the order is preparing, not ready, while a course is held")
 
 # Kitchen marks the starters up — order still not ready (main is held).
-client.cookies.set("staff_id", str(kitchen.id))
+client.cookies.set("staff_id", sign_session(kitchen.id))
 r = client.post(f"/kitchen/{course_oid}/status", data={"status": "ready", "course": 1})
 db.expire_all()
 co = db.get(Order, course_oid)
@@ -649,9 +650,9 @@ check(db.get(RestaurantTable, free_c.id).status != TableStatus.READY_TO_PAY,
       "the table is not Ready to pay while a course is still held")
 
 # Fire and ready the mains -> now the whole order is ready.
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 client.post(f"/orders/{course_oid}/send", data={"course": 2})
-client.cookies.set("staff_id", str(kitchen.id))
+client.cookies.set("staff_id", sign_session(kitchen.id))
 client.post(f"/kitchen/{course_oid}/status", data={"status": "ready", "course": 2})
 db.expire_all()
 co = db.get(Order, course_oid)
@@ -660,13 +661,13 @@ check(co.kitchen_status == "ready" and co.status == "ready",
 check(db.get(RestaurantTable, free_c.id).status == TableStatus.OCCUPIED,
       "the table stays Occupied when food is up — serve first, then Ready to pay")
 # Clean up this coursing order (no payments).
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 client.post(f"/orders/{course_oid}/cancel")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 
 # --- fire a single item (4.1.3) -------------------------------------------
 print("\n--- fire one item ---")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 free_f = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
 ).scalars().first()
@@ -695,13 +696,13 @@ check(r.status_code == 400, "an already-fired item cannot be fired again")
 # A line from another order cannot be fired through this one.
 r = client.post(f"/orders/{fire_oid}/items/99999/fire")
 check(r.status_code == 404, "firing an item not on the order is rejected")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 client.post(f"/orders/{fire_oid}/cancel")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 
 # --- move a party to another table (4.1.1) --------------------------------
 print("\n--- move table ---")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 src_t, dest_t = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE).limit(2)
 ).scalars().all()
@@ -732,13 +733,13 @@ check(mev is not None and str(dest_t.number) in mev.detail,
 # The now-empty source table has no order to move.
 r = client.post(f"/tables/{src_t.id}/move", data={"to_table_id": dest_t.id})
 check(r.status_code == 400, "a table with no open order can't be moved")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 client.post(f"/orders/{move_oid}/cancel")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 
 # --- merge two tables into one (4.1.1) ------------------------------------
 print("\n--- merge tables ---")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 keep_t, absorb_t = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE).limit(2)
 ).scalars().all()
@@ -779,9 +780,9 @@ check(ev is not None and ev.staff_id == waiter.id and str(absorb_t.number) in ev
 # A table with no order can't be merged in.
 r = client.post(f"/tables/{keep_t.id}/merge", data={"from_table_id": absorb_t.id})
 check(r.status_code == 400, "merging a table with no open order is refused")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 client.post(f"/orders/{keep_oid}/cancel")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 
 # Merging INTO a partially-paid table is allowed — its own paid items are
 # untouched; only the source being absorbed must be unpaid.
@@ -819,17 +820,17 @@ x_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
 r = client.post(f"/tables/{x_t.id}/merge", data={"from_table_id": pd_t.id})
 check(r.status_code == 400, "a partially-paid table can't be merged into another")
 # Tidy up: void the payment, then cancel both fresh orders.
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 db.expire_all()
 for p in db.get(Order, pd_oid).payments:
     client.post(f"/payments/{p.id}/void", data={"reason": "test cleanup"})
 client.post(f"/orders/{pd_oid}/cancel")
 client.post(f"/orders/{x_oid}/cancel")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 
 # --- split some seats onto a new table (4.1.1) ----------------------------
 print("\n--- split table ---")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 big_t, split_dest = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE).limit(2)
 ).scalars().all()
@@ -873,10 +874,10 @@ sev = db.execute(
 ).scalars().first()
 check(sev is not None and str(split_dest.number) in sev.detail,
       "the split is recorded in the audit log", sev.detail if sev else "no event")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 client.post(f"/orders/{big_oid}/cancel")
 client.post(f"/orders/{new_oid}/cancel")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 
 # --- auto-gratuity for large parties (4.2.6) ------------------------------
 print("\n--- auto-gratuity ---")
@@ -887,7 +888,7 @@ _saved_rate = settings_svc.get(db, "auto_gratuity_rate")
 # Parties of 6+ get an automatic 18% gratuity.
 settings_svc.save(db, {"auto_gratuity_party": "6", "auto_gratuity_rate": "18"})
 db.expire_all()
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 small_t, big_party_t = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE).limit(2)
 ).scalars().all()
@@ -914,16 +915,16 @@ check(paid.tip_cents == pct(steak.price_cents, 18),
       "auto-gratuity charges the configured rate", f"${money(paid.tip_cents)}")
 # Restore the setting and tidy up.
 settings_svc.save(db, {"auto_gratuity_party": _saved_party, "auto_gratuity_rate": _saved_rate})
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 client.post(f"/orders/{small_oid}/cancel")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 
 # --- service charge (4.2.6) -----------------------------------------------
 print("\n--- service charge ---")
 _saved_svc = settings_svc.get(db, "service_charge_rate")
 settings_svc.save(db, {"service_charge_rate": "10"})   # 10% house charge
 db.expire_all()
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 svc_t = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
 ).scalars().first()
@@ -948,12 +949,12 @@ check(sp.total_cents == sp.items_cents - sp.discount_cents + sp.tax_cents + sp.t
 check("Service charge" in client.get(f"/payments/{sp.id}/receipt").text,
       "the receipt shows a service-charge line")
 settings_svc.save(db, {"service_charge_rate": _saved_svc})
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 
 # --- reservations & waitlist (4.1.5) --------------------------------------
 print("\n--- reservations & waitlist ---")
 from app.models.oltp import Reservation  # noqa: E402
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 check(client.get("/reservations").status_code == 200, "the reservations page loads")
 # Book a reservation and add a walk-in.
 client.post("/reservations", data={"guest_name": "Booking Test", "party_size": 4,
@@ -1004,17 +1005,17 @@ check(r.status_code == 400, "a seated party can't be seated twice")
 client.post(f"/reservations/{booking.id}/cancel")
 db.expire_all()
 check(db.get(Reservation, booking.id).status == "cancelled", "a reservation can be cancelled")
-client.cookies.set("staff_id", str(kitchen.id))
+client.cookies.set("staff_id", sign_session(kitchen.id))
 check(client.get("/reservations").status_code == 403,
       "kitchen staff cannot see reservations")
 # Tidy up the order the seating opened.
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 client.post(f"/orders/{res_oid}/cancel")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 
 # --- seat selection holds (4.1.2) -----------------------------------------
 print("\n--- seat holds after add ---")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 adv_t = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
 ).scalars().first()
@@ -1023,13 +1024,13 @@ adv_oid = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
 # Adding for seat 2 keeps the order screen on seat 2 (manual, no auto-advance).
 r = client.post(f"/orders/{adv_oid}/items", data={"menu_item_id": steak.id, "seat_number": 2})
 check("seat=2" in str(r.url), "the chosen seat holds after adding", str(r.url).split('?')[-1])
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 client.post(f"/orders/{adv_oid}/cancel")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 
 # --- a table (shared) item auto-splits across seats (4.2.4) ---------------
 print("\n--- table item auto-splits ---")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 sh_t = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
 ).scalars().first()
@@ -1045,13 +1046,13 @@ check(shared.is_shared and shared.seat_id is None,
 check(len(shared.shares) == 4, "it is split across all four seats", f"{len(shared.shares)} shares")
 check(sum(s.share_cents for s in shared.shares) == shared.line_total_cents,
       "the shares sum to the item exactly (no lost cent)")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 client.post(f"/orders/{sh_oid}/cancel")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 
 # --- split equally, then reset it (4.2.3) ---------------------------------
 print("\n--- split equally & reset ---")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 sp_t = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
 ).scalars().first()
@@ -1081,16 +1082,16 @@ client.post(f"/orders/{sp_oid}/seats/{seat1.id}/pay",
 r = client.post(f"/orders/{sp_oid}/reset-split")
 check(r.status_code == 400, "a split can't be reset once a payment has landed")
 # Tidy up: void then cancel.
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 db.expire_all()
 for p in db.get(Order, sp_oid).payments:
     client.post(f"/payments/{p.id}/void", data={"reason": "test cleanup"})
 client.post(f"/orders/{sp_oid}/cancel")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 
 # --- cancel an order ------------------------------------------------------
 print("\n--- cancel an order ---")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 # The just-settled order has payments -> cancel is blocked.
 r = client.post(f"/orders/{order_id}/cancel", data={"reason": "test"})
 check(r.status_code == 400, "a settled order cannot be cancelled", str(r.status_code))
@@ -1099,7 +1100,7 @@ check(r.status_code == 400, "a settled order cannot be cancelled", str(r.status_
 free_t = db.execute(
     select(RestaurantTable).where(RestaurantTable.status == TableStatus.FREE)
 ).scalars().first()
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 r = client.post(f"/tables/{free_t.id}/open", data={"guests": 2, "waiter_id": waiter.id})
 db.expire_all()
 fresh_order = db.execute(
@@ -1109,7 +1110,7 @@ fresh_order = db.execute(
 r = client.post(f"/orders/{fresh_order.id}/cancel", data={"reason": "mistake"})
 check(r.status_code == 403, "a waiter cannot cancel an order", str(r.status_code))
 # A manager can, and the table frees.
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 r = client.post(f"/orders/{fresh_order.id}/cancel", data={"reason": "guest left"})
 check(r.status_code == 200, "a manager cancels the unpaid order")
 db.expire_all()
@@ -1131,14 +1132,14 @@ order2_id = int(re.search(r"/orders/(\d+)", str(r.url)).group(1))
 
 # 4.1.2 — 86 an item mid-service (kitchen sold out of the burger).
 print("\n--- 86 an item ---")
-client.cookies.set("staff_id", str(kitchen.id))   # kitchen can 86
+client.cookies.set("staff_id", sign_session(kitchen.id))   # kitchen can 86
 r = client.post(f"/menu/{burger.id}/availability", data={"available": 0})
 db.expire_all()
 check(r.status_code == 200 and db.get(MenuItem, burger.id).available is False,
       "the kitchen 86's the burger")
 check("86" in client.get("/availability").text, "the availability board shows it 86'd")
 # It drops off the order screen at once.
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 scr = client.get(f"/orders/{order2_id}?category={burger.category_id}").text
 check("Classic Burger" not in scr, "an 86'd item leaves the order screen")
 # And a stale page cannot still order it.
@@ -1148,7 +1149,7 @@ check(r.status_code == 400, "adding an 86'd item is refused")
 client.post(f"/menu/{burger.id}/availability", data={"available": 1})
 db.expire_all()
 check(db.get(MenuItem, burger.id).available is True, "switching it on makes it sellable again")
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 
 # Seat 1 orders two items; only one is paid before they leave.
 client.post(f"/orders/{order2_id}/items", data={"menu_item_id": steak.id, "seat_number": 1})
@@ -1201,7 +1202,7 @@ from app.models.star import FactOrderHeader  # noqa: E402
 before = db.execute(select(FactOrderHeader).where(FactOrderHeader.order_id == order_id)).scalar_one_or_none()
 check(before is None, "the just-closed order is not in the facts before ETL runs")
 
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 r = client.post("/reports/refresh")
 check(r.status_code == 200, "reports refresh (ETL) runs from the UI")
 
@@ -1220,15 +1221,15 @@ print("\n--- end-of-day close ---")
 from app.models.oltp import DayClose  # noqa: E402
 from app.services import closeout  # noqa: E402
 
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 r = client.get("/reports/close")
 check(r.status_code == 200, "close page opens", str(r.status_code))
 
 # A waiter can't cut a Z-report (reports.view is owner/manager only).
-client.cookies.set("staff_id", str(waiter.id))
+client.cookies.set("staff_id", sign_session(waiter.id))
 check(client.post("/reports/close", data={"opening_float": "0", "counted_cash": "0"}).status_code == 403,
       "a waiter cannot close the day")
-client.cookies.set("staff_id", str(owner.id))
+client.cookies.set("staff_id", sign_session(owner.id))
 
 pending = closeout.compute_pending(db)
 check(pending.total_collected_cents > 0, "there is money in the window to close",
