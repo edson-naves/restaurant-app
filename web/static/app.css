@@ -1159,8 +1159,8 @@ td.pending { color: var(--accent); font-weight: 700; }
 .dm-price-line .sub { line-height: 1; }
 .dm-price-pill {
   display: inline-flex; align-items: center; line-height: 1;
-  font-weight: 800; font-size: 13px; color: #fff; border-radius: 999px;
-  padding: 4px 11px; background: var(--bg);
+  font-weight: 800; font-size: 19px; color: #fff; border-radius: 999px;
+  padding: 7px 16px; background: var(--bg);
 }
 
 /* INCLUDES header on top, course columns below it */
