@@ -1,6 +1,7 @@
 """Sales & Orders — section 4.1."""
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -719,6 +720,7 @@ def order_screen(
     # while the order is still open. Choices are grouped by course for the picker.
     active_day_menu = None
     day_menu_courses = []
+    dm_mods: dict[int, list] = {}
     if order.status not in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
         dm = daymenu.resolve_for(db, datetime.now().date())
         if dm is not None:
@@ -732,6 +734,20 @@ def order_screen(
                     {"slot": s, "label": day_menu_course_label(s), "choices": by_slot[s]}
                     for s in sorted(by_slot)
                 ]
+                # Each choosable dish's FREE (zero-price) modifier groups, so a
+                # combo dish can be customised without changing the fixed price.
+                for slot_choices in by_slot.values():
+                    for ch in slot_choices:
+                        mi = ch.menu_item
+                        if mi.id in dm_mods:
+                            continue
+                        groups = []
+                        for g in mi.modifier_groups:
+                            free = [{"id": o.id, "label": o.name}
+                                    for o in g.options if o.price_delta_cents == 0]
+                            if free:
+                                groups.append({"name": g.name, "single": g.single, "options": free})
+                        dm_mods[mi.id] = groups
 
     # Collapse each combo's component lines into a single display unit carrying
     # the menu name and its fixed total; ordinary lines pass through unchanged.
@@ -763,6 +779,7 @@ def order_screen(
         "seat_cards": seat_cards, "table_card": table_card,
         "line_groups": line_groups,
         "active_day_menu": active_day_menu, "day_menu_courses": day_menu_courses,
+        "dm_mods": dm_mods,
         "configuring": configuring,
         "title": f"Order {order.code}",
     })
@@ -929,11 +946,13 @@ def add_day_menu_combo(
     order_id: int,
     seat_number: int = Form(0),
     item_ids: list[int] = Form(default=[]),
+    customizations: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("orders.manage")),
 ):
     """4.1 — add the day menu (prix fixe) as one fixed-price combo, one item per
-    course. The components fire to the kitchen; the bill shows a single price."""
+    course. The components fire to the kitchen; the bill shows a single price.
+    `customizations` is a JSON list of per-dish allergies/notes/free options."""
     order = db.get(Order, order_id)
     if order is None:
         raise HTTPException(404, "Order not found")
@@ -947,8 +966,18 @@ def add_day_menu_combo(
         seat = db.execute(
             select(Seat).where(Seat.order_id == order.id, Seat.seat_number == seat_number)
         ).scalar_one_or_none()
+    # Per-dish customisation, keyed by menu item id (a stale/garbled blob is
+    # simply ignored — the combo still adds).
+    custom: dict[int, dict] = {}
+    if customizations.strip():
+        try:
+            for row in json.loads(customizations):
+                if isinstance(row, dict) and "item_id" in row:
+                    custom[int(row["item_id"])] = row
+        except (ValueError, TypeError):
+            custom = {}
     try:
-        daymenu.add_combo_to_order(db, order, dm, item_ids, seat)
+        daymenu.add_combo_to_order(db, order, dm, item_ids, seat, custom=custom)
     except daymenu.DayMenuError as e:
         raise HTTPException(400, str(e))
     db.commit()

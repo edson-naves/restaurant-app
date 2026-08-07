@@ -1195,11 +1195,20 @@ td.pending { color: var(--accent); font-weight: 700; }
 .daymenu-card { border: 1px solid var(--accent); margin-bottom: 16px; }
 .daymenu-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .daymenu-price { font-weight: 800; font-size: 18px; color: var(--accent); }
-.daymenu-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
-.daymenu-form .dm-pick { margin: 0; flex: 1 1 150px; min-width: 140px; }
-.daymenu-form .dm-pick label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
-.daymenu-form .dm-pick select { width: 100%; }
-.daymenu-add { margin: 0; white-space: nowrap; }
+.daymenu-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
+.dm-course-pick { flex: 1 1 160px; min-width: 150px; display: flex; flex-direction: column; }
+.dm-pick-lbl { display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+.dm-course-sel { width: 100%; }
+.dm-cust { margin-top: 5px; }
+.dm-cust > summary { font-size: 11px; color: var(--accent); cursor: pointer; list-style: none; }
+.dm-cust > summary::-webkit-details-marker { display: none; }
+.dm-cust > summary::before { content: '⚙ '; }
+.dm-cust-body { margin-top: 6px; display: flex; flex-direction: column; gap: 8px; }
+.dm-cg { display: flex; flex-direction: column; gap: 3px; }
+.dm-cg-h { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
+.dm-cg-opt { font-size: 12px; display: flex; align-items: center; gap: 5px; }
+.dm-cust-body input[type=text] { width: 100%; min-height: 28px; padding: 3px 7px; font-size: 12px; }
+.daymenu-add { margin-top: 17px; white-space: nowrap; }
 .ordline.combo-head { background: color-mix(in srgb, var(--accent) 9%, transparent); border-radius: 6px 6px 0 0; }
 .ordline.combo-part { padding-left: 14px; }
 .ordline.combo-part .ordline-total { font-size: 11px; }

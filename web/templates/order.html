@@ -168,18 +168,61 @@
     <span class="daymenu-price">${{ active_day_menu.price_cents|money }} fixed</span>
     <span class="sub" style="margin:0">pick one per course · adds to {{ 'the table' if active_seat == 0 else 'seat ' ~ active_seat }}</span>
   </div>
-  <form method="post" action="/orders/{{ order.id }}/day-menu" class="daymenu-form">
+  <form method="post" action="/orders/{{ order.id }}/day-menu" class="daymenu-form" onsubmit="return dmCollect(this)">
     {# The seat comes from the seats bar above (active seat), like adding any item. #}
     <input type="hidden" name="seat_number" value="{{ active_seat }}">
+    <input type="hidden" name="customizations" id="dm-customizations">
     {% for c in day_menu_courses %}
-    <div class="field dm-pick">
-      <label>{{ c.label }}</label>
-      <select name="item_ids">{% for ch in c.choices %}<option value="{{ ch.menu_item_id }}">{{ ch.menu_item.name }}</option>{% endfor %}</select>
+    <div class="dm-course-pick">
+      <label class="dm-pick-lbl">{{ c.label }}</label>
+      <select class="dm-course-sel" name="item_ids" onchange="dmRenderCourse(this)">{% for ch in c.choices %}<option value="{{ ch.menu_item_id }}">{{ ch.menu_item.name }}</option>{% endfor %}</select>
+      <details class="dm-cust"><summary>Customize</summary><div class="dm-cust-body"></div></details>
     </div>
     {% endfor %}
     <button class="btn primary daymenu-add">Add · ${{ active_day_menu.price_cents|money }}</button>
   </form>
 </div>
+<script>
+const DM_MODS = {{ dm_mods|tojson }};
+const DM_ALLERGENS = {{ (ALLERGEN_OPTIONS|list)|tojson }};
+function dmRenderCourse(sel){
+  const pick = sel.closest('.dm-course-pick');
+  const body = pick.querySelector('.dm-cust-body');
+  const groups = DM_MODS[sel.value] || [];
+  let h = '';
+  for(const g of groups){
+    h += '<div class="dm-cg"><div class="dm-cg-h">' + g.name + '</div>';
+    for(const o of g.options){
+      const type = g.single ? 'radio' : 'checkbox';
+      const nm = g.single ? ' name="dmg-' + sel.value + '-' + g.name.replace(/\W/g,'') + '"' : '';
+      h += '<label class="dm-cg-opt"><input type="' + type + '"' + nm + ' class="dm-opt" value="' + o.id + '"> ' + o.label + '</label>';
+    }
+    h += '</div>';
+  }
+  h += '<div class="dm-cg"><div class="dm-cg-h">Allergies</div>';
+  for(const a of DM_ALLERGENS){ h += '<label class="dm-cg-opt"><input type="checkbox" class="dm-alg" value="' + a + '"> ' + a + '</label>'; }
+  h += '<input type="text" class="dm-alg-other" placeholder="Other allergy"></div>';
+  h += '<div class="dm-cg"><div class="dm-cg-h">Note</div><input type="text" class="dm-note" placeholder="e.g. medium rare"></div>';
+  body.innerHTML = h;
+}
+function dmCollect(form){
+  const rows = [];
+  form.querySelectorAll('.dm-course-pick').forEach(function(pick){
+    const sel = pick.querySelector('.dm-course-sel');
+    const body = pick.querySelector('.dm-cust-body');
+    rows.push({
+      item_id: +sel.value,
+      option_ids: Array.from(body.querySelectorAll('.dm-opt:checked')).map(i => +i.value),
+      allergens: Array.from(body.querySelectorAll('.dm-alg:checked')).map(i => i.value),
+      allergen_other: (body.querySelector('.dm-alg-other') || {}).value || '',
+      notes: (body.querySelector('.dm-note') || {}).value || ''
+    });
+  });
+  document.getElementById('dm-customizations').value = JSON.stringify(rows);
+  return true;
+}
+document.querySelectorAll('.daymenu-form .dm-course-sel').forEach(dmRenderCourse);
+</script>
 {% endif %}
 
 <div class="pos-grid">

@@ -19,7 +19,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.oltp import (
-    DayMenu, KitchenStatus, MenuItem, Order, OrderItem, Seat,
+    DayMenu, KitchenStatus, MenuItem, Order, OrderItem, OrderItemOption, Seat,
+    build_allergens,
 )
 from app.services.money import distribute
 
@@ -41,16 +42,36 @@ def resolve_for(db: Session, d: date) -> DayMenu | None:
     ).scalars().first()
 
 
+def _apply_custom(oi: OrderItem, mi: MenuItem, cz: dict) -> None:
+    """Apply a guest's customisation to one combo dish: allergies, a note, and
+    any chosen FREE (zero-price) modifier options. Priced add-ons are ignored on
+    purpose so the combo stays at its fixed price."""
+    oi.allergens = build_allergens(cz.get("allergens") or [], cz.get("allergen_other") or "")
+    oi.notes = (cz.get("notes") or "").strip()
+    chosen = {int(x) for x in (cz.get("option_ids") or []) if str(x).isdigit()}
+    if not chosen:
+        return
+    for g in mi.modifier_groups:
+        for o in g.options:
+            if o.id in chosen and o.price_delta_cents == 0:
+                oi.options.append(OrderItemOption(
+                    option_id=o.id, group_name=g.name, label=o.name, price_delta_cents=0,
+                ))
+
+
 def add_combo_to_order(
     db: Session, order: Order, day_menu: DayMenu,
     chosen_item_ids: list[int], seat: Seat | None,
+    custom: dict[int, dict] | None = None,
 ) -> list[OrderItem]:
     """Add the guest's chosen components as one fixed-price combo.
 
     `chosen_item_ids` is one MenuItem id per course the guest picked; only ids
-    that are genuine choices on this menu are honoured. Returns the created
-    lines. Raises DayMenuError if nothing valid was chosen.
+    that are genuine choices on this menu are honoured. `custom` maps a chosen
+    item id to its per-dish customisation (allergies, note, free options).
+    Returns the created lines. Raises DayMenuError if nothing valid was chosen.
     """
+    custom = custom or {}
     valid = {c.menu_item_id for c in day_menu.choices}
     items: list[MenuItem] = []
     seen: set[int] = set()
@@ -81,11 +102,14 @@ def add_combo_to_order(
         created.append(oi)
     db.flush()
 
-    # Group the lines: combo_id = the first line's id; only the header names it.
+    # Group the lines (combo_id = the first line's id; only the header names it)
+    # and apply each dish's customisation.
     combo_id = created[0].id
-    for i, oi in enumerate(created):
+    for i, (oi, mi) in enumerate(zip(created, items)):
         oi.combo_id = combo_id
         oi.combo_name = day_menu.name if i == 0 else ""
+        if mi.id in custom:
+            _apply_custom(oi, mi, custom[mi.id])
     db.flush()
     return created
 
