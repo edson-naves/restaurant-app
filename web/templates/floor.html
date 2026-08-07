@@ -37,14 +37,15 @@
 
 {# Floor tabs — one floor at a time, like the Manage page. The href is a no-JS
    fallback (server renders that floor); the script switches instantly instead. #}
-{% if floor_tabs | length > 1 %}
 <nav class="subtabs" id="floorTabs" style="margin:0 0 14px">
+  {% if floor_tabs | length > 1 %}
   <a href="/?floor=all" data-floor="" class="{{ 'on' if show_all else '' }}">All tables</a>
   {% for f in floor_tabs %}
   <a href="/?floor={{ f.id }}" data-floor="{{ f.id }}" class="{{ 'on' if not show_all and f.id == current_floor_id else '' }}">{{ f.name }}</a>
   {% endfor %}
+  {% endif %}
+  <button type="button" id="mineTab" class="subtab-btn" title="Only tables assigned to you, in service">👤 My tables</button>
 </nav>
-{% endif %}
 
 <p class="empty" id="findNone" hidden>No table matches that.</p>
 
@@ -82,6 +83,7 @@
     {% if c.order %}
       <a class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
          data-status="{{ c.table.status }}" data-floor="{{ sec_floor_id }}"
+         data-mine="{{ '1' if c.table.current_waiter_id == staff.id else '' }}"
          data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
          {% if c.table.zone_ref %}style="border-left-color: {{ c.table.zone_ref.swatch }}"{% endif %}
          href="/orders/{{ c.order.id }}">
@@ -102,6 +104,7 @@
     {% else %}
       <details class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
          data-status="{{ c.table.status }}" data-floor="{{ sec_floor_id }}"
+         data-mine="{{ '1' if c.table.current_waiter_id == staff.id else '' }}"
          data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
          {% if c.table.zone_ref %}style="border-left-color: {{ c.table.zone_ref.swatch }}"{% endif %}>
         <summary style="cursor:pointer;list-style:none">
@@ -202,6 +205,7 @@
   const cards = Array.from(document.querySelectorAll('.tbl[data-find]'));
   const sections = Array.from(document.querySelectorAll('section'));
   const statusBtns = Array.from(document.querySelectorAll('.legend-btn[data-status]'));
+  const mineBtn = document.getElementById('mineTab');
 
   // Two levels, so one box covers both questions a waiter asks:
   //   "table 12 in the Sun zone"  -> "12 sun"    words narrow (AND)
@@ -238,6 +242,7 @@
 
   let statusFilter = null;
   let zoneFilter = null;
+  let mineFilter = false;
   const firstTab = document.querySelector('#floorTabs a.on') ||
                    document.querySelector('#floorTabs a[data-floor]');
   let activeFloor = firstTab ? firstTab.dataset.floor : null;
@@ -284,7 +289,8 @@
       const textOk = cardMatches(card.dataset.find, card.dataset.number, box.value);
       const zoneOk = !zoneFilter || card.dataset.zone === zoneFilter;
       const floorOk = floorFree || !activeFloor || card.dataset.floor === activeFloor;
-      const scopeOk = textOk && zoneOk && floorOk;   // everything but status
+      const mineOk = !mineFilter || card.dataset.mine === '1';
+      const scopeOk = textOk && zoneOk && floorOk && mineOk;   // everything but status
       if (scopeOk && avail.hasOwnProperty(card.dataset.status)) avail[card.dataset.status]++;
       const hit = scopeOk && (!statusFilter || card.dataset.status === statusFilter);
       card.hidden = !hit;
@@ -296,6 +302,7 @@
     statusBtns.forEach(function (b) { b.classList.toggle('on', b.dataset.status === statusFilter); });
     zoneBtns.forEach(function (b) { b.classList.toggle('on', b.dataset.zone === zoneFilter); });
     floorTabs.forEach(function (a) { a.classList.toggle('on', a.dataset.floor === activeFloor); });
+    if (mineBtn) mineBtn.classList.toggle('on', mineFilter);
 
     // Hide any floor section with nothing to show. Floor headings appear only
     // when more than one floor is on screen at once (All, or a cross-floor
@@ -311,7 +318,7 @@
       if (head) head.hidden = sec.hidden || !multiFloor;
     });
 
-    const filtering = searching || statusFilter !== null || zoneFilter !== null;
+    const filtering = searching || statusFilter !== null || zoneFilter !== null || mineFilter;
     countEl.textContent = filtering ? shown + ' of ' + cards.length : '';
     clearBtn.hidden = !filtering;
     noneEl.hidden = !(filtering && shown === 0);
@@ -348,10 +355,18 @@
     });
   });
 
+  // "My tables" — only the tables assigned to me that are in service. Clicking
+  // it again clears it. It ANDs with the floor tab and the search.
+  if (mineBtn) mineBtn.addEventListener('click', function () {
+    mineFilter = !mineFilter;
+    apply();
+  });
+
   function reset() {
     box.value = '';
     statusFilter = null;
     zoneFilter = null;
+    mineFilter = false;
     apply();
   }
 

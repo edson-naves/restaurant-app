@@ -778,6 +778,14 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 .subtabs a:hover { color: var(--ink); border-color: var(--accent); text-decoration: none; }
 .subtabs a.on { background: var(--panel-2); color: var(--ink); border-color: var(--accent); }
+/* "My tables" filter toggle, styled to match the floor tabs. */
+.subtabs .subtab-btn {
+  padding: 7px 14px; border-radius: 999px; font-size: 13px; font-weight: 600;
+  color: var(--muted); border: 1px solid var(--line); background: none; cursor: pointer;
+  font-family: inherit; margin-left: auto;
+}
+.subtabs .subtab-btn:hover { color: var(--ink); border-color: var(--accent); }
+.subtabs .subtab-btn.on { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--ink); border-color: var(--accent); }
 
 /* A retired table / inactive staff member / off-menu item: still listed and
    editable, visibly not in service. */
