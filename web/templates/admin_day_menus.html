@@ -63,12 +63,11 @@
       </div>
     </div>
 
-    <div class="dm-title-cell">
+    <div class="dm-body">
       <b class="dm-name">{{ dm.name }}</b>
-      <div class="dm-price-line"><span class="dm-price-pill" style="--bg:{{ color }}">${{ dm.price_cents|money }}</span> <span class="sub">Fixed price</span></div>
-    </div>
-
-    <div class="dm-includes">
+      <div class="dm-row2">
+        <div class="dm-price-line"><span class="dm-price-pill" style="--bg:{{ color }}">${{ dm.price_cents|money }}</span> <span class="sub">Fixed price</span></div>
+        <div class="dm-includes">
       {% if dm.choices %}<span class="dm-inc-label">INCLUDES</span>{% endif %}
       {% for slot, label in courses.items() %}
       {% set sc = dm.choices|selectattr('course','equalto',slot)|list %}
@@ -82,6 +81,8 @@
       {% endif %}
       {% endfor %}
       {% if not dm.choices %}<span class="sub">No courses yet — add one below.</span>{% endif %}
+        </div>
+      </div>
     </div>
 
     <div class="dm-actions">

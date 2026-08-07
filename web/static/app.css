@@ -1145,9 +1145,11 @@ td.pending { color: var(--accent); font-weight: 700; }
 .dm-when-txt b { display: block; font-size: 16px; line-height: 1.05; }
 .dm-when-txt .sub { font-size: 11px; }
 
-.dm-title-cell { flex: 0 0 auto; min-width: 130px; }
-.dm-name { display: block; font-size: 17px; margin-bottom: 5px; }
-.dm-price-line { display: flex; align-items: center; gap: 8px; }
+.dm-body { flex: 1 1 auto; min-width: 0; }
+.dm-name { display: block; font-size: 17px; margin-bottom: 9px; }
+/* Price and the INCLUDES strip share one top-aligned row under the name. */
+.dm-row2 { display: flex; align-items: flex-start; gap: 22px; flex-wrap: wrap; }
+.dm-price-line { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; min-width: 120px; }
 .dm-price-line .sub { line-height: 1; }
 .dm-price-pill {
   display: inline-flex; align-items: center; line-height: 1;
@@ -1156,7 +1158,7 @@ td.pending { color: var(--accent); font-weight: 700; }
 }
 
 .dm-includes { flex: 1 1 300px; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 14px; }
-.dm-inc-label { font-size: 10px; font-weight: 800; letter-spacing: .6px; color: var(--muted); align-self: center; }
+.dm-inc-label { font-size: 10px; font-weight: 800; letter-spacing: .6px; color: var(--muted); align-self: flex-start; padding-top: 1px; }
 .dm-inc-col { display: flex; flex-direction: column; gap: 3px; }
 .dm-inc-h { font-size: 11px; color: var(--muted); }
 .dm-chip {
