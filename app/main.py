@@ -12,6 +12,17 @@ from dotenv import load_dotenv
 # there. Must run before anything reads os.environ.
 load_dotenv()
 
+# Run every date/time calculation in the restaurant's local timezone. Render's
+# servers are UTC, so without this "today" flips to tomorrow in the evening for a
+# Pacific venue — the schedule's Today button and default day land a day ahead.
+# Overridable via the TZ environment variable; tzset applies it on Unix (guarded
+# for Windows dev, which has no tzset).
+import os as _os
+import time as _time
+_os.environ.setdefault("TZ", "America/Vancouver")
+if hasattr(_time, "tzset"):
+    _time.tzset()
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
