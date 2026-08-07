@@ -203,7 +203,6 @@ function dmRenderCourse(sel){
   for(const a of DM_ALLERGENS){ h += '<label class="dm-cg-opt"><input type="checkbox" class="dm-alg" value="' + a + '"> ' + a + '</label>'; }
   h += '<input type="text" class="dm-alg-other" placeholder="Other allergy"></div>';
   h += '<div class="dm-cg"><div class="dm-cg-h">Note</div><input type="text" class="dm-note" placeholder="e.g. medium rare"></div>';
-  h += '<button type="button" class="dm-collapse" onclick="this.closest(\'details\').open = false">▴ Collapse</button>';
   body.innerHTML = h;
 }
 function dmCollect(form){
@@ -223,6 +222,12 @@ function dmCollect(form){
   return true;
 }
 document.querySelectorAll('.daymenu-form .dm-course-sel').forEach(dmRenderCourse);
+// Click outside an open Customize panel to close it.
+document.addEventListener('click', function(e){
+  document.querySelectorAll('.dm-cust[open]').forEach(function(d){
+    if(!d.contains(e.target)) d.open = false;
+  });
+});
 </script>
 {% endif %}
 

@@ -1212,11 +1212,6 @@ td.pending { color: var(--accent); font-weight: 700; }
 .dm-cust[open] > summary { color: var(--ink); }
 .dm-cust[open] > summary::after { transform: rotate(180deg); }
 .dm-cust-body { margin-top: 6px; display: flex; flex-direction: column; gap: 8px; }
-.dm-collapse {
-  align-self: flex-start; background: none; border: none; color: var(--accent);
-  font-size: 11px; cursor: pointer; padding: 2px 0; margin-top: 2px;
-}
-.dm-collapse:hover { text-decoration: underline; }
 .dm-cg { display: flex; flex-direction: column; gap: 3px; }
 .dm-cg-h { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
 .dm-cg-opt { font-size: 12px; display: flex; align-items: center; gap: 5px; }
