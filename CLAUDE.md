@@ -26,6 +26,11 @@ Guidance to follow in this repo, so it doesn't have to be repeated each session.
 - **Schema:** new **tables** auto-create via `Base.metadata.create_all`; new **columns** on
   existing tables need an entry in `app/migrate.py` (`ADDED_COLUMNS`, Postgres-capable).
   Grown column lengths go in `WIDENED_COLUMNS`.
+- **Tests run on SQLite (lax); prod is Postgres (strict)** — so a migration/model can pass
+  locally and 500 on Render. Use cross-dialect DDL in `migrate.py`: **`TIMESTAMP`** not
+  `DATETIME`, and remember Postgres **enforces `VARCHAR(n)` length** while SQLite ignores it
+  (size hash/token columns generously). When adding a column to a table that already exists
+  in prod, double-check the DDL type is valid Postgres.
 - **Auth:** signed session cookie + hashed PINs (`app/security.py`); `SECRET_KEY` and
   `COOKIE_SECURE=1` are set as Render env vars in prod. Timezone via `TZ` (default America/Vancouver).
 - **Money is integer cents** everywhere; splits go through `services/money.distribute` (exact sums).
