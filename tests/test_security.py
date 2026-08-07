@@ -53,6 +53,12 @@ check(verify_pin(h, "4321") and not verify_pin(h, "0000"), "verify_pin checks ag
 check(verify_pin("4321", "4321") and is_legacy_pin("4321"),
       "a legacy plaintext PIN still verifies (so it can be upgraded on login)")
 check(not is_legacy_pin(h), "a hashed PIN is not treated as legacy")
+# Regression: the pin_code column must be wide enough for a hash. SQLite ignores
+# VARCHAR length, but Postgres enforces it — a too-narrow column overflows on the
+# login that upgrades a legacy PIN, which took the live site down once.
+_pin_len = Staff.__table__.c.pin_code.type.length
+check(_pin_len is None or _pin_len >= len(hash_pin("1234")),
+      "the pin_code column fits a full hash", _pin_len)
 
 # ---- Secure cookie flag (HTTPS-only in prod) -------------------------------
 _prev = os.environ.get("COOKIE_SECURE")

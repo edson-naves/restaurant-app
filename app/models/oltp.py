@@ -174,7 +174,10 @@ class Staff(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
-    pin_code: Mapped[str] = mapped_column(String(8), nullable=False)
+    # Stores a salted PBKDF2 hash (~119 chars), not the 4–8 digit PIN, so it
+    # must be wide. Postgres enforces this length; an existing narrow column is
+    # widened by migrate.WIDENED_COLUMNS.
+    pin_code: Mapped[str] = mapped_column(String(128), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # The person's usual job on the schedule (Server, Bartender…). Distinct from
     # `role`, which is their access level. Used to colour their shifts by default.

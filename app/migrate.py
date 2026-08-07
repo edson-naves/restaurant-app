@@ -68,6 +68,17 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("staff", "availability_note", "VARCHAR(60) NOT NULL DEFAULT ''"),
 )
 
+# (table, column, min_length, new DDL type). Columns whose type/length GREW
+# after the database was first created. Postgres enforces VARCHAR length (SQLite
+# does not), so an existing narrow column must be widened or a longer write
+# overflows with "value too long". Widening never truncates, so it is safe.
+WIDENED_COLUMNS: tuple[tuple[str, str, int, str], ...] = (
+    # PINs are stored as ~119-char salted PBKDF2 hashes now, not 4–8 digit
+    # plaintext, so the old VARCHAR(8) overflows on the first login that upgrades
+    # a legacy PIN to a hash.
+    ("staff", "pin_code", 128, "VARCHAR(128)"),
+)
+
 DEFAULT_FLOOR = "1st floor"
 
 
@@ -96,6 +107,8 @@ def run(engine: Engine) -> list[str]:
             applied.append(f"{table}.{column}")
 
         applied.extend(_backfill_locations(conn))
+    # SQLite does not enforce VARCHAR length, so no column ever needs widening
+    # there — the model's new size applies to fresh databases via create_all.
     return applied
 
 
@@ -139,6 +152,32 @@ def _run_postgres(engine: Engine) -> list[str]:
             applied.append(f"{table}.{column}")
         except Exception as exc:               # noqa: BLE001 — never block startup
             applied.append(f"SKIPPED {table}.{column}: {exc}")
+
+    # Widen any column that outgrew its original length (e.g. pin_code now holds
+    # a hash). Guarded on the current max length so it only runs once.
+    for table, column, min_len, ddl in WIDENED_COLUMNS:
+        with engine.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT character_maximum_length FROM information_schema.columns "
+                    "WHERE table_name = :t AND column_name = :c "
+                    "AND table_schema = current_schema()"
+                ),
+                {"t": table, "c": column},
+            ).first()
+        if row is None:
+            continue                           # column/table absent; create_all owns it
+        cur_len = row[0]
+        if cur_len is None or cur_len >= min_len:
+            continue                           # already wide enough (or unbounded TEXT)
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(f'ALTER TABLE "{table}" ALTER COLUMN {column} TYPE {ddl}')
+                )
+            applied.append(f"widened {table}.{column} -> {ddl}")
+        except Exception as exc:               # noqa: BLE001 — never block startup
+            applied.append(f"SKIPPED widen {table}.{column}: {exc}")
     return applied
 
 
