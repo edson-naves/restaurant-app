@@ -219,6 +219,39 @@ def overlaps(
     return db.execute(q).scalars().first()
 
 
+def approved_timeoff_conflict(
+    db: Session, staff_id: int | None, starts_at: datetime, ends_at: datetime,
+) -> TimeOffRequest | None:
+    """An APPROVED time-off request for this staff overlapping [starts_at, ends_at),
+    or None — so a shift is never scheduled onto a day they're approved off."""
+    if staff_id is None:
+        return None
+    return db.execute(
+        select(TimeOffRequest).where(
+            TimeOffRequest.staff_id == staff_id,
+            TimeOffRequest.status == TimeOffStatus.APPROVED,
+            TimeOffRequest.starts_at < ends_at,
+            TimeOffRequest.ends_at > starts_at,
+        )
+    ).scalars().first()
+
+
+def shifts_in_window(
+    db: Session, staff_id: int | None, starts_at: datetime, ends_at: datetime,
+) -> list[Shift]:
+    """This staff's shifts overlapping [starts_at, ends_at) — used to stop time
+    off being approved on top of shifts they're already scheduled for."""
+    if staff_id is None:
+        return []
+    return db.execute(
+        select(Shift).where(
+            Shift.staff_id == staff_id,
+            Shift.starts_at < ends_at,
+            Shift.ends_at > starts_at,
+        ).order_by(Shift.starts_at)
+    ).scalars().all()
+
+
 # --------------------------------------------------------------------------
 # Calendar model the template renders (day columns × time-of-day)
 # --------------------------------------------------------------------------
@@ -519,6 +552,8 @@ def copy_last_week(db: Session, week_start: date) -> int:
         if sh.staff_id is not None:
             if overlaps(db, sh.staff_id, ns, ne) is not None:
                 continue
+            if approved_timeoff_conflict(db, sh.staff_id, ns, ne) is not None:
+                continue          # never copy a shift onto approved time off
         else:
             dup = db.execute(select(Shift).where(
                 Shift.staff_id.is_(None), Shift.starts_at == ns, Shift.ends_at == ne,

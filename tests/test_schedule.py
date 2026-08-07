@@ -306,6 +306,42 @@ check(owner_c.get(f"/schedule?view=month&date={p5_week.isoformat()}").status_cod
 check(waiter_c.post("/schedule/copy-week", data={"week": day}, follow_redirects=False).status_code == 403,
       "a non-manager cannot copy last week")
 
+# 11. Time off and a shift can't coexist on the same day.
+from app.models.oltp import TimeOffRequest as _TOR, TimeOffStatus as _TOS
+cf_mon = mon + timedelta(days=28)
+cf_day = cf_mon + timedelta(days=2)
+cf0 = datetime(cf_day.year, cf_day.month, cf_day.day)
+d = SessionLocal()
+for x in d.query(Shift).filter(Shift.staff_id == waiter.id, Shift.starts_at >= cf0, Shift.starts_at < cf0 + timedelta(days=1)).all():
+    d.delete(x)
+d.query(_TOR).filter(_TOR.staff_id == waiter.id, _TOR.reason == "conflict-qa").delete()
+# approved time off that day → scheduling a shift is refused
+d.add(_TOR(staff_id=waiter.id, starts_at=cf0, ends_at=cf0 + timedelta(hours=23, minutes=59),
+           status=_TOS.APPROVED, reason="conflict-qa"))
+d.commit(); d.close()
+r = owner_c.post("/schedule/shifts", follow_redirects=False,
+                 data={"staff_id": waiter.id, "date": cf_day.isoformat(), "start": "10:00", "end": "14:00"})
+check(r.status_code == 400, "can't schedule a shift onto approved time off", r.status_code)
+
+d = SessionLocal()
+d.query(_TOR).filter(_TOR.staff_id == waiter.id, _TOR.reason == "conflict-qa").delete()
+d.commit(); d.close()
+r = owner_c.post("/schedule/shifts", follow_redirects=False,
+                 data={"staff_id": waiter.id, "date": cf_day.isoformat(), "start": "10:00", "end": "14:00"})
+check(r.status_code == 303, "shift schedules fine once the time off is gone", r.status_code)
+d = SessionLocal()
+tor = _TOR(staff_id=waiter.id, starts_at=cf0, ends_at=cf0 + timedelta(hours=23, minutes=59),
+           status=_TOS.PENDING, reason="conflict-qa")
+d.add(tor); d.commit(); tor_id = tor.id; d.close()
+check(owner_c.post(f"/schedule/timeoff/{tor_id}/approve", follow_redirects=False).status_code == 400,
+      "can't approve time off over an existing shift")
+d = SessionLocal()
+check(d.get(_TOR, tor_id).status == "pending", "the clashing time off stays pending")
+for x in d.query(Shift).filter(Shift.staff_id == waiter.id, Shift.starts_at >= cf0, Shift.starts_at < cf0 + timedelta(days=1)).all():
+    d.delete(x)
+d.query(_TOR).filter(_TOR.staff_id == waiter.id, _TOR.reason == "conflict-qa").delete()
+d.commit(); d.close()
+
 # ---- cleanup --------------------------------------------------------------
 db = SessionLocal()
 for sid in p5_created:

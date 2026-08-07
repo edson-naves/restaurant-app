@@ -52,6 +52,19 @@ def _guard_overlap(db, staff_id, starts, ends, exclude_id=None) -> None:
         )
 
 
+def _guard_timeoff(db, member, starts, ends) -> None:
+    """Refuse to schedule a shift onto a day the person is approved off."""
+    if member is None:
+        return
+    off = sched.approved_timeoff_conflict(db, member.id, starts, ends)
+    if off is not None:
+        raise HTTPException(
+            400,
+            f"{member.name} has approved time off on "
+            f"{starts.strftime('%a %b %d')}. Cancel the time off first, or pick another day.",
+        )
+
+
 def _parse_date(s: str):
     try:
         return datetime.strptime(s, "%Y-%m-%d").date()
@@ -265,6 +278,17 @@ def _decide_timeoff(db, staff, req_id, status) -> RedirectResponse:
     req = db.get(TimeOffRequest, req_id)
     if req is None:
         raise HTTPException(404, "Request not found.")
+    # Can't approve time off that lands on shifts they're already scheduled for —
+    # that's the inconsistency we prevent. The manager removes those shifts first.
+    if status == TimeOffStatus.APPROVED:
+        clash = sched.shifts_in_window(db, req.staff_id, req.starts_at, req.ends_at)
+        if clash:
+            days = ", ".join(sorted({s.starts_at.strftime("%a %b %d") for s in clash}))
+            raise HTTPException(
+                400,
+                f"{req.staff.name} has {len(clash)} shift(s) in that window ({days}). "
+                f"Remove them from the schedule first, then approve.",
+            )
     req.status = status
     req.decided_by_id = staff.id
     db.commit()
@@ -387,6 +411,7 @@ def create_shift(
         pos = member.position
     starts, ends = _parse_window(date, start, end)
     _guard_overlap(db, member.id if member else None, starts, ends)
+    _guard_timeoff(db, member, starts, ends)
     db.add(Shift(
         staff_id=(member.id if member else None),
         position_id=(pos.id if pos else None),
@@ -418,6 +443,7 @@ def edit_shift(
     member, pos = _resolve(db, staff_id, position_id)
     starts, ends = _parse_window(date, start, end)
     _guard_overlap(db, member.id if member else None, starts, ends, exclude_id=shift.id)
+    _guard_timeoff(db, member, starts, ends)
     shift.staff_id = member.id if member else None
     shift.position_id = pos.id if pos else None
     shift.starts_at, shift.ends_at = starts, ends
@@ -458,6 +484,9 @@ def repeat_shift(
         new_start = datetime.combine(d, tod)
         new_end = new_start + dur
         if src.staff_id and sched.overlaps(db, src.staff_id, new_start, new_end):
+            continue
+        # Skip days the person is approved off — never repeat onto time off.
+        if src.staff_id and sched.approved_timeoff_conflict(db, src.staff_id, new_start, new_end):
             continue
         db.add(Shift(
             staff_id=src.staff_id, position_id=src.position_id,
