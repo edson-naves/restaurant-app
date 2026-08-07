@@ -44,11 +44,16 @@
   <hr>
 
   {% for l in data.lines %}
+  {% if l.combo %}
+  <div class="l b"><span>{{ l.item }}</span><span>{{ l.amount }}</span></div>
+  {% for p in l.parts %}<div class="l" style="font-size:11px;color:#555"><span>&nbsp;&nbsp;· {{ p }}</span><span></span></div>{% endfor %}
+  {% else %}
   <div class="l">
     <span>{{ l.qty }}× {{ l.item }}{% if l.shared %} (shared){% endif %}</span>
     <span>{{ l.amount }}</span>
   </div>
   {% if l.options %}{% for o in l.options %}<div class="l" style="font-size:11px;color:#555"><span>&nbsp;&nbsp;+ {{ o }}</span><span></span></div>{% endfor %}{% endif %}
+  {% endif %}
   {% endfor %}
   <hr>
 

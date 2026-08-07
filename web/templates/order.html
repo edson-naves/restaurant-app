@@ -288,6 +288,33 @@
 
   {# Column 4 — the order #}
   <div class="pos-order">
+    {% if active_day_menu and order.status not in ('paid','closed','cancelled') %}
+    <div class="card daymenu-card">
+      <div class="between" style="align-items:center;margin-bottom:6px">
+        <h2 style="margin:0">🍽 {{ active_day_menu.name }}</h2>
+        <span class="daymenu-price">${{ active_day_menu.price_cents|money }}</span>
+      </div>
+      <p class="sub" style="margin:0 0 10px">Today's fixed-price menu — pick one per course.</p>
+      <form method="post" action="/orders/{{ order.id }}/day-menu" class="daymenu-form">
+        {% for c in day_menu_courses %}
+        <div class="field dm-pick">
+          <label>{{ c.label }}</label>
+          <select name="item_ids">
+            {% for ch in c.choices %}<option value="{{ ch.menu_item_id }}">{{ ch.menu_item.name }}</option>{% endfor %}
+          </select>
+        </div>
+        {% endfor %}
+        <div class="field dm-pick">
+          <label>Seat</label>
+          <select name="seat_number">
+            <option value="0" {{ 'selected' if active_seat == 0 else '' }}>Table (unassigned)</option>
+            {% for s in order.seats %}<option value="{{ s.seat_number }}" {{ 'selected' if active_seat == s.seat_number else '' }}>Seat {{ s.seat_number }}</option>{% endfor %}
+          </select>
+        </div>
+        <button class="btn primary daymenu-add">Add day menu · ${{ active_day_menu.price_cents|money }}</button>
+      </form>
+    </div>
+    {% endif %}
     <div class="card">
       {# Coursing (4.1.3): fire one held stage at a time, shown by the heading
          only when more than one course is still un-fired. #}
@@ -330,7 +357,41 @@
             {% if to_fire %}<span class="seat-fire" title="{{ to_fire|length }} item(s) not sent to the kitchen">🔥 to fire</span>{% endif %}
             <svg class="ordgroup-chev" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
           </summary>
-          {% for i in g.lines %}
+          {% for u in g.units %}
+          {% if u.kind == 'combo' %}
+          {% set combo_paid = u.lines|selectattr('allocations')|list %}
+          <div class="ordline combo-head">
+            <div class="ordline-main">
+              <div>🍽 <b>{{ u.name or "Day menu" }}</b> <span class="pill open">combo</span>{% if combo_paid %} <span class="pill paid">paid ✓</span>{% endif %}</div>
+              <div class="sub" style="font-size:11px">{% for ci in u.lines %}{{ ci.menu_item.name }}{% if not loop.last %} · {% endif %}{% endfor %}</div>
+            </div>
+            <div class="ordline-total">${{ u.total|money }}</div>
+            <div class="ordline-actions">
+              {% if can('orders.manage') and not combo_paid and order.status not in ('paid','closed','cancelled') %}
+              <form method="post" action="/orders/{{ order.id }}/combo/{{ u.combo_id }}/remove" style="display:inline"><button class="btn sm danger" title="Remove the whole combo">×</button></form>
+              {% endif %}
+            </div>
+          </div>
+          {% for ci in u.lines %}
+          <div class="ordline combo-part">
+            <div class="ordline-main">
+              <div>↳ {{ ci.menu_item.name }}
+                <span class="pill {{ 'os-served' if ci.kitchen_status == 'served' else ('os-ready' if ci.kitchen_status == 'ready' else ('os-preparing' if ci.kitchen_status == 'preparing' else 'open')) }}">{{ ci.kitchen_status }}</span>
+                <span class="sub" style="font-size:11px">· {{ ci.course|course }}</span>
+              </div>
+              {% if ci.allergens %}<span class="pill allergy" title="Allergy — flag to the kitchen">⚠ {{ ci.allergens }}</span>{% endif %}
+              {% if ci.notes %}<span style="color:#f2c46b;font-size:11px">✎ {{ ci.notes }}</span>{% endif %}
+            </div>
+            <div class="ordline-total sub">incl.</div>
+            <div class="ordline-actions">
+              {% if can('orders.manage') and ci.kitchen_status == 'pending' and order.status not in ('paid','closed','cancelled') %}
+              <form method="post" action="/orders/{{ order.id }}/items/{{ ci.id }}/fire" style="display:inline"><button class="btn sm primary" title="Fire just this item to the kitchen now">Fire</button></form>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+          {% else %}
+          {% set i = u.line %}
           <div class="ordline">
             <div class="ordline-main">
               <div>
@@ -406,6 +467,7 @@
             {% endif %}
             </div>{# /ordline-actions #}
           </div>{# /ordline #}
+          {% endif %}
           {% endfor %}
         </details>{# /ordgroup #}
         {% endfor %}

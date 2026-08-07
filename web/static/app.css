@@ -1135,6 +1135,17 @@ td.pending { color: var(--accent); font-weight: 700; }
 }
 .dm-x:hover { background: #ef4444; color: #fff; }
 .dm-add { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+
+/* Day-menu combo — order-screen card + grouped lines */
+.daymenu-card { border: 1px solid var(--accent); }
+.daymenu-price { font-weight: 800; font-size: 18px; color: var(--accent); }
+.daymenu-form { display: flex; flex-direction: column; gap: 8px; }
+.daymenu-form .dm-pick { margin: 0; }
+.daymenu-form .dm-pick label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+.daymenu-add { margin-top: 4px; }
+.ordline.combo-head { background: color-mix(in srgb, var(--accent) 9%, transparent); border-radius: 6px 6px 0 0; }
+.ordline.combo-part { padding-left: 14px; }
+.ordline.combo-part .ordline-total { font-size: 11px; }
 .cal-add { margin-bottom: 10px; }
 .cal-scroll { overflow-x: auto; }
 .cal-head, .cal-body {

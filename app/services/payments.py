@@ -665,8 +665,22 @@ def _issue_receipt(
 ) -> Receipt:
     """Section 4.2.7 — receipt shows items, subtotal, tip, discount, instrument."""
     lines = []
+    combo_hdr: dict[int, dict] = {}
     for alloc in payment.allocations:
         item = alloc.order_item
+        # A day-menu combo prints as one line at its fixed price, with the dishes
+        # listed under it — never the distributed per-component prices.
+        if item.combo_id is not None:
+            hdr = combo_hdr.get(item.combo_id)
+            if hdr is None:
+                hdr = {"item": item.combo_name or "Day menu", "qty": 1,
+                       "amount_cents": 0, "shared": False, "options": [],
+                       "combo": True, "parts": []}
+                combo_hdr[item.combo_id] = hdr
+                lines.append(hdr)
+            hdr["parts"].append(item.menu_item.name)
+            hdr["amount_cents"] += alloc.amount_cents
+            continue
         extras = [o.label for o in item.options] + [m.modifier.name for m in item.modifiers]
         lines.append(
             {
@@ -677,6 +691,9 @@ def _issue_receipt(
                 "options": extras,
             }
         )
+    for line in lines:                          # finalize combo header amounts
+        if line.get("combo"):
+            line["amount"] = money(line.pop("amount_cents"))
 
     payload = {
         "order_code": order.code,

@@ -13,12 +13,15 @@ from app.deps import can, current_staff, render, require
 from app.models.oltp import (
     ALLERGEN_OPTIONS,
     COURSE_LABELS,
+    DAY_MENU_COURSES,
     AuditEvent,
     Channel,
+    DayMenu,
     DeliveryOrder,
     DeliveryStatus,
     KitchenStatus,
     course_label,
+    day_menu_course_label,
     MenuCategory,
     MenuItem,
     Modifier,
@@ -39,6 +42,7 @@ from app.models.oltp import (
     TableStatus,
     Zone,
 )
+from app.services import daymenu
 from app.services.payments import balance_panel, ensure_seats, set_shared_item_shares
 
 router = APIRouter()
@@ -711,6 +715,45 @@ def order_screen(
             key=lambda t: t.number,
         )
 
+    # Day menu (prix fixe) for this order's date — offered as a one-tap combo
+    # while the order is still open. Choices are grouped by course for the picker.
+    active_day_menu = None
+    day_menu_courses = []
+    if order.status not in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
+        dm = daymenu.resolve_for(db, datetime.now().date())
+        if dm is not None:
+            by_slot: dict[int, list] = {}
+            for c in dm.choices:
+                if c.menu_item and c.menu_item.is_active and c.menu_item.available:
+                    by_slot.setdefault(c.course, []).append(c)
+            if by_slot:
+                active_day_menu = dm
+                day_menu_courses = [
+                    {"slot": s, "label": day_menu_course_label(s), "choices": by_slot[s]}
+                    for s in sorted(by_slot)
+                ]
+
+    # Collapse each combo's component lines into a single display unit carrying
+    # the menu name and its fixed total; ordinary lines pass through unchanged.
+    ctotals = daymenu.combo_totals(order)
+    for g in line_groups:
+        units = []
+        seen: dict[int, dict] = {}
+        for i in g["lines"]:
+            if i.combo_id is not None:
+                u = seen.get(i.combo_id)
+                if u is None:
+                    u = {"kind": "combo", "combo_id": i.combo_id, "name": "",
+                         "total": ctotals.get(i.combo_id, 0), "lines": []}
+                    seen[i.combo_id] = u
+                    units.append(u)
+                if i.combo_name:
+                    u["name"] = i.combo_name
+                u["lines"].append(i)
+            else:
+                units.append({"kind": "item", "line": i})
+        g["units"] = units
+
     return render(request, "order.html", {
         "db": db, "staff": staff, "order": order, "categories": categories,
         "active_cat": active_cat, "menu_items": items, "modifiers": modifiers,
@@ -719,6 +762,7 @@ def order_screen(
         "active_seat": active_seat,
         "seat_cards": seat_cards, "table_card": table_card,
         "line_groups": line_groups,
+        "active_day_menu": active_day_menu, "day_menu_courses": day_menu_courses,
         "configuring": configuring,
         "title": f"Order {order.code}",
     })
@@ -878,6 +922,59 @@ def add_item(
     if category:
         dest += f"&category={category}"
     return RedirectResponse(dest, status_code=303)
+
+
+@router.post("/orders/{order_id}/day-menu")
+def add_day_menu_combo(
+    order_id: int,
+    seat_number: int = Form(0),
+    item_ids: list[int] = Form(default=[]),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("orders.manage")),
+):
+    """4.1 — add the day menu (prix fixe) as one fixed-price combo, one item per
+    course. The components fire to the kitchen; the bill shows a single price."""
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(404, "Order not found")
+    if order.status in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
+        raise HTTPException(400, "This order is closed.")
+    dm = daymenu.resolve_for(db, datetime.now().date())
+    if dm is None:
+        raise HTTPException(400, "No day menu is on today.")
+    seat = None
+    if seat_number:
+        seat = db.execute(
+            select(Seat).where(Seat.order_id == order.id, Seat.seat_number == seat_number)
+        ).scalar_one_or_none()
+    try:
+        daymenu.add_combo_to_order(db, order, dm, item_ids, seat)
+    except daymenu.DayMenuError as e:
+        raise HTTPException(400, str(e))
+    db.commit()
+    dest = f"/orders/{order_id}?seat={seat_number}" if seat_number else f"/orders/{order_id}"
+    return RedirectResponse(dest, status_code=303)
+
+
+@router.post("/orders/{order_id}/combo/{combo_id}/remove")
+def remove_combo(
+    order_id: int,
+    combo_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("orders.manage")),
+):
+    """Remove a whole day-menu combo (all its component lines) at once, unless
+    part of it has already been paid."""
+    order = db.get(Order, order_id)
+    if order is None:
+        raise HTTPException(404, "Order not found")
+    lines = [i for i in order.items if i.combo_id == combo_id]
+    if any(i.allocations for i in lines):
+        raise HTTPException(400, "Part of this combo has already been paid for.")
+    for i in lines:
+        db.delete(i)
+    db.commit()
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/orders/{order_id}/items/{item_id}/edit")

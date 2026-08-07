@@ -56,6 +56,11 @@ def render_text(db: Session, receipt: Receipt) -> str:
     lines.append(f"Server: {d.get('served_by', '-')}")
     lines.append("-" * 32)
     for line in d.get("lines", []):
+        if line.get("combo"):
+            lines.append(f"{line['item']:<24}{line['amount']:>8}")
+            for part in line.get("parts", []):
+                lines.append(f"  · {part}")
+            continue
         name = line["item"] + (" (shared)" if line.get("shared") else "")
         lines.append(f"{line['qty']}x {name:<22}{line['amount']:>8}")
     lines.append("-" * 32)
