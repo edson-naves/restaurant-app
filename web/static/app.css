@@ -1147,8 +1147,13 @@ td.pending { color: var(--accent); font-weight: 700; }
 
 .dm-title-cell { flex: 0 0 auto; min-width: 130px; }
 .dm-name { display: block; font-size: 17px; margin-bottom: 5px; }
-.dm-price-line { display: flex; align-items: center; gap: 7px; }
-.dm-price-pill { font-weight: 800; font-size: 13px; color: #fff; border-radius: 999px; padding: 2px 11px; background: var(--bg); }
+.dm-price-line { display: flex; align-items: center; gap: 8px; }
+.dm-price-line .sub { line-height: 1; }
+.dm-price-pill {
+  display: inline-flex; align-items: center; line-height: 1;
+  font-weight: 800; font-size: 13px; color: #fff; border-radius: 999px;
+  padding: 4px 11px; background: var(--bg);
+}
 
 .dm-includes { flex: 1 1 300px; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px 14px; }
 .dm-inc-label { font-size: 10px; font-weight: 800; letter-spacing: .6px; color: var(--muted); align-self: center; }
