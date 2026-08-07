@@ -41,6 +41,7 @@
       <button type="button" data-view="cal" onclick="dmView('cal')">📅 Calendar view</button>
     </div>
     <select class="dm-sort" onchange="dmSort(this.value)" title="Sort">
+      <option value="day">Day (Mon–Sun)</option>
       <option value="name">Name A–Z</option>
       <option value="price-hi">Price (high)</option>
       <option value="price-lo">Price (low)</option>
@@ -52,7 +53,7 @@
 <div id="dm-list">
 {% for dm in menus %}
 {% set color = daycolors[dm.weekday] if dm.weekday is not none else '#7c3aed' %}
-<div class="card dm-card {{ 'dm-off' if not dm.is_active else '' }}" data-name="{{ dm.name|lower }}" data-price="{{ dm.price_cents }}">
+<div class="card dm-card {{ 'dm-off' if not dm.is_active else '' }}" data-name="{{ dm.name|lower }}" data-price="{{ dm.price_cents }}" data-day="{{ dm.weekday if dm.weekday is not none else 9 }}">
   <div class="dm-badge" style="--bg:{{ color }}">
     <span class="dm-badge-top">{% if dm.menu_date %}{{ dm.menu_date.strftime('%b')|upper }} {{ dm.menu_date.day }}{% elif dm.weekday is not none %}{{ wdays[dm.weekday][:3]|upper }}{% else %}—{% endif %}</span>
     <span class="dm-badge-ico">📅</span>
@@ -165,6 +166,7 @@ function dmSort(mode){
   const box = document.getElementById('dm-list');
   const cards = Array.from(box.querySelectorAll('.dm-card'));
   cards.sort(function(a, b){
+    if(mode === 'day') return (+a.dataset.day - +b.dataset.day) || a.dataset.name.localeCompare(b.dataset.name);
     if(mode === 'name') return a.dataset.name.localeCompare(b.dataset.name);
     const pa = +a.dataset.price, pb = +b.dataset.price;
     return mode === 'price-hi' ? pb - pa : pa - pb;

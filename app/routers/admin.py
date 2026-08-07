@@ -1618,9 +1618,16 @@ def day_menus_page(
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
-    menus = db.execute(
-        select(DayMenu).order_by(DayMenu.is_active.desc(), DayMenu.name)
-    ).scalars().all()
+    # Ordered by the calendar day sequence: weekday menus Monday→Sunday, then any
+    # specific-date menus by date. (Nullable weekday sorts inconsistently across
+    # SQLite/Postgres, so order in Python.)
+    menus = db.execute(select(DayMenu)).scalars().all()
+    menus.sort(key=lambda m: (
+        0 if m.weekday is not None else 1,
+        m.weekday if m.weekday is not None else 0,
+        m.menu_date or date.max,
+        m.name.lower(),
+    ))
     items = db.execute(
         select(MenuItem).where(MenuItem.is_active.is_(True)).order_by(MenuItem.name)
     ).scalars().all()
