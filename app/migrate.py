@@ -32,7 +32,7 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("fact_order_header", "tax_cents", "INTEGER NOT NULL DEFAULT 0"),
     # Void trail. Defaulting voided to 0 leaves every existing payment live.
     ("payment", "voided", "BOOLEAN NOT NULL DEFAULT 0"),
-    ("payment", "voided_at", "DATETIME"),
+    ("payment", "voided_at", "TIMESTAMP"),
     ("payment", "voided_by_id", "INTEGER REFERENCES staff(id)"),
     ("payment", "void_reason", "VARCHAR(200) DEFAULT ''"),
     # Post-settlement refunds. Header column defaults 0 so pre-refund orders'
@@ -71,8 +71,10 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("order_item", "combo_id", "INTEGER"),
     ("order_item", "combo_name", "VARCHAR(80) NOT NULL DEFAULT ''"),
     # A swap request can now propose a new day/time for the shift (reschedule).
-    ("swap_request", "new_starts_at", "DATETIME"),
-    ("swap_request", "new_ends_at", "DATETIME"),
+    # TIMESTAMP (not DATETIME) — DATETIME is not a Postgres type; TIMESTAMP works
+    # on both Postgres and SQLite, so the ADD COLUMN succeeds on the live DB.
+    ("swap_request", "new_starts_at", "TIMESTAMP"),
+    ("swap_request", "new_ends_at", "TIMESTAMP"),
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW
