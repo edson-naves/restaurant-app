@@ -38,13 +38,22 @@
     var h = Math.floor(min / 60), m = min % 60;
     return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
   }
-  function post(url, data) {
+  function post(url, data, forced) {
+    var payload = Object.assign({}, data);
+    if (forced) payload.force = 1;
     fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams(data).toString(),
-    }).then(function () { location.reload(); })
-      .catch(function () { location.reload(); });
+      headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
+      body: new URLSearchParams(payload).toString(),
+    }).then(function (r) {
+      // 409 = a soft conflict (e.g. approved time off) — ask, then retry forced.
+      if (r.status === 409 && !forced) {
+        return r.json().then(function (j) {
+          if (window.confirm(j.detail || "This conflicts. Proceed anyway?")) post(url, data, true);
+        }).catch(function () { location.reload(); });
+      }
+      location.reload();
+    }).catch(function () { location.reload(); });
   }
   function columnAt(x, y) {
     var el = document.elementFromPoint(x, y);
@@ -239,23 +248,32 @@
   // Request/clock actions post in the background and refresh the current view
   // in place — so approving a request updates the calendar without navigating
   // away or making you hit refresh.
+  function sendForm(f, forced) {
+    var act = f.getAttribute("action") || "";
+    var flash = null;
+    if (act === "/schedule/timeoff") flash = "✓ Time-off request sent for approval";
+    else if (/\/shifts\/\d+\/swap$/.test(act)) flash = "✓ Swap request sent";
+    var fd = new FormData(f);
+    if (forced) fd.set("force", "1");
+    fetch(f.action, { method: "POST", body: fd, headers: { "Accept": "application/json" } })
+      .then(function (r) {
+        if (r.status === 409 && !forced) {
+          return r.json().then(function (j) {
+            if (window.confirm(j.detail || "This conflicts. Proceed anyway?")) sendForm(f, true);
+          }).catch(function () { location.reload(); });
+        }
+        if (flash) { try { sessionStorage.setItem("rms-flash", flash); } catch (e2) {} }
+        location.reload();
+      })
+      .catch(function () { location.reload(); });
+  }
   document.querySelectorAll(
     'form[action^="/schedule/timeoff"], form[action^="/schedule/swaps"],'
-    + ' form[action*="/swap"], form[action*="/clock-"]'
+    + ' form[action*="/swap"], form[action*="/clock-"], form.sched-add'
   ).forEach(function (f) {
     f.addEventListener("submit", function (e) {
       e.preventDefault();
-      // Confirm to the requester (survives the reload via sessionStorage).
-      var act = f.getAttribute("action") || "";
-      var flash = null;
-      if (act === "/schedule/timeoff") flash = "✓ Time-off request sent for approval";
-      else if (/\/shifts\/\d+\/swap$/.test(act)) flash = "✓ Swap request sent";
-      fetch(f.action, { method: "POST", body: new FormData(f) })
-        .then(function () {
-          if (flash) { try { sessionStorage.setItem("rms-flash", flash); } catch (e2) {} }
-          location.reload();
-        })
-        .catch(function () { location.reload(); });
+      sendForm(f, false);
     });
   });
 

@@ -306,41 +306,47 @@ check(owner_c.get(f"/schedule?view=month&date={p5_week.isoformat()}").status_cod
 check(waiter_c.post("/schedule/copy-week", data={"week": day}, follow_redirects=False).status_code == 403,
       "a non-manager cannot copy last week")
 
-# 11. Time off and a shift can't coexist on the same day.
+# 11. Time off vs a shift on the same day: a soft conflict (409) the manager can
+#     override with force=1 ("proceed anyway" — the plan may have changed).
 from app.models.oltp import TimeOffRequest as _TOR, TimeOffStatus as _TOS
 cf_mon = mon + timedelta(days=28)
 cf_day = cf_mon + timedelta(days=2)
 cf0 = datetime(cf_day.year, cf_day.month, cf_day.day)
+cf_data = {"staff_id": waiter.id, "date": cf_day.isoformat(), "start": "10:00", "end": "14:00"}
+
+def _cf_clean():
+    d = SessionLocal()
+    for x in d.query(Shift).filter(Shift.staff_id == waiter.id, Shift.starts_at >= cf0, Shift.starts_at < cf0 + timedelta(days=1)).all():
+        d.delete(x)
+    d.query(_TOR).filter(_TOR.staff_id == waiter.id, _TOR.reason == "conflict-qa").delete()
+    d.commit(); d.close()
+
+_cf_clean()
+# approved time off that day → scheduling warns (409); force proceeds
 d = SessionLocal()
-for x in d.query(Shift).filter(Shift.staff_id == waiter.id, Shift.starts_at >= cf0, Shift.starts_at < cf0 + timedelta(days=1)).all():
-    d.delete(x)
-d.query(_TOR).filter(_TOR.staff_id == waiter.id, _TOR.reason == "conflict-qa").delete()
-# approved time off that day → scheduling a shift is refused
 d.add(_TOR(staff_id=waiter.id, starts_at=cf0, ends_at=cf0 + timedelta(hours=23, minutes=59),
            status=_TOS.APPROVED, reason="conflict-qa"))
 d.commit(); d.close()
-r = owner_c.post("/schedule/shifts", follow_redirects=False,
-                 data={"staff_id": waiter.id, "date": cf_day.isoformat(), "start": "10:00", "end": "14:00"})
-check(r.status_code == 400, "can't schedule a shift onto approved time off", r.status_code)
+check(owner_c.post("/schedule/shifts", follow_redirects=False, data=cf_data).status_code == 409,
+      "scheduling onto approved time off warns (409)")
+check(owner_c.post("/schedule/shifts", follow_redirects=False, data={**cf_data, "force": 1}).status_code == 303,
+      "force schedules the shift anyway")
+_cf_clean()
 
-d = SessionLocal()
-d.query(_TOR).filter(_TOR.staff_id == waiter.id, _TOR.reason == "conflict-qa").delete()
-d.commit(); d.close()
-r = owner_c.post("/schedule/shifts", follow_redirects=False,
-                 data={"staff_id": waiter.id, "date": cf_day.isoformat(), "start": "10:00", "end": "14:00"})
-check(r.status_code == 303, "shift schedules fine once the time off is gone", r.status_code)
+# a shift exists → approving time off over it warns (409); force proceeds
+check(owner_c.post("/schedule/shifts", follow_redirects=False, data=cf_data).status_code == 303,
+      "shift schedules fine when there's no time off")
 d = SessionLocal()
 tor = _TOR(staff_id=waiter.id, starts_at=cf0, ends_at=cf0 + timedelta(hours=23, minutes=59),
            status=_TOS.PENDING, reason="conflict-qa")
 d.add(tor); d.commit(); tor_id = tor.id; d.close()
-check(owner_c.post(f"/schedule/timeoff/{tor_id}/approve", follow_redirects=False).status_code == 400,
-      "can't approve time off over an existing shift")
-d = SessionLocal()
-check(d.get(_TOR, tor_id).status == "pending", "the clashing time off stays pending")
-for x in d.query(Shift).filter(Shift.staff_id == waiter.id, Shift.starts_at >= cf0, Shift.starts_at < cf0 + timedelta(days=1)).all():
-    d.delete(x)
-d.query(_TOR).filter(_TOR.staff_id == waiter.id, _TOR.reason == "conflict-qa").delete()
-d.commit(); d.close()
+check(owner_c.post(f"/schedule/timeoff/{tor_id}/approve", follow_redirects=False).status_code == 409,
+      "approving time off over a shift warns (409)")
+d = SessionLocal(); check(d.get(_TOR, tor_id).status == "pending", "it stays pending until confirmed"); d.close()
+check(owner_c.post(f"/schedule/timeoff/{tor_id}/approve", follow_redirects=False, data={"force": 1}).status_code == 303,
+      "force approves the time off anyway")
+d = SessionLocal(); check(d.get(_TOR, tor_id).status == "approved", "forced approval goes through"); d.close()
+_cf_clean()
 
 # ---- cleanup --------------------------------------------------------------
 db = SessionLocal()

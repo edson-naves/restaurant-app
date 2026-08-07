@@ -52,16 +52,20 @@ def _guard_overlap(db, staff_id, starts, ends, exclude_id=None) -> None:
         )
 
 
-def _guard_timeoff(db, member, starts, ends) -> None:
-    """Refuse to schedule a shift onto a day the person is approved off."""
-    if member is None:
+def _guard_timeoff(db, member, starts, ends, force=False) -> None:
+    """Warn before scheduling a shift onto a day the person is approved off.
+
+    Returns 409 (not a hard 400) so the UI can ask "proceed anyway?" — the plan
+    may have changed. Resubmitting with force=1 goes ahead.
+    """
+    if member is None or force:
         return
     off = sched.approved_timeoff_conflict(db, member.id, starts, ends)
     if off is not None:
         raise HTTPException(
-            400,
+            409,
             f"{member.name} has approved time off on "
-            f"{starts.strftime('%a %b %d')}. Cancel the time off first, or pick another day.",
+            f"{starts.strftime('%a %b %d')}. Assign the shift anyway?",
         )
 
 
@@ -274,20 +278,20 @@ def file_timeoff(
     return RedirectResponse("/schedule?requested=timeoff", status_code=303)
 
 
-def _decide_timeoff(db, staff, req_id, status) -> RedirectResponse:
+def _decide_timeoff(db, staff, req_id, status, force=False) -> RedirectResponse:
     req = db.get(TimeOffRequest, req_id)
     if req is None:
         raise HTTPException(404, "Request not found.")
-    # Can't approve time off that lands on shifts they're already scheduled for —
-    # that's the inconsistency we prevent. The manager removes those shifts first.
-    if status == TimeOffStatus.APPROVED:
+    # Approving time off that lands on shifts they're already scheduled for is an
+    # inconsistency — warn (409) and let the manager proceed if the plan changed.
+    if status == TimeOffStatus.APPROVED and not force:
         clash = sched.shifts_in_window(db, req.staff_id, req.starts_at, req.ends_at)
         if clash:
             days = ", ".join(sorted({s.starts_at.strftime("%a %b %d") for s in clash}))
             raise HTTPException(
-                400,
+                409,
                 f"{req.staff.name} has {len(clash)} shift(s) in that window ({days}). "
-                f"Remove them from the schedule first, then approve.",
+                f"Approve the time off anyway?",
             )
     req.status = status
     req.decided_by_id = staff.id
@@ -300,10 +304,11 @@ def _decide_timeoff(db, staff, req_id, status) -> RedirectResponse:
 @router.post("/schedule/timeoff/{req_id}/approve")
 def approve_timeoff(
     req_id: int,
+    force: int = Form(0),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("schedule.manage")),
 ):
-    return _decide_timeoff(db, staff, req_id, TimeOffStatus.APPROVED)
+    return _decide_timeoff(db, staff, req_id, TimeOffStatus.APPROVED, force=bool(force))
 
 
 @router.post("/schedule/timeoff/{req_id}/deny")
@@ -401,6 +406,7 @@ def create_shift(
     start: str = Form(...),
     end: str = Form(...),
     notes: str = Form(""),
+    force: int = Form(0),             # 1 = proceed despite approved time off
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("schedule.manage")),
 ):
@@ -411,7 +417,7 @@ def create_shift(
         pos = member.position
     starts, ends = _parse_window(date, start, end)
     _guard_overlap(db, member.id if member else None, starts, ends)
-    _guard_timeoff(db, member, starts, ends)
+    _guard_timeoff(db, member, starts, ends, force=bool(force))
     db.add(Shift(
         staff_id=(member.id if member else None),
         position_id=(pos.id if pos else None),
@@ -434,6 +440,7 @@ def edit_shift(
     start: str = Form(...),
     end: str = Form(...),
     notes: str = Form(""),
+    force: int = Form(0),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("schedule.manage")),
 ):
@@ -443,7 +450,7 @@ def edit_shift(
     member, pos = _resolve(db, staff_id, position_id)
     starts, ends = _parse_window(date, start, end)
     _guard_overlap(db, member.id if member else None, starts, ends, exclude_id=shift.id)
-    _guard_timeoff(db, member, starts, ends)
+    _guard_timeoff(db, member, starts, ends, force=bool(force))
     shift.staff_id = member.id if member else None
     shift.position_id = pos.id if pos else None
     shift.starts_at, shift.ends_at = starts, ends
