@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -195,6 +195,16 @@ def set_forecast(
     return RedirectResponse(f"/schedule?week={week or sched.monday_of(datetime.now().date()).isoformat()}", status_code=303)
 
 
+@router.get("/schedule/pending-count")
+def pending_count(
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("schedule.manage")),
+):
+    """Live count of pending time-off + swap requests — polled to alert managers
+    the moment a new request lands, without a full page reload."""
+    return JSONResponse({"count": sched.pending_request_count(db)})
+
+
 @router.get("/schedule/requests")
 def requests_page(
     request: Request,
@@ -248,7 +258,7 @@ def file_timeoff(
         reason=reason.strip(),
     ))
     db.commit()
-    return RedirectResponse("/schedule", status_code=303)
+    return RedirectResponse("/schedule?requested=timeoff", status_code=303)
 
 
 def _decide_timeoff(db, staff, req_id, status) -> RedirectResponse:
@@ -303,7 +313,8 @@ def request_swap(
     ))
     db.commit()
     return RedirectResponse(
-        f"/schedule?week={sched.monday_of(shift.starts_at.date()).isoformat()}", status_code=303
+        f"/schedule?week={sched.monday_of(shift.starts_at.date()).isoformat()}&requested=swap",
+        status_code=303,
     )
 
 

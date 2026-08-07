@@ -245,8 +245,16 @@
   ).forEach(function (f) {
     f.addEventListener("submit", function (e) {
       e.preventDefault();
+      // Confirm to the requester (survives the reload via sessionStorage).
+      var act = f.getAttribute("action") || "";
+      var flash = null;
+      if (act === "/schedule/timeoff") flash = "✓ Time-off request sent for approval";
+      else if (/\/shifts\/\d+\/swap$/.test(act)) flash = "✓ Swap request sent";
       fetch(f.action, { method: "POST", body: new FormData(f) })
-        .then(function () { location.reload(); })
+        .then(function () {
+          if (flash) { try { sessionStorage.setItem("rms-flash", flash); } catch (e2) {} }
+          location.reload();
+        })
         .catch(function () { location.reload(); });
     });
   });

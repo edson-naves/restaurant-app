@@ -767,6 +767,28 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* ---------- admin / setup ---------- */
 /* Sticky: the tables page is long, and the sub-nav is most wanted precisely
    when you are deep in it editing zones. */
+/* Toasts / notifications */
+.toast-host { position: fixed; right: 16px; bottom: 16px; z-index: 200; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.toast {
+  background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: 8px; padding: 10px 14px;
+  font-size: 13px; font-weight: 600; box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+  max-width: 320px; animation: toast-in .25s ease;
+}
+.toast.toast-out { opacity: 0; transform: translateY(6px); transition: opacity .3s, transform .3s; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+/* "Requests awaiting approval" banner (managers) */
+.approve-alert {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 10px; padding: 10px 14px; margin-bottom: 16px; font-size: 14px;
+}
+.approve-alert .approve-go { font-weight: 700; margin-left: auto; }
+.approve-x { border: none; background: none; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; }
+.approve-x:hover { color: var(--ink); }
+
 .subtabs {
   display: flex; gap: 6px; margin-bottom: 18px; flex-wrap: wrap;
 }

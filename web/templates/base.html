@@ -19,7 +19,7 @@
     })();
   </script>
 </head>
-<body>
+<body{% if can('schedule.manage') %} data-approve="1"{% endif %}>
 <div class="app-shell">
   {% if staff %}
   <aside class="sidebar">
@@ -80,6 +80,13 @@
 
   <div class="main-area">
     <main class="wrap {% block wrap_extra %}{% endblock %}">
+      {% if pending_requests %}
+      <div class="approve-alert">
+        <span>🔔 <b>{{ pending_requests }}</b> request{{ 's' if pending_requests != 1 }} awaiting your approval.</span>
+        <a href="/schedule/requests" class="approve-go">Review →</a>
+        <button type="button" class="approve-x" title="Dismiss" onclick="this.closest('.approve-alert').remove()">✕</button>
+      </div>
+      {% endif %}
       {% block body %}{% endblock %}
     </main>
     <footer class="foot">
@@ -87,6 +94,7 @@
     </footer>
   </div>
 </div>
+<div id="toastHost" class="toast-host" aria-live="polite"></div>
 <script>
   // Flip light/dark and remember it. The <head> script applies it before paint
   // on the next load, so there's no flash.
@@ -114,6 +122,62 @@
       if (backdrop && backdrop.href) window.location.href = backdrop.href;
     }
   });
+
+  // --- Notifications ------------------------------------------------------
+  function rmsToast(msg) {
+    var host = document.getElementById('toastHost');
+    if (!host) return;
+    var el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = msg;
+    host.appendChild(el);
+    setTimeout(function () {
+      el.classList.add('toast-out');
+      setTimeout(function () { el.remove(); }, 300);
+    }, 5000);
+  }
+
+  // Requester confirmation, shown after a request form is submitted (the
+  // schedule forms post via fetch + reload, so the message rides sessionStorage;
+  // a no-JS submit lands on ?requested= instead).
+  (function () {
+    var m = null;
+    try { m = sessionStorage.getItem('rms-flash'); if (m) sessionStorage.removeItem('rms-flash'); } catch (e) {}
+    if (!m) {
+      var q = new URLSearchParams(location.search).get('requested');
+      if (q === 'timeoff') m = '✓ Time-off request sent for approval';
+      else if (q === 'swap') m = '✓ Swap request sent';
+      if (q) history.replaceState(null, '', location.pathname);
+    }
+    if (m) rmsToast(m);
+  })();
+
+  // Managers: poll for new pending time-off / swap requests and alert the moment
+  // one lands, updating the Schedule nav badge live — no page reload needed.
+  (function () {
+    if (document.body.dataset.approve !== '1') return;
+    function badge() { return document.querySelector('.side-nav a[href="/schedule"] .nav-badge'); }
+    var b = badge();
+    var last = b ? (parseInt(b.textContent, 10) || 0) : 0;
+    setInterval(function () {
+      fetch('/schedule/pending-count', { headers: { 'Accept': 'application/json' } })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (d) {
+          if (!d) return;
+          var n = d.count || 0;
+          if (n > last) rmsToast('🔔 New request awaiting your approval — ' + n + ' pending');
+          last = n;
+          var el = badge();
+          if (n > 0) {
+            if (el) { el.textContent = n; }
+            else {
+              var link = document.querySelector('.side-nav a[href="/schedule"]');
+              if (link) { var s = document.createElement('span'); s.className = 'nav-badge'; s.textContent = n; link.appendChild(s); }
+            }
+          } else if (el) { el.remove(); }
+        }).catch(function () {});
+    }, 30000);
+  })();
 </script>
 {% block scripts %}{% endblock %}
 </body>
