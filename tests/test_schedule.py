@@ -348,6 +348,35 @@ check(owner_c.post(f"/schedule/timeoff/{tor_id}/approve", follow_redirects=False
 d = SessionLocal(); check(d.get(_TOR, tor_id).status == "approved", "forced approval goes through"); d.close()
 _cf_clean()
 
+# 12. A worker proposes a new day/time for a shift → manager approves → it moves.
+from app.models.oltp import SwapRequest as _SR
+pr_mon = mon + timedelta(days=35)
+ps0 = datetime(pr_mon.year, pr_mon.month, pr_mon.day, 16, 0)
+d = SessionLocal()
+for x in d.query(Shift).filter(Shift.staff_id == waiter.id, Shift.starts_at >= ps0 - timedelta(days=1), Shift.starts_at < ps0 + timedelta(days=8)).all():
+    d.delete(x)
+psh = Shift(staff_id=waiter.id, starts_at=ps0, ends_at=ps0 + timedelta(hours=6))
+d.add(psh); d.commit(); psh_id = psh.id; d.close()
+pr_newday = (pr_mon + timedelta(days=1)).isoformat()
+check(waiter_c.post("/schedule/propose", follow_redirects=False,
+                    data={"shift_id": psh_id, "date": pr_newday, "start": "10:00", "end": "14:00"}).status_code == 303,
+      "a worker proposes a shift change")
+d = SessionLocal()
+pr = d.query(_SR).filter(_SR.shift_id == psh_id).order_by(_SR.id.desc()).first()
+check(pr is not None and pr.is_reschedule, "the request carries a proposed new time")
+pr_id = pr.id; d.close()
+check(waiter_c.post(f"/schedule/swaps/{pr_id}/approve", follow_redirects=False).status_code == 403,
+      "a non-manager cannot approve the reschedule")
+check(owner_c.post(f"/schedule/swaps/{pr_id}/approve", follow_redirects=False).status_code == 303,
+      "the manager approves the reschedule")
+d = SessionLocal()
+check(d.get(Shift, psh_id).starts_at.strftime("%Y-%m-%d %H:%M") == pr_newday + " 10:00",
+      "the shift moves to the proposed time")
+d.delete(d.get(Shift, psh_id))
+for x in d.query(_SR).filter(_SR.shift_id == psh_id).all():
+    d.delete(x)
+d.commit(); d.close()
+
 # ---- cleanup --------------------------------------------------------------
 db = SessionLocal()
 for sid in p5_created:

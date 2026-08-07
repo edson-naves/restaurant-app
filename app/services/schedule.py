@@ -62,6 +62,16 @@ def swaps_for(db: Session, staff_id: int, limit: int = 6) -> list[SwapRequest]:
     ).scalars().all()[:limit]
 
 
+def my_upcoming_shifts(db: Session, staff_id: int, limit: int = 30) -> list[Shift]:
+    """A person's shifts from today onward — the pick-list for proposing a new
+    day/time for one of them."""
+    start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    return db.execute(
+        select(Shift).where(Shift.staff_id == staff_id, Shift.starts_at >= start)
+        .order_by(Shift.starts_at)
+    ).scalars().all()[:limit]
+
+
 def all_timeoff(db: Session, staff_id: int | None = None) -> list[TimeOffRequest]:
     """Every time-off request (newest first). Scoped to one person if given."""
     q = select(TimeOffRequest).order_by(TimeOffRequest.created_at.desc())

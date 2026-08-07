@@ -245,8 +245,9 @@
       <div class="req-title">Swaps · pending <span class="req-badge">{{ pending_swaps|length }}</span></div>
       {% for s in pending_swaps %}
       <div class="req-card">
-        <b>{{ s.requested_by.name }}</b>
-        <div class="sub">{{ s.shift.starts_at.strftime('%a %b') }} {{ s.shift.starts_at.day }} · {{ s.shift.starts_at.strftime('%H:%M') }}–{{ s.shift.ends_at.strftime('%H:%M') }} → {% if s.target %}{{ s.target.name }}{% else %}anyone{% endif %}</div>
+        <b>{{ s.requested_by.name }}</b>{% if s.is_reschedule %} <span class="pill open" style="font-size:10px">reschedule</span>{% endif %}
+        <div class="sub">{{ s.shift.starts_at.strftime('%a %b') }} {{ s.shift.starts_at.day }} · {{ s.shift.starts_at.strftime('%H:%M') }}–{{ s.shift.ends_at.strftime('%H:%M') }} →
+          {% if s.is_reschedule %}<b>{{ s.new_starts_at.strftime('%a %b') }} {{ s.new_starts_at.day }} · {{ s.new_starts_at.strftime('%H:%M') }}–{{ s.new_ends_at.strftime('%H:%M') }}</b>{% elif s.target %}{{ s.target.name }}{% else %}anyone{% endif %}</div>
         <div class="req-act">
           <form method="post" action="/schedule/swaps/{{ s.id }}/approve"><button class="btn xs good">Approve</button></form>
           <form method="post" action="/schedule/swaps/{{ s.id }}/deny"><button class="btn xs danger">Deny</button></form>
@@ -279,6 +280,27 @@
       </form>
     </details>
 
+    {% if my_shifts %}
+    <details class="req-form">
+      <summary class="btn primary sm">🔄 Propose a shift change</summary>
+      <form method="post" action="/schedule/propose" style="margin-top:10px;display:flex;flex-direction:column;gap:8px">
+        <label class="sub" style="display:flex;flex-direction:column;gap:3px">My shift
+          <select name="shift_id" required>
+            {% for sh in my_shifts %}<option value="{{ sh.id }}">{{ sh.starts_at.strftime('%a %b') }} {{ sh.starts_at.day }} · {{ sh.starts_at.strftime('%H:%M') }}–{{ sh.ends_at.strftime('%H:%M') }}</option>{% endfor %}
+          </select>
+        </label>
+        <label class="sub" style="display:flex;flex-direction:column;gap:3px">New day
+          <input type="date" name="date" value="{{ today.isoformat() }}" required>
+        </label>
+        <div style="display:flex;gap:8px">
+          <label class="sub" style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">Start<input type="time" name="start" value="16:00" required></label>
+          <label class="sub" style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">End<input type="time" name="end" value="22:00" required></label>
+        </div>
+        <button class="btn good">Propose change</button>
+      </form>
+    </details>
+    {% endif %}
+
     {% if my_timeoff %}
     <div class="req-group">
       <div class="req-title">My time off</div>
@@ -296,7 +318,7 @@
       <div class="req-title">My swaps</div>
       {% for s in my_swaps %}
       <div class="req-card">
-        <span class="sub">{{ s.shift.starts_at.strftime('%a %b') }} {{ s.shift.starts_at.day }} → {% if s.target %}{{ s.target.name }}{% else %}anyone{% endif %}</span>
+        <span class="sub">{{ s.shift.starts_at.strftime('%a %b') }} {{ s.shift.starts_at.day }} → {% if s.is_reschedule %}{{ s.new_starts_at.strftime('%a %b') }} {{ s.new_starts_at.day }} {{ s.new_starts_at.strftime('%H:%M') }}{% elif s.target %}{{ s.target.name }}{% else %}anyone{% endif %}</span>
         <span class="pill {{ 'ok' if s.status == 'approved' else ('open' if s.status == 'pending' else '') }}">{{ s.status }}</span>
       </div>
       {% endfor %}

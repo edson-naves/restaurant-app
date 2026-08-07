@@ -20,7 +20,7 @@
       <tr>
         <td>{{ s.requested_by.name }}</td>
         <td>{{ s.shift.starts_at.strftime('%a %b') }} {{ s.shift.starts_at.day }} · {{ s.shift.starts_at.strftime('%H:%M') }}–{{ s.shift.ends_at.strftime('%H:%M') }}</td>
-        <td>{% if s.target %}{{ s.target.name }}{% else %}anyone{% endif %}</td>
+        <td>{% if s.is_reschedule %}<span title="Reschedule to">⏱ {{ s.new_starts_at.strftime('%a %b') }} {{ s.new_starts_at.day }} · {{ s.new_starts_at.strftime('%H:%M') }}–{{ s.new_ends_at.strftime('%H:%M') }}</span>{% elif s.target %}{{ s.target.name }}{% else %}anyone{% endif %}</td>
         <td>{{ statuspill(s.status) }}</td>
         {% if can('schedule.manage') %}
         <td style="white-space:nowrap">

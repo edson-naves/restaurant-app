@@ -252,6 +252,7 @@
     var act = f.getAttribute("action") || "";
     var flash = null;
     if (act === "/schedule/timeoff") flash = "✓ Time-off request sent for approval";
+    else if (act === "/schedule/propose") flash = "✓ Shift-change request sent for approval";
     else if (/\/shifts\/\d+\/swap$/.test(act)) flash = "✓ Swap request sent";
     var fd = new FormData(f);
     if (forced) fd.set("force", "1");
@@ -269,7 +270,8 @@
   }
   document.querySelectorAll(
     'form[action^="/schedule/timeoff"], form[action^="/schedule/swaps"],'
-    + ' form[action*="/swap"], form[action*="/clock-"], form.sched-add'
+    + ' form[action*="/swap"], form[action*="/clock-"], form.sched-add,'
+    + ' form[action="/schedule/propose"]'
   ).forEach(function (f) {
     f.addEventListener("submit", function (e) {
       e.preventDefault();

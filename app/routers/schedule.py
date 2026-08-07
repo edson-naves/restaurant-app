@@ -136,6 +136,7 @@ def schedule_page(
         "my_timeoff": sched.timeoff_for(db, staff.id),
         "pending_swaps": sched.pending_swaps(db) if manage else [],
         "my_swaps": sched.swaps_for(db, staff.id),
+        "my_shifts": sched.my_upcoming_shifts(db, staff.id),
         "labor": None,
         "title": "Schedule",
     }
@@ -347,25 +348,62 @@ def request_swap(
     )
 
 
+@router.post("/schedule/propose")
+def propose_shift_change(
+    shift_id: int = Form(...),
+    date: str = Form(...),
+    start: str = Form(...),
+    end: str = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("schedule.request")),
+):
+    """Propose a new day/time for one of your shifts (a reschedule request the
+    manager approves), rather than handing it to a teammate."""
+    shift = db.get(Shift, shift_id)
+    if shift is None:
+        raise HTTPException(404, "Shift not found.")
+    if shift.staff_id != staff.id and not can(staff, "schedule.manage"):
+        raise HTTPException(403, "You can only propose a change to your own shift.")
+    starts, ends = _parse_window(date, start, end)
+    db.add(SwapRequest(
+        shift_id=shift.id, requested_by_id=staff.id, target_staff_id=None,
+        new_starts_at=starts, new_ends_at=ends,
+    ))
+    db.commit()
+    return RedirectResponse(
+        f"/schedule?week={sched.monday_of(shift.starts_at.date()).isoformat()}&requested=swap",
+        status_code=303,
+    )
+
+
 @router.post("/schedule/swaps/{swap_id}/approve")
 def approve_swap(
     swap_id: int,
+    force: int = Form(0),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("schedule.manage")),
 ):
-    """Approve a swap — reassign the shift to the target (or open it)."""
+    """Approve a swap: reschedule the shift to the proposed time, or reassign it
+    to the target (open it if none)."""
     sw = db.get(SwapRequest, swap_id)
     if sw is None:
         raise HTTPException(404, "Swap not found.")
     shift = sw.shift
-    new_staff = sw.target_staff_id                # None = open
-    if new_staff and sched.overlaps(db, new_staff, shift.starts_at, shift.ends_at, exclude_id=shift.id):
-        raise HTTPException(400, "That teammate already works an overlapping shift.")
-    shift.staff_id = new_staff
-    if new_staff:
-        member = db.get(Staff, new_staff)
-        if shift.position_id is None and member and member.position_id:
-            shift.position_id = member.position_id
+    if sw.new_starts_at is not None:
+        # A reschedule request — move the shift to the proposed time, same person.
+        _guard_overlap(db, shift.staff_id, sw.new_starts_at, sw.new_ends_at, exclude_id=shift.id)
+        _guard_timeoff(db, shift.staff, sw.new_starts_at, sw.new_ends_at, force=bool(force))
+        shift.starts_at = sw.new_starts_at
+        shift.ends_at = sw.new_ends_at
+    else:
+        new_staff = sw.target_staff_id            # None = open
+        if new_staff and sched.overlaps(db, new_staff, shift.starts_at, shift.ends_at, exclude_id=shift.id):
+            raise HTTPException(400, "That teammate already works an overlapping shift.")
+        shift.staff_id = new_staff
+        if new_staff:
+            member = db.get(Staff, new_staff)
+            if shift.position_id is None and member and member.position_id:
+                shift.position_id = member.position_id
     sw.status = SwapStatus.APPROVED
     sw.decided_by_id = staff.id
     db.commit()

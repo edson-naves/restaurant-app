@@ -1127,9 +1127,12 @@ class SwapStatus:
 
 
 class SwapRequest(Base):
-    """A staff member offering one of their shifts to someone else (or to anyone).
+    """A staff member's request about one of their shifts, decided by a manager:
 
-    Approving reassigns the shift to the target (or opens it if no target).
+    - Offer it to a teammate (or open it to anyone) — approving reassigns it.
+    - Propose a new day/time for it (new_starts_at set) — approving reschedules
+      the shift to that time, keeping the same person.
+
     Owner/manager decide. Money never touches this table.
     """
     __tablename__ = "swap_request"
@@ -1139,9 +1142,17 @@ class SwapRequest(Base):
     requested_by_id: Mapped[int] = mapped_column(ForeignKey("staff.id"), nullable=False)
     # None = open swap (any teammate can be assigned by a manager on approval).
     target_staff_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
+    # A proposed new day/time for the shift (a reschedule request). When set, the
+    # request is a time-change rather than a hand-off to a teammate.
+    new_starts_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    new_ends_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default=SwapStatus.PENDING, nullable=False)
     decided_by_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+
+    @property
+    def is_reschedule(self) -> bool:
+        return self.new_starts_at is not None
 
     shift: Mapped["Shift"] = relationship(lazy="joined")
     requested_by: Mapped["Staff"] = relationship(foreign_keys=[requested_by_id], lazy="joined")

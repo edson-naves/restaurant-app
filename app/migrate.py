@@ -70,6 +70,9 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # à-la-carte line, so existing rows keep behaving exactly as before.
     ("order_item", "combo_id", "INTEGER"),
     ("order_item", "combo_name", "VARCHAR(80) NOT NULL DEFAULT ''"),
+    # A swap request can now propose a new day/time for the shift (reschedule).
+    ("swap_request", "new_starts_at", "DATETIME"),
+    ("swap_request", "new_ends_at", "DATETIME"),
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW
