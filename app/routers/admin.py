@@ -1669,7 +1669,6 @@ def edit_day_menu(
     schedule_kind: str = Form("date"),
     menu_date: str = Form(""),
     weekday: str = Form(""),
-    active: int = Form(0),          # unchecked box sends nothing → deactivate
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
@@ -1683,7 +1682,21 @@ def edit_day_menu(
     dm.name = name
     dm.price_cents = _cents(price, "Price")
     dm.menu_date = d
-    dm.weekday = wd
+    dm.weekday = wd          # active is controlled by the toggle switch, not here
+    db.commit()
+    return RedirectResponse("/admin/day-menus", status_code=303)
+
+
+@router.post("/day-menus/{menu_id}/active")
+def toggle_day_menu(
+    menu_id: int,
+    active: int = Form(0),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    dm = db.get(DayMenu, menu_id)
+    if dm is None:
+        raise HTTPException(404, "Day menu not found.")
     dm.is_active = bool(active)
     db.commit()
     return RedirectResponse("/admin/day-menus", status_code=303)

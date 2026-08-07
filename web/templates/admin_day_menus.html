@@ -2,108 +2,207 @@
 {% block body %}
 {% include "admin_nav.html" %}
 {% set wdays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'] %}
+{% set daycolors = ['#3b82f6','#14b8a6','#22c55e','#f59e0b','#f97316','#ec4899','#8b5cf6'] %}
 
-<div class="between" style="margin-bottom:10px">
+<div class="dm-page-head">
+  <span class="dm-title-icon">📅</span>
   <div>
     <h1 style="margin:0">Day menus</h1>
-    <p class="sub" style="margin:2px 0 0;max-width:660px">Fixed-price prix-fixe menus. Build each from any courses — several items in a course lets the guest pick one. The price is what the guest pays, not the sum of the dishes.</p>
+    <p class="sub" style="margin:3px 0 0;max-width:680px">Build fixed-price menus from any courses — several items in a course lets the guest pick one. The price is what the guest pays, not the sum of the dishes.</p>
   </div>
 </div>
 
-<div class="card dm-card">
-  <form method="post" action="/admin/day-menus/create" class="dm-row">
-    <div class="field dm-f-name"><label>Name</label><input type="text" name="name" placeholder="e.g. Sunday Roast" required></div>
-    <div class="field dm-f-price"><label>Price $</label><input type="number" name="price" step="0.01" min="0" placeholder="45.00" required></div>
-    <div class="field dm-f-when"><label>When</label>
+{# ---- create ---- #}
+<div class="card dm-create">
+  <div class="dm-create-h">✦ Create new menu</div>
+  <form method="post" action="/admin/day-menus/create" class="dm-crow">
+    <div class="field dm-c-name"><label>Menu name</label><input type="text" name="name" placeholder="e.g. Sunday Roast" required></div>
+    <div class="field dm-c-price"><label>Price ($)</label><input type="number" name="price" step="0.01" min="0" placeholder="45.00" required></div>
+    <div class="field dm-c-when"><label>When</label>
       <select name="schedule_kind" onchange="dmToggle(this)">
         <option value="date">Specific date</option>
         <option value="weekday">Every weekday</option>
       </select>
     </div>
-    <div class="field dm-f-date dm-date"><label>Date</label><input type="date" name="menu_date" value="{{ today }}"></div>
-    <div class="field dm-f-date dm-weekday" style="display:none"><label>Weekday</label>
+    <div class="field dm-c-date dm-date"><label>Date</label><input type="date" name="menu_date" value="{{ today }}"></div>
+    <div class="field dm-c-date dm-weekday" style="display:none"><label>Weekday</label>
       <select name="weekday">{% for w in wdays %}<option value="{{ loop.index0 }}">{{ w }}</option>{% endfor %}</select>
     </div>
-    <button class="btn good sm">Create menu</button>
+    <button class="btn primary dm-c-btn">+ Create menu</button>
   </form>
 </div>
 
+{# ---- controls ---- #}
+<div class="between dm-controls">
+  <h2 style="margin:0">Your day menus</h2>
+  <div class="dm-control-r">
+    <div class="dm-viewtoggle">
+      <button type="button" class="on" data-view="list" onclick="dmView('list')">☰ List view</button>
+      <button type="button" data-view="cal" onclick="dmView('cal')">📅 Calendar view</button>
+    </div>
+    <select class="dm-sort" onchange="dmSort(this.value)" title="Sort">
+      <option value="name">Name A–Z</option>
+      <option value="price-hi">Price (high)</option>
+      <option value="price-lo">Price (low)</option>
+    </select>
+  </div>
+</div>
+
+{# ---- list view ---- #}
+<div id="dm-list">
 {% for dm in menus %}
-<div class="card dm-card {{ 'dm-off' if not dm.is_active else '' }}">
-  <div class="dm-head">
-    <form method="post" action="/admin/day-menus/{{ dm.id }}/edit" class="dm-row">
-      <div class="field dm-f-name"><label>Name</label><input type="text" name="name" value="{{ dm.name }}" required></div>
-      <div class="field dm-f-price"><label>Price $</label><input type="number" name="price" step="0.01" min="0" value="{{ '%.2f'|format(dm.price_cents / 100) }}" required></div>
-      <div class="field dm-f-when"><label>When</label>
+{% set color = daycolors[dm.weekday] if dm.weekday is not none else '#7c3aed' %}
+<div class="card dm-card {{ 'dm-off' if not dm.is_active else '' }}" data-name="{{ dm.name|lower }}" data-price="{{ dm.price_cents }}">
+  <div class="dm-main">
+    <div class="dm-when-cell">
+      <span class="dm-icon" style="--bg:{{ color }}">📅</span>
+      <div class="dm-when-txt">
+        {% if dm.menu_date %}<b>{{ dm.menu_date.strftime('%b')|upper }}<br>{{ dm.menu_date.day }}</b><span class="sub">Specific date</span>
+        {% elif dm.weekday is not none %}<b>{{ wdays[dm.weekday][:3]|upper }}</b><span class="sub">Every {{ wdays[dm.weekday] }}</span>
+        {% else %}<b>—</b><span class="sub">Not scheduled</span>{% endif %}
+      </div>
+    </div>
+
+    <div class="dm-title-cell">
+      <b class="dm-name">{{ dm.name }}</b>
+      <div class="dm-price-line"><span class="dm-price-pill" style="--bg:{{ color }}">${{ dm.price_cents|money }}</span> <span class="sub">Fixed price</span></div>
+    </div>
+
+    <div class="dm-includes">
+      {% if dm.choices %}<span class="dm-inc-label">INCLUDES</span>{% endif %}
+      {% for slot, label in courses.items() %}
+      {% set sc = dm.choices|selectattr('course','equalto',slot)|list %}
+      {% if sc %}
+      <div class="dm-inc-col">
+        <span class="dm-inc-h">{{ label }}{% if sc|length > 1 %} <span class="sub">(pick one)</span>{% endif %}</span>
+        {% for c in sc %}
+        <span class="dm-chip">{{ c.menu_item.name }}<form method="post" action="/admin/day-menus/choices/{{ c.id }}/remove" style="display:inline;margin:0"><button class="dm-x" title="Remove">✕</button></form></span>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% endfor %}
+      {% if not dm.choices %}<span class="sub">No courses yet — add one below.</span>{% endif %}
+    </div>
+
+    <div class="dm-actions">
+      <form method="post" action="/admin/day-menus/{{ dm.id }}/active" class="dm-switch-form">
+        <input type="hidden" name="active" value="{{ 0 if dm.is_active else 1 }}">
+        <button type="submit" class="dm-switch {{ 'on' if dm.is_active else '' }}" title="{{ 'Turn off' if dm.is_active else 'Turn on' }}"><span class="dm-knob"></span></button>
+      </form>
+      <span class="dm-active-lbl">{{ 'Active' if dm.is_active else 'Off' }}</span>
+      <button type="button" class="btn sm" onclick="dmEdit({{ dm.id }})">✎ Edit</button>
+      <form method="post" action="/admin/day-menus/{{ dm.id }}/delete" onsubmit="return confirm('Delete this day menu?')" style="margin:0"><button class="btn sm danger">🗑 Delete</button></form>
+    </div>
+  </div>
+
+  {# edit panel (hidden until Edit) #}
+  <div class="dm-edit" id="dm-edit-{{ dm.id }}" hidden>
+    <form method="post" action="/admin/day-menus/{{ dm.id }}/edit" class="dm-crow">
+      <div class="field dm-c-name"><label>Menu name</label><input type="text" name="name" value="{{ dm.name }}" required></div>
+      <div class="field dm-c-price"><label>Price ($)</label><input type="number" name="price" step="0.01" min="0" value="{{ '%.2f'|format(dm.price_cents / 100) }}" required></div>
+      <div class="field dm-c-when"><label>When</label>
         <select name="schedule_kind" onchange="dmToggle(this)">
           <option value="date" {{ 'selected' if dm.menu_date else '' }}>Specific date</option>
           <option value="weekday" {{ 'selected' if dm.weekday is not none else '' }}>Every weekday</option>
         </select>
       </div>
-      <div class="field dm-f-date dm-date" style="{{ 'display:none' if dm.weekday is not none else '' }}"><label>Date</label><input type="date" name="menu_date" value="{{ dm.menu_date.isoformat() if dm.menu_date else today }}"></div>
-      <div class="field dm-f-date dm-weekday" style="{{ '' if dm.weekday is not none else 'display:none' }}"><label>Weekday</label>
+      <div class="field dm-c-date dm-date" style="{{ 'display:none' if dm.weekday is not none else '' }}"><label>Date</label><input type="date" name="menu_date" value="{{ dm.menu_date.isoformat() if dm.menu_date else today }}"></div>
+      <div class="field dm-c-date dm-weekday" style="{{ '' if dm.weekday is not none else 'display:none' }}"><label>Weekday</label>
         <select name="weekday">{% for w in wdays %}<option value="{{ loop.index0 }}" {{ 'selected' if dm.weekday == loop.index0 else '' }}>{{ w }}</option>{% endfor %}</select>
       </div>
-      <label class="dm-active"><input type="checkbox" name="active" value="1" {{ 'checked' if dm.is_active else '' }}> active</label>
-      <button class="btn sm">Save</button>
+      <button class="btn sm good">Save</button>
     </form>
-    <form method="post" action="/admin/day-menus/{{ dm.id }}/delete" onsubmit="return confirm('Delete this day menu?')" class="dm-del"><button class="btn sm danger">Delete</button></form>
   </div>
 
-  <div class="dm-sched sub">{% if dm.menu_date %}On {{ dm.menu_date.strftime('%a, %b') }} {{ dm.menu_date.day }}{% elif dm.weekday is not none %}Every {{ wdays[dm.weekday] }}{% else %}Not scheduled{% endif %} · <b>${{ dm.price_cents|money }}</b> fixed{% if not dm.is_active %} · inactive{% endif %}</div>
-
-  <div class="dm-courses">
-    {% for slot, label in courses.items() %}
-    {% set slot_choices = dm.choices|selectattr('course','equalto',slot)|list %}
-    {% if slot_choices %}
-    <div class="dm-course">
-      <span class="dm-course-h">{{ label }}{% if slot_choices|length > 1 %} · pick one{% endif %}</span>
-      {% for c in slot_choices %}
-      <span class="dm-choice">{{ c.menu_item.name }}<form method="post" action="/admin/day-menus/choices/{{ c.id }}/remove" style="display:inline;margin:0"><button class="dm-x" title="Remove">✕</button></form></span>
-      {% endfor %}
-    </div>
-    {% endif %}
-    {% endfor %}
-    {% if not dm.choices %}<span class="empty">No courses yet — add one below.</span>{% endif %}
-  </div>
-
-  <form method="post" action="/admin/day-menus/{{ dm.id }}/choices/add" class="dm-row dm-add">
-    <div class="field dm-f-course"><label>Course</label>
+  {# add a course option #}
+  <form method="post" action="/admin/day-menus/{{ dm.id }}/choices/add" class="dm-addrow">
+    <div class="field dm-a-course"><label>Course</label>
       <select name="course" onchange="dmFillItems(this)">{% for slot, label in courses.items() %}<option value="{{ slot }}">{{ label }}</option>{% endfor %}</select>
     </div>
-    <div class="field dm-f-item"><label>Item</label><select name="menu_item_id"></select></div>
-    <button class="btn sm good">+ Add option</button>
+    <div class="field dm-a-item"><label>Item</label><select name="menu_item_id"></select></div>
+    <button class="btn sm">+ Add option</button>
   </form>
 </div>
 {% endfor %}
 {% if not menus %}<div class="card"><p class="empty">No day menus yet — create one above.</p></div>{% endif %}
+</div>
+
+{# ---- calendar view ---- #}
+<div id="dm-cal" hidden></div>
+
+<div class="card dm-tip"><span>💡</span> The menu price is what the guest pays, not the sum of the dishes.</div>
 
 <script>
 const DM_ITEMS = {{ items_by_course|tojson }};
+const DM_MENUS = [
+  {% for dm in menus %}{name: {{ dm.name|tojson }}, price: {{ dm.price_cents }}, active: {{ 'true' if dm.is_active else 'false' }},
+   weekday: {{ dm.weekday if dm.weekday is not none else 'null' }}, date: {{ (dm.menu_date.isoformat()|tojson) if dm.menu_date else 'null' }},
+   color: "{{ daycolors[dm.weekday] if dm.weekday is not none else '#7c3aed' }}"}{{ ',' if not loop.last else '' }}
+  {% endfor %}
+];
+
 function dmFillItems(sel){
   const form = sel.closest('form');
   const itemSel = form.querySelector('select[name="menu_item_id"]');
   const list = DM_ITEMS[sel.value] || [];
   itemSel.innerHTML = '';
-  if(!list.length){
-    const o = document.createElement('option');
-    o.value = ''; o.textContent = '(no items in this course)';
-    itemSel.appendChild(o); return;
-  }
-  for(const it of list){
-    const o = document.createElement('option');
-    o.value = it[0]; o.textContent = it[1];
-    itemSel.appendChild(o);
-  }
+  if(!list.length){ const o=document.createElement('option'); o.value=''; o.textContent='(no items in this course)'; itemSel.appendChild(o); return; }
+  for(const it of list){ const o=document.createElement('option'); o.value=it[0]; o.textContent=it[1]; itemSel.appendChild(o); }
 }
 function dmToggle(sel){
   const form = sel.closest('form');
   const d = form.querySelector('.dm-date'), w = form.querySelector('.dm-weekday');
-  if(!d || !w) return;
+  if(!d||!w) return;
   const wd = sel.value === 'weekday';
-  d.style.display = wd ? 'none' : '';
-  w.style.display = wd ? '' : 'none';
+  d.style.display = wd ? 'none' : ''; w.style.display = wd ? '' : 'none';
 }
-document.querySelectorAll('.dm-add select[name="course"]').forEach(dmFillItems);
+function dmEdit(id){
+  const p = document.getElementById('dm-edit-' + id);
+  if(p) p.hidden = !p.hidden;
+}
+function dmSort(mode){
+  const box = document.getElementById('dm-list');
+  const cards = Array.from(box.querySelectorAll('.dm-card'));
+  cards.sort(function(a, b){
+    if(mode === 'name') return a.dataset.name.localeCompare(b.dataset.name);
+    const pa = +a.dataset.price, pb = +b.dataset.price;
+    return mode === 'price-hi' ? pb - pa : pa - pb;
+  });
+  cards.forEach(c => box.appendChild(c));
+}
+function dmView(v){
+  document.querySelectorAll('.dm-viewtoggle button').forEach(b => b.classList.toggle('on', b.dataset.view === v));
+  document.getElementById('dm-list').hidden = (v !== 'list');
+  const cal = document.getElementById('dm-cal');
+  cal.hidden = (v !== 'cal');
+  if(v === 'cal') dmRenderCal();
+}
+function dmRenderCal(){
+  const cal = document.getElementById('dm-cal');
+  const now = new Date(), y = now.getFullYear(), m = now.getMonth();
+  const first = new Date(y, m, 1);
+  const startDow = (first.getDay() + 6) % 7;           // Mon=0
+  const days = new Date(y, m + 1, 0).getDate();
+  const names = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const monthName = first.toLocaleString('default', {month: 'long', year: 'numeric'});
+  let h = '<div class="card"><h2 style="margin:0 0 10px">' + monthName + '</h2><div class="dmcal-grid">';
+  for(const n of names) h += '<div class="dmcal-h">' + n + '</div>';
+  for(let i = 0; i < startDow; i++) h += '<div class="dmcal-cell out"></div>';
+  for(let d = 1; d <= days; d++){
+    const dow = (new Date(y, m, d).getDay() + 6) % 7;
+    const iso = y + '-' + String(m+1).padStart(2,'0') + '-' + String(d).padStart(2,'0');
+    let chips = '';
+    for(const dm of DM_MENUS){
+      if(!dm.active) continue;
+      if((dm.date && dm.date === iso) || (dm.date === null && dm.weekday === dow)){
+        chips += '<span class="dmcal-chip" style="--bg:' + dm.color + '">' + dm.name + '</span>';
+      }
+    }
+    h += '<div class="dmcal-cell"><span class="dmcal-d">' + d + '</span>' + chips + '</div>';
+  }
+  h += '</div></div>';
+  cal.innerHTML = h;
+}
+document.querySelectorAll('.dm-addrow select[name="course"]').forEach(dmFillItems);
 </script>
 {% endblock %}

@@ -1101,48 +1101,105 @@ td.pending { color: var(--accent); font-weight: 700; }
 .mchip-time { color: var(--muted); margin-left: auto; font-size: 9px; }
 .mchip-more { font-size: 10px; color: var(--muted); padding: 1px 4px; }
 
-/* Day-menu (prix fixe) builder — compact, no wasted width */
-.dm-card { padding: 12px 14px; margin-bottom: 12px; }
-.dm-off { opacity: .6; }
-.dm-row { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: flex-end; }
-.dm-row .field { margin: 0; }
-.dm-row label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
-.dm-row input, .dm-row select { min-height: 30px; padding: 4px 8px; font-size: 13px; }
-.dm-f-name  { flex: 1 1 200px; min-width: 150px; }
-.dm-f-price { width: 88px; }
-.dm-f-when  { width: 148px; }
-.dm-f-date  { width: 150px; }
-.dm-f-course { width: 120px; }
-.dm-f-item  { flex: 1 1 240px; min-width: 180px; }
-.dm-active { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; white-space: nowrap; padding-bottom: 5px; }
-.dm-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
-.dm-head .dm-row { flex: 1; }
-.dm-del { margin: 0; }
-.dm-sched { margin: 9px 0 7px; font-size: 12px; }
-.dm-courses { display: flex; flex-wrap: wrap; gap: 7px 16px; margin-bottom: 4px; }
-.dm-course { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.dm-course-h { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
-.dm-choice {
-  display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-  border: 1px solid var(--line); border-radius: 999px; padding: 2px 4px 2px 10px;
+/* Day menus (prix fixe) — page header */
+.dm-page-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
+.dm-title-icon {
+  width: 46px; height: 46px; border-radius: 12px; display: grid; place-items: center;
+  font-size: 22px; background: color-mix(in srgb, var(--accent) 28%, var(--panel));
+}
+
+/* Create card */
+.dm-create { padding: 16px 18px; }
+.dm-create-h { font-weight: 700; margin-bottom: 12px; display: flex; align-items: center; gap: 6px; }
+.dm-crow { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.dm-crow .field { margin: 0; }
+.dm-crow label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+.dm-c-name { flex: 1 1 240px; min-width: 180px; }
+.dm-c-price { width: 110px; }
+.dm-c-when { width: 170px; }
+.dm-c-date { width: 170px; }
+.dm-c-btn { white-space: nowrap; }
+
+/* Controls row */
+.dm-controls { margin: 20px 0 12px; }
+.dm-control-r { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.dm-viewtoggle { display: inline-flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 3px; gap: 2px; }
+.dm-viewtoggle button {
+  border: none; background: none; color: var(--muted); cursor: pointer; font: inherit;
+  padding: 5px 12px; border-radius: 7px; font-size: 13px; font-weight: 600;
+}
+.dm-viewtoggle button.on { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--ink); }
+.dm-sort { font-size: 13px; padding: 6px 10px; }
+
+/* Menu cards */
+.dm-card { padding: 16px 18px; margin-bottom: 12px; }
+.dm-card.dm-off { opacity: .6; }
+.dm-main { display: flex; align-items: flex-start; gap: 18px; flex-wrap: wrap; }
+
+.dm-when-cell { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; min-width: 128px; }
+.dm-icon {
+  width: 44px; height: 44px; border-radius: 12px; flex: 0 0 44px;
+  display: grid; place-items: center; font-size: 20px; color: #fff;
+  background: var(--bg); box-shadow: 0 3px 10px color-mix(in srgb, var(--bg) 40%, transparent);
+}
+.dm-when-txt b { display: block; font-size: 16px; line-height: 1.05; }
+.dm-when-txt .sub { font-size: 11px; }
+
+.dm-title-cell { flex: 0 0 auto; min-width: 130px; }
+.dm-name { display: block; font-size: 17px; margin-bottom: 5px; }
+.dm-price-line { display: flex; align-items: center; gap: 7px; }
+.dm-price-pill { font-weight: 800; font-size: 13px; color: #fff; border-radius: 999px; padding: 2px 11px; background: var(--bg); }
+
+.dm-includes { flex: 1 1 300px; display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 18px; }
+.dm-inc-label { font-size: 10px; font-weight: 800; letter-spacing: .6px; color: var(--muted); align-self: center; }
+.dm-inc-col { display: flex; flex-direction: column; gap: 4px; }
+.dm-inc-h { font-size: 11px; color: var(--muted); }
+.dm-chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 4px 6px 4px 10px;
 }
 .dm-x {
-  border: none; background: color-mix(in srgb, var(--muted) 25%, transparent);
-  color: var(--fg); border-radius: 50%; width: 16px; height: 16px; padding: 0;
-  font-size: 9px; line-height: 1; cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: color-mix(in srgb, var(--muted) 22%, transparent); color: var(--ink);
+  border-radius: 50%; width: 16px; height: 16px; padding: 0; font-size: 9px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; opacity: 0;
 }
+.dm-chip:hover .dm-x { opacity: 1; }
 .dm-x:hover { background: #ef4444; color: #fff; }
-.dm-add { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
 
-/* Day-menu combo — order-screen card + grouped lines */
-.daymenu-card { border: 1px solid var(--accent); }
+.dm-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-left: auto; }
+.dm-switch-form { margin: 0; }
+.dm-switch { width: 40px; height: 22px; border-radius: 999px; border: none; cursor: pointer; background: color-mix(in srgb, var(--muted) 40%, transparent); position: relative; padding: 0; }
+.dm-switch.on { background: var(--ok); }
+.dm-knob { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: left .15s; }
+.dm-switch.on .dm-knob { left: 20px; }
+.dm-active-lbl { font-size: 13px; color: var(--muted); min-width: 34px; }
+
+.dm-edit { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.dm-addrow { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.dm-addrow .field { margin: 0; }
+.dm-addrow label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+.dm-a-course { width: 140px; }
+.dm-a-item { flex: 1 1 240px; min-width: 200px; }
+
+.dm-tip { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); padding: 12px 16px; }
+
+/* Calendar view */
+.dmcal-grid { display: grid; grid-template-columns: repeat(7, minmax(0,1fr)); gap: 4px; }
+.dmcal-h { text-align: center; font-size: 11px; font-weight: 700; color: var(--muted); padding: 4px 0; }
+.dmcal-cell { min-height: 84px; border: 1px solid var(--line); border-radius: 8px; padding: 5px; display: flex; flex-direction: column; gap: 3px; }
+.dmcal-cell.out { border: none; }
+.dmcal-d { font-size: 12px; font-weight: 700; color: var(--muted); }
+.dmcal-chip { font-size: 11px; font-weight: 600; color: #fff; background: var(--bg); border-radius: 5px; padding: 2px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Day-menu combo — order-screen banner (with the à-la-carte menu) + grouped lines */
+.daymenu-card { border: 1px solid var(--accent); margin-bottom: 16px; }
+.daymenu-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .daymenu-price { font-weight: 800; font-size: 18px; color: var(--accent); }
-.daymenu-form { display: flex; flex-direction: column; gap: 8px; }
-.daymenu-form .dm-pick { margin: 0; }
+.daymenu-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.daymenu-form .dm-pick { margin: 0; flex: 1 1 150px; min-width: 140px; }
 .daymenu-form .dm-pick label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
-.daymenu-add { margin-top: 4px; }
+.daymenu-form .dm-pick select { width: 100%; }
+.daymenu-add { margin: 0; white-space: nowrap; }
 .ordline.combo-head { background: color-mix(in srgb, var(--accent) 9%, transparent); border-radius: 6px 6px 0 0; }
 .ordline.combo-part { padding-left: 14px; }
 .ordline.combo-part .ordline-total { font-size: 11px; }

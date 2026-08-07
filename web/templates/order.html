@@ -159,6 +159,34 @@
 </div>
 {% endif %}
 
+{# Today's fixed-price menu — sits with the à-la-carte menu, above the grid, so
+   its dishes can be picked and customised alongside the regular items. #}
+{% if active_day_menu and order.status not in ('paid','closed','cancelled') %}
+<div class="card daymenu-card">
+  <div class="daymenu-head">
+    <h2 style="margin:0">🍽 {{ active_day_menu.name }}</h2>
+    <span class="daymenu-price">${{ active_day_menu.price_cents|money }} fixed</span>
+    <span class="sub" style="margin:0">Today's menu — pick one per course</span>
+  </div>
+  <form method="post" action="/orders/{{ order.id }}/day-menu" class="daymenu-form">
+    {% for c in day_menu_courses %}
+    <div class="field dm-pick">
+      <label>{{ c.label }}</label>
+      <select name="item_ids">{% for ch in c.choices %}<option value="{{ ch.menu_item_id }}">{{ ch.menu_item.name }}</option>{% endfor %}</select>
+    </div>
+    {% endfor %}
+    <div class="field dm-pick">
+      <label>Seat</label>
+      <select name="seat_number">
+        <option value="0" {{ 'selected' if active_seat == 0 else '' }}>Table</option>
+        {% for s in order.seats %}<option value="{{ s.seat_number }}" {{ 'selected' if active_seat == s.seat_number else '' }}>Seat {{ s.seat_number }}</option>{% endfor %}
+      </select>
+    </div>
+    <button class="btn primary daymenu-add">Add · ${{ active_day_menu.price_cents|money }}</button>
+  </form>
+</div>
+{% endif %}
+
 <div class="pos-grid">
   {# Column 1 — categories rail #}
   <div class="card pos-cats">
@@ -288,33 +316,6 @@
 
   {# Column 4 — the order #}
   <div class="pos-order">
-    {% if active_day_menu and order.status not in ('paid','closed','cancelled') %}
-    <div class="card daymenu-card">
-      <div class="between" style="align-items:center;margin-bottom:6px">
-        <h2 style="margin:0">🍽 {{ active_day_menu.name }}</h2>
-        <span class="daymenu-price">${{ active_day_menu.price_cents|money }}</span>
-      </div>
-      <p class="sub" style="margin:0 0 10px">Today's fixed-price menu — pick one per course.</p>
-      <form method="post" action="/orders/{{ order.id }}/day-menu" class="daymenu-form">
-        {% for c in day_menu_courses %}
-        <div class="field dm-pick">
-          <label>{{ c.label }}</label>
-          <select name="item_ids">
-            {% for ch in c.choices %}<option value="{{ ch.menu_item_id }}">{{ ch.menu_item.name }}</option>{% endfor %}
-          </select>
-        </div>
-        {% endfor %}
-        <div class="field dm-pick">
-          <label>Seat</label>
-          <select name="seat_number">
-            <option value="0" {{ 'selected' if active_seat == 0 else '' }}>Table (unassigned)</option>
-            {% for s in order.seats %}<option value="{{ s.seat_number }}" {{ 'selected' if active_seat == s.seat_number else '' }}>Seat {{ s.seat_number }}</option>{% endfor %}
-          </select>
-        </div>
-        <button class="btn primary daymenu-add">Add day menu · ${{ active_day_menu.price_cents|money }}</button>
-      </form>
-    </div>
-    {% endif %}
     <div class="card">
       {# Coursing (4.1.3): fire one held stage at a time, shown by the heading
          only when more than one course is still un-fired. #}
