@@ -1024,7 +1024,7 @@ td.pending { color: var(--accent); font-weight: 700; }
 
 .sched-wrap {
   display: grid; gap: 16px; align-items: start;
-  grid-template-columns: 320px minmax(0, 1fr);
+  grid-template-columns: 240px minmax(0, 1fr);
   grid-template-areas: "team cal" "req cal" "labor cal" "cov cal";
 }
 .team-panel { grid-area: team; }
