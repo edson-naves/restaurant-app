@@ -1122,14 +1122,14 @@ td.pending { color: var(--accent); font-weight: 700; }
 
 /* Controls row */
 .dm-controls { margin: 20px 0 12px; }
-.dm-control-r { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.dm-viewtoggle { display: inline-flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 3px; gap: 2px; }
+.dm-control-r { display: flex; gap: 10px; align-items: center; }
+.dm-viewtoggle { display: inline-flex; background: var(--panel-2); border: 1px solid var(--line); border-radius: 9px; padding: 3px; gap: 2px; flex: 0 0 auto; }
 .dm-viewtoggle button {
   border: none; background: none; color: var(--muted); cursor: pointer; font: inherit;
-  padding: 5px 12px; border-radius: 7px; font-size: 13px; font-weight: 600;
+  padding: 5px 12px; border-radius: 7px; font-size: 13px; font-weight: 600; white-space: nowrap;
 }
 .dm-viewtoggle button.on { background: color-mix(in srgb, var(--accent) 22%, transparent); color: var(--ink); }
-.dm-sort { font-size: 13px; padding: 6px 10px; }
+.dm-sort { font-size: 13px; padding: 6px 10px; width: auto; flex: 0 0 auto; }
 
 /* Menu cards */
 .dm-card { padding: 16px 18px; margin-bottom: 12px; }
