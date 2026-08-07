@@ -66,6 +66,10 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("staff", "wage_cents", "INTEGER NOT NULL DEFAULT 0"),
     ("staff", "photo", "TEXT"),
     ("staff", "availability_note", "VARCHAR(60) NOT NULL DEFAULT ''"),
+    # Day-menu (prix fixe) grouping on an order line. NULL combo_id = an ordinary
+    # à-la-carte line, so existing rows keep behaving exactly as before.
+    ("order_item", "combo_id", "INTEGER"),
+    ("order_item", "combo_name", "VARCHAR(80) NOT NULL DEFAULT ''"),
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW

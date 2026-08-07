@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block body %}
+{% include "admin_nav.html" %}
+{% set wdays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'] %}
+
+<div class="between">
+  <div>
+    <h1>Day menus</h1>
+    <p class="sub">Fixed-price prix-fixe menus. Build each from any courses you like — a course with several items lets the guest choose one. The price the guest pays is what you set here, not the sum of the dishes.</p>
+  </div>
+</div>
+
+<div class="card">
+  <strong>Create a day menu</strong>
+  <form method="post" action="/admin/day-menus/create" style="margin-top:10px">
+    <div class="row" style="gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div class="field"><label>Name</label><input type="text" name="name" placeholder="e.g. Sunday Roast" required></div>
+      <div class="field" style="max-width:120px"><label>Price ($)</label><input type="number" name="price" step="0.01" min="0" placeholder="45.00" required></div>
+      <div class="field" style="max-width:180px"><label>When</label>
+        <select name="schedule_kind" onchange="dmToggle(this)">
+          <option value="date">A specific date</option>
+          <option value="weekday">Every week (weekday)</option>
+        </select>
+      </div>
+      <div class="field dm-date" style="max-width:170px"><label>Date</label><input type="date" name="menu_date" value="{{ today }}"></div>
+      <div class="field dm-weekday" style="max-width:150px;display:none"><label>Weekday</label>
+        <select name="weekday">{% for w in wdays %}<option value="{{ loop.index0 }}">{{ w }}</option>{% endfor %}</select>
+      </div>
+      <button class="btn good">Create</button>
+    </div>
+  </form>
+</div>
+
+{% for dm in menus %}
+<div class="card dm-card" style="{{ 'opacity:.6' if not dm.is_active else '' }}">
+  <form method="post" action="/admin/day-menus/{{ dm.id }}/edit">
+    <div class="row" style="gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div class="field"><label>Name</label><input type="text" name="name" value="{{ dm.name }}" required></div>
+      <div class="field" style="max-width:120px"><label>Price ($)</label><input type="number" name="price" step="0.01" min="0" value="{{ '%.2f'|format(dm.price_cents / 100) }}" required></div>
+      <div class="field" style="max-width:180px"><label>When</label>
+        <select name="schedule_kind" onchange="dmToggle(this)">
+          <option value="date" {{ 'selected' if dm.menu_date else '' }}>A specific date</option>
+          <option value="weekday" {{ 'selected' if dm.weekday is not none else '' }}>Every week (weekday)</option>
+        </select>
+      </div>
+      <div class="field dm-date" style="max-width:170px;{{ 'display:none' if dm.weekday is not none else '' }}"><label>Date</label><input type="date" name="menu_date" value="{{ dm.menu_date.isoformat() if dm.menu_date else today }}"></div>
+      <div class="field dm-weekday" style="max-width:150px;{{ '' if dm.weekday is not none else 'display:none' }}"><label>Weekday</label>
+        <select name="weekday">{% for w in wdays %}<option value="{{ loop.index0 }}" {{ 'selected' if dm.weekday == loop.index0 else '' }}>{{ w }}</option>{% endfor %}</select>
+      </div>
+      <label class="tick" style="margin:0"><input type="checkbox" name="active" value="1" {{ 'checked' if dm.is_active else '' }}> active</label>
+      <button class="btn sm">Save</button>
+    </div>
+  </form>
+
+  <p class="sub" style="margin:8px 0 4px">
+    {% if dm.menu_date %}On {{ dm.menu_date.strftime('%A, %b') }} {{ dm.menu_date.day }}{% elif dm.weekday is not none %}Every {{ wdays[dm.weekday] }}{% else %}Not scheduled{% endif %}
+    · <b>${{ dm.price_cents|money }}</b> fixed{% if not dm.is_active %} · inactive{% endif %}
+  </p>
+
+  <div class="dm-courses">
+    {% for slot, label in courses.items() %}
+    {% set slot_choices = dm.choices|selectattr('course','equalto',slot)|list %}
+    {% if slot_choices %}
+    <div class="dm-course">
+      <div class="dm-course-h">{{ label }}{% if slot_choices|length > 1 %} <span class="sub">· guest picks one</span>{% endif %}</div>
+      <div class="dm-choices">
+        {% for c in slot_choices %}
+        <span class="dm-choice">
+          {{ c.menu_item.name }} <span class="sub">${{ c.menu_item.price_cents|money }}</span>
+          <form method="post" action="/admin/day-menus/choices/{{ c.id }}/remove" style="display:inline;margin:0">
+            <button class="dm-x" title="Remove this option">✕</button>
+          </form>
+        </span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    {% endfor %}
+    {% if not dm.choices %}<p class="empty" style="margin:6px 0">No courses yet — add one below.</p>{% endif %}
+  </div>
+
+  <div class="between" style="align-items:flex-end;gap:12px;flex-wrap:wrap;margin-top:10px">
+    <form method="post" action="/admin/day-menus/{{ dm.id }}/choices/add" class="row" style="gap:8px;align-items:flex-end;flex-wrap:wrap;margin:0">
+      <div class="field" style="max-width:130px"><label>Course</label>
+        <select name="course">{% for slot, label in courses.items() %}<option value="{{ slot }}">{{ label }}</option>{% endfor %}</select>
+      </div>
+      <div class="field" style="min-width:220px"><label>Item</label>
+        <select name="menu_item_id">{% for it in items %}<option value="{{ it.id }}">{{ it.name }} — ${{ it.price_cents|money }}</option>{% endfor %}</select>
+      </div>
+      <button class="btn sm good">+ Add option</button>
+    </form>
+    <form method="post" action="/admin/day-menus/{{ dm.id }}/delete" onsubmit="return confirm('Delete this day menu?')" style="margin:0">
+      <button class="btn sm danger">Delete</button>
+    </form>
+  </div>
+</div>
+{% endfor %}
+{% if not menus %}<div class="card"><p class="empty">No day menus yet — create one above.</p></div>{% endif %}
+
+<script>
+function dmToggle(sel){
+  var form = sel.closest('form');
+  var d = form.querySelector('.dm-date'), w = form.querySelector('.dm-weekday');
+  if(!d || !w) return;
+  if(sel.value === 'weekday'){ d.style.display='none'; w.style.display=''; }
+  else { d.style.display=''; w.style.display='none'; }
+}
+</script>
+{% endblock %}

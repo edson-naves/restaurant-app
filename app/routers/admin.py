@@ -19,6 +19,7 @@ managers from settings explicitly).
 from __future__ import annotations
 
 import re
+from datetime import date, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -32,6 +33,9 @@ from app.security import hash_pin
 from app.services import settings as settings_svc
 from app.services.images import resize_to_data_uri, save_image
 from app.models.oltp import (
+    DAY_MENU_COURSES,
+    DayMenu,
+    DayMenuChoice,
     Floor,
     MenuCategory,
     MenuItem,
@@ -45,6 +49,7 @@ from app.models.oltp import (
     Staff,
     TableStatus,
     Zone,
+    day_menu_course_label,
 )
 
 router = APIRouter(prefix="/admin")
@@ -1583,3 +1588,145 @@ def edit_modifier(
     mod.category_id = category_id or None
     db.commit()
     return RedirectResponse("/admin/menu", status_code=303)
+
+
+# --------------------------------------------------------------------------
+# Day menus (prix fixe) — the manager composes a fixed-price combo (4.1)
+# --------------------------------------------------------------------------
+
+def _parse_schedule(kind: str, menu_date: str, weekday: str) -> tuple[date | None, int | None]:
+    """Resolve the date-or-weekday schedule from the form (exactly one is set)."""
+    if kind == "weekday":
+        try:
+            wd = int(weekday)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Choose a weekday.")
+        if not (0 <= wd <= 6):
+            raise HTTPException(400, "Weekday must be Monday–Sunday.")
+        return None, wd
+    try:
+        d = datetime.strptime(menu_date, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Enter a valid date (YYYY-MM-DD).")
+    return d, None
+
+
+@router.get("/day-menus")
+def day_menus_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    menus = db.execute(
+        select(DayMenu).order_by(DayMenu.is_active.desc(), DayMenu.name)
+    ).scalars().all()
+    items = db.execute(
+        select(MenuItem).where(MenuItem.is_active.is_(True)).order_by(MenuItem.name)
+    ).scalars().all()
+    return render(request, "admin_day_menus.html", {
+        "db": db, "staff": staff, "menus": menus, "items": items,
+        "courses": DAY_MENU_COURSES, "course_label": day_menu_course_label,
+        "today": datetime.now().date().isoformat(),
+        "title": "Day menus",
+    })
+
+
+@router.post("/day-menus/create")
+def create_day_menu(
+    name: str = Form(...),
+    price: str = Form(...),
+    schedule_kind: str = Form("date"),
+    menu_date: str = Form(""),
+    weekday: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "A day-menu name is required.")
+    d, wd = _parse_schedule(schedule_kind, menu_date, weekday)
+    db.add(DayMenu(
+        name=name, price_cents=_cents(price, "Price"),
+        menu_date=d, weekday=wd, is_active=True,
+    ))
+    db.commit()
+    return RedirectResponse("/admin/day-menus", status_code=303)
+
+
+@router.post("/day-menus/{menu_id}/edit")
+def edit_day_menu(
+    menu_id: int,
+    name: str = Form(...),
+    price: str = Form(...),
+    schedule_kind: str = Form("date"),
+    menu_date: str = Form(""),
+    weekday: str = Form(""),
+    active: int = Form(0),          # unchecked box sends nothing → deactivate
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    dm = db.get(DayMenu, menu_id)
+    if dm is None:
+        raise HTTPException(404, "Day menu not found.")
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "A day-menu name is required.")
+    d, wd = _parse_schedule(schedule_kind, menu_date, weekday)
+    dm.name = name
+    dm.price_cents = _cents(price, "Price")
+    dm.menu_date = d
+    dm.weekday = wd
+    dm.is_active = bool(active)
+    db.commit()
+    return RedirectResponse("/admin/day-menus", status_code=303)
+
+
+@router.post("/day-menus/{menu_id}/delete")
+def delete_day_menu(
+    menu_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    dm = db.get(DayMenu, menu_id)
+    if dm is not None:
+        db.delete(dm)          # cascades to its choices
+        db.commit()
+    return RedirectResponse("/admin/day-menus", status_code=303)
+
+
+@router.post("/day-menus/{menu_id}/choices/add")
+def add_day_menu_choice(
+    menu_id: int,
+    course: int = Form(...),
+    menu_item_id: int = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    dm = db.get(DayMenu, menu_id)
+    if dm is None:
+        raise HTTPException(404, "Day menu not found.")
+    if course not in DAY_MENU_COURSES:
+        raise HTTPException(400, "Unknown course.")
+    if db.get(MenuItem, menu_item_id) is None:
+        raise HTTPException(404, "Menu item not found.")
+    # Don't add the same item to the same course twice.
+    if not any(c.course == course and c.menu_item_id == menu_item_id for c in dm.choices):
+        n = sum(1 for c in dm.choices if c.course == course)
+        db.add(DayMenuChoice(
+            day_menu_id=dm.id, course=course, menu_item_id=menu_item_id, sort_order=n,
+        ))
+        db.commit()
+    return RedirectResponse("/admin/day-menus", status_code=303)
+
+
+@router.post("/day-menus/choices/{choice_id}/remove")
+def remove_day_menu_choice(
+    choice_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    c = db.get(DayMenuChoice, choice_id)
+    if c is not None:
+        db.delete(c)
+        db.commit()
+    return RedirectResponse("/admin/day-menus", status_code=303)

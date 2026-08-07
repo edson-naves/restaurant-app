@@ -90,6 +90,16 @@ def course_label(n: int) -> str:
     return COURSE_LABELS.get(n, f"Course {n}")
 
 
+# Day-menu (prix fixe) course slots. The manager composes a day menu from ANY
+# subset of these — a menu can be Starter+Main, Starter+Drink, or all five — and
+# each slot they include offers one or more items the guest chooses between.
+DAY_MENU_COURSES = {1: "Starter", 2: "Main", 3: "Dessert", 4: "Drink", 5: "Side"}
+
+
+def day_menu_course_label(n: int) -> str:
+    return DAY_MENU_COURSES.get(n, f"Course {n}")
+
+
 # 4.1.2 — common allergens a waiter flags on a line. "Other" pairs with a free
 # text box for anything not listed.
 ALLERGEN_OPTIONS = ("Lactose", "Gluten", "Seafood", "Nuts")
@@ -442,6 +452,58 @@ class ModifierOption(Base):
     group: Mapped["ModifierGroup"] = relationship(back_populates="options")
 
 
+class DayMenu(Base):
+    """A fixed-price prix fixe ("day menu"). The manager composes it from any
+    set of course slots (see DAY_MENU_COURSES) — nothing is mandatory — and each
+    included slot offers one or more items the guest chooses between.
+
+    Scheduling is open: a menu is tied to EITHER a specific calendar date OR a
+    recurring weekday (0=Mon..6=Sun). When both a dated and a weekday menu match
+    a day, the specific date wins (see services/daymenu.resolve_for).
+    """
+    __tablename__ = "day_menu"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    menu_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    weekday: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    choices: Mapped[list["DayMenuChoice"]] = relationship(
+        back_populates="day_menu", cascade="all, delete-orphan",
+        order_by="DayMenuChoice.course, DayMenuChoice.sort_order, DayMenuChoice.id",
+        lazy="selectin",
+    )
+
+    @property
+    def courses(self) -> list[int]:
+        """The distinct course slots this menu actually uses, in order."""
+        seen: list[int] = []
+        for c in self.choices:
+            if c.course not in seen:
+                seen.append(c.course)
+        return sorted(seen)
+
+
+class DayMenuChoice(Base):
+    """One selectable item within a day menu's course slot. Several rows for the
+    same (day_menu, course) means the guest picks one; a single row is fixed."""
+    __tablename__ = "day_menu_choice"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    day_menu_id: Mapped[int] = mapped_column(
+        ForeignKey("day_menu.id", ondelete="CASCADE"), nullable=False
+    )
+    course: Mapped[int] = mapped_column(Integer, nullable=False)   # DAY_MENU_COURSES slot
+    menu_item_id: Mapped[int] = mapped_column(ForeignKey("menu_item.id"), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    day_menu: Mapped["DayMenu"] = relationship(back_populates="choices")
+    menu_item: Mapped["MenuItem"] = relationship(lazy="joined")
+
+
 class PaymentInstrument(Base):
     """Section 4.2.1 — the accepted payment instruments."""
     __tablename__ = "payment_instrument"
@@ -541,6 +603,12 @@ class OrderItem(Base):
     course: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
     # Section 4.2.4 — shared items split proportionally across selected seats.
     is_shared: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Day-menu (prix fixe) grouping. All the component lines of one ordered combo
+    # share a combo_id; the first (header) line carries combo_name and the whole
+    # fixed price is spread across the group's unit prices, so it bills as one
+    # entry. NULL for an ordinary à-la-carte line.
+    combo_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    combo_name: Mapped[str] = mapped_column(String(80), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     # Provenance: set when this line arrives via a table merge (4.1.1), pointing
     # at the (now-dissolved) order it came from. Drives the "from Table N" badge
