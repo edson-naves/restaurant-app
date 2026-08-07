@@ -3,107 +3,107 @@
 {% include "admin_nav.html" %}
 {% set wdays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'] %}
 
-<div class="between">
+<div class="between" style="margin-bottom:10px">
   <div>
-    <h1>Day menus</h1>
-    <p class="sub">Fixed-price prix-fixe menus. Build each from any courses you like — a course with several items lets the guest choose one. The price the guest pays is what you set here, not the sum of the dishes.</p>
+    <h1 style="margin:0">Day menus</h1>
+    <p class="sub" style="margin:2px 0 0;max-width:660px">Fixed-price prix-fixe menus. Build each from any courses — several items in a course lets the guest pick one. The price is what the guest pays, not the sum of the dishes.</p>
   </div>
 </div>
 
-<div class="card">
-  <strong>Create a day menu</strong>
-  <form method="post" action="/admin/day-menus/create" style="margin-top:10px">
-    <div class="row" style="gap:10px;align-items:flex-end;flex-wrap:wrap">
-      <div class="field"><label>Name</label><input type="text" name="name" placeholder="e.g. Sunday Roast" required></div>
-      <div class="field" style="max-width:120px"><label>Price ($)</label><input type="number" name="price" step="0.01" min="0" placeholder="45.00" required></div>
-      <div class="field" style="max-width:180px"><label>When</label>
-        <select name="schedule_kind" onchange="dmToggle(this)">
-          <option value="date">A specific date</option>
-          <option value="weekday">Every week (weekday)</option>
-        </select>
-      </div>
-      <div class="field dm-date" style="max-width:170px"><label>Date</label><input type="date" name="menu_date" value="{{ today }}"></div>
-      <div class="field dm-weekday" style="max-width:150px;display:none"><label>Weekday</label>
-        <select name="weekday">{% for w in wdays %}<option value="{{ loop.index0 }}">{{ w }}</option>{% endfor %}</select>
-      </div>
-      <button class="btn good">Create</button>
+<div class="card dm-card">
+  <form method="post" action="/admin/day-menus/create" class="dm-row">
+    <div class="field dm-f-name"><label>Name</label><input type="text" name="name" placeholder="e.g. Sunday Roast" required></div>
+    <div class="field dm-f-price"><label>Price $</label><input type="number" name="price" step="0.01" min="0" placeholder="45.00" required></div>
+    <div class="field dm-f-when"><label>When</label>
+      <select name="schedule_kind" onchange="dmToggle(this)">
+        <option value="date">Specific date</option>
+        <option value="weekday">Every weekday</option>
+      </select>
     </div>
+    <div class="field dm-f-date dm-date"><label>Date</label><input type="date" name="menu_date" value="{{ today }}"></div>
+    <div class="field dm-f-date dm-weekday" style="display:none"><label>Weekday</label>
+      <select name="weekday">{% for w in wdays %}<option value="{{ loop.index0 }}">{{ w }}</option>{% endfor %}</select>
+    </div>
+    <button class="btn good sm">Create menu</button>
   </form>
 </div>
 
 {% for dm in menus %}
-<div class="card dm-card" style="{{ 'opacity:.6' if not dm.is_active else '' }}">
-  <form method="post" action="/admin/day-menus/{{ dm.id }}/edit">
-    <div class="row" style="gap:10px;align-items:flex-end;flex-wrap:wrap">
-      <div class="field"><label>Name</label><input type="text" name="name" value="{{ dm.name }}" required></div>
-      <div class="field" style="max-width:120px"><label>Price ($)</label><input type="number" name="price" step="0.01" min="0" value="{{ '%.2f'|format(dm.price_cents / 100) }}" required></div>
-      <div class="field" style="max-width:180px"><label>When</label>
+<div class="card dm-card {{ 'dm-off' if not dm.is_active else '' }}">
+  <div class="dm-head">
+    <form method="post" action="/admin/day-menus/{{ dm.id }}/edit" class="dm-row">
+      <div class="field dm-f-name"><label>Name</label><input type="text" name="name" value="{{ dm.name }}" required></div>
+      <div class="field dm-f-price"><label>Price $</label><input type="number" name="price" step="0.01" min="0" value="{{ '%.2f'|format(dm.price_cents / 100) }}" required></div>
+      <div class="field dm-f-when"><label>When</label>
         <select name="schedule_kind" onchange="dmToggle(this)">
-          <option value="date" {{ 'selected' if dm.menu_date else '' }}>A specific date</option>
-          <option value="weekday" {{ 'selected' if dm.weekday is not none else '' }}>Every week (weekday)</option>
+          <option value="date" {{ 'selected' if dm.menu_date else '' }}>Specific date</option>
+          <option value="weekday" {{ 'selected' if dm.weekday is not none else '' }}>Every weekday</option>
         </select>
       </div>
-      <div class="field dm-date" style="max-width:170px;{{ 'display:none' if dm.weekday is not none else '' }}"><label>Date</label><input type="date" name="menu_date" value="{{ dm.menu_date.isoformat() if dm.menu_date else today }}"></div>
-      <div class="field dm-weekday" style="max-width:150px;{{ '' if dm.weekday is not none else 'display:none' }}"><label>Weekday</label>
+      <div class="field dm-f-date dm-date" style="{{ 'display:none' if dm.weekday is not none else '' }}"><label>Date</label><input type="date" name="menu_date" value="{{ dm.menu_date.isoformat() if dm.menu_date else today }}"></div>
+      <div class="field dm-f-date dm-weekday" style="{{ '' if dm.weekday is not none else 'display:none' }}"><label>Weekday</label>
         <select name="weekday">{% for w in wdays %}<option value="{{ loop.index0 }}" {{ 'selected' if dm.weekday == loop.index0 else '' }}>{{ w }}</option>{% endfor %}</select>
       </div>
-      <label class="tick" style="margin:0"><input type="checkbox" name="active" value="1" {{ 'checked' if dm.is_active else '' }}> active</label>
+      <label class="dm-active"><input type="checkbox" name="active" value="1" {{ 'checked' if dm.is_active else '' }}> active</label>
       <button class="btn sm">Save</button>
-    </div>
-  </form>
+    </form>
+    <form method="post" action="/admin/day-menus/{{ dm.id }}/delete" onsubmit="return confirm('Delete this day menu?')" class="dm-del"><button class="btn sm danger">Delete</button></form>
+  </div>
 
-  <p class="sub" style="margin:8px 0 4px">
-    {% if dm.menu_date %}On {{ dm.menu_date.strftime('%A, %b') }} {{ dm.menu_date.day }}{% elif dm.weekday is not none %}Every {{ wdays[dm.weekday] }}{% else %}Not scheduled{% endif %}
-    · <b>${{ dm.price_cents|money }}</b> fixed{% if not dm.is_active %} · inactive{% endif %}
-  </p>
+  <div class="dm-sched sub">{% if dm.menu_date %}On {{ dm.menu_date.strftime('%a, %b') }} {{ dm.menu_date.day }}{% elif dm.weekday is not none %}Every {{ wdays[dm.weekday] }}{% else %}Not scheduled{% endif %} · <b>${{ dm.price_cents|money }}</b> fixed{% if not dm.is_active %} · inactive{% endif %}</div>
 
   <div class="dm-courses">
     {% for slot, label in courses.items() %}
     {% set slot_choices = dm.choices|selectattr('course','equalto',slot)|list %}
     {% if slot_choices %}
     <div class="dm-course">
-      <div class="dm-course-h">{{ label }}{% if slot_choices|length > 1 %} <span class="sub">· guest picks one</span>{% endif %}</div>
-      <div class="dm-choices">
-        {% for c in slot_choices %}
-        <span class="dm-choice">
-          {{ c.menu_item.name }} <span class="sub">${{ c.menu_item.price_cents|money }}</span>
-          <form method="post" action="/admin/day-menus/choices/{{ c.id }}/remove" style="display:inline;margin:0">
-            <button class="dm-x" title="Remove this option">✕</button>
-          </form>
-        </span>
-        {% endfor %}
-      </div>
+      <span class="dm-course-h">{{ label }}{% if slot_choices|length > 1 %} · pick one{% endif %}</span>
+      {% for c in slot_choices %}
+      <span class="dm-choice">{{ c.menu_item.name }}<form method="post" action="/admin/day-menus/choices/{{ c.id }}/remove" style="display:inline;margin:0"><button class="dm-x" title="Remove">✕</button></form></span>
+      {% endfor %}
     </div>
     {% endif %}
     {% endfor %}
-    {% if not dm.choices %}<p class="empty" style="margin:6px 0">No courses yet — add one below.</p>{% endif %}
+    {% if not dm.choices %}<span class="empty">No courses yet — add one below.</span>{% endif %}
   </div>
 
-  <div class="between" style="align-items:flex-end;gap:12px;flex-wrap:wrap;margin-top:10px">
-    <form method="post" action="/admin/day-menus/{{ dm.id }}/choices/add" class="row" style="gap:8px;align-items:flex-end;flex-wrap:wrap;margin:0">
-      <div class="field" style="max-width:130px"><label>Course</label>
-        <select name="course">{% for slot, label in courses.items() %}<option value="{{ slot }}">{{ label }}</option>{% endfor %}</select>
-      </div>
-      <div class="field" style="min-width:220px"><label>Item</label>
-        <select name="menu_item_id">{% for it in items %}<option value="{{ it.id }}">{{ it.name }} — ${{ it.price_cents|money }}</option>{% endfor %}</select>
-      </div>
-      <button class="btn sm good">+ Add option</button>
-    </form>
-    <form method="post" action="/admin/day-menus/{{ dm.id }}/delete" onsubmit="return confirm('Delete this day menu?')" style="margin:0">
-      <button class="btn sm danger">Delete</button>
-    </form>
-  </div>
+  <form method="post" action="/admin/day-menus/{{ dm.id }}/choices/add" class="dm-row dm-add">
+    <div class="field dm-f-course"><label>Course</label>
+      <select name="course" onchange="dmFillItems(this)">{% for slot, label in courses.items() %}<option value="{{ slot }}">{{ label }}</option>{% endfor %}</select>
+    </div>
+    <div class="field dm-f-item"><label>Item</label><select name="menu_item_id"></select></div>
+    <button class="btn sm good">+ Add option</button>
+  </form>
 </div>
 {% endfor %}
 {% if not menus %}<div class="card"><p class="empty">No day menus yet — create one above.</p></div>{% endif %}
 
 <script>
-function dmToggle(sel){
-  var form = sel.closest('form');
-  var d = form.querySelector('.dm-date'), w = form.querySelector('.dm-weekday');
-  if(!d || !w) return;
-  if(sel.value === 'weekday'){ d.style.display='none'; w.style.display=''; }
-  else { d.style.display=''; w.style.display='none'; }
+const DM_ITEMS = {{ items_by_course|tojson }};
+function dmFillItems(sel){
+  const form = sel.closest('form');
+  const itemSel = form.querySelector('select[name="menu_item_id"]');
+  const list = DM_ITEMS[sel.value] || [];
+  itemSel.innerHTML = '';
+  if(!list.length){
+    const o = document.createElement('option');
+    o.value = ''; o.textContent = '(no items in this course)';
+    itemSel.appendChild(o); return;
+  }
+  for(const it of list){
+    const o = document.createElement('option');
+    o.value = it[0]; o.textContent = it[1];
+    itemSel.appendChild(o);
+  }
 }
+function dmToggle(sel){
+  const form = sel.closest('form');
+  const d = form.querySelector('.dm-date'), w = form.querySelector('.dm-weekday');
+  if(!d || !w) return;
+  const wd = sel.value === 'weekday';
+  d.style.display = wd ? 'none' : '';
+  w.style.display = wd ? '' : 'none';
+}
+document.querySelectorAll('.dm-add select[name="course"]').forEach(dmFillItems);
 </script>
 {% endblock %}

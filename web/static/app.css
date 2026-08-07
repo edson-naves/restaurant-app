@@ -1101,21 +1101,40 @@ td.pending { color: var(--accent); font-weight: 700; }
 .mchip-time { color: var(--muted); margin-left: auto; font-size: 9px; }
 .mchip-more { font-size: 10px; color: var(--muted); padding: 1px 4px; }
 
-/* Day-menu (prix fixe) builder */
-.dm-courses { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-.dm-course-h { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 3px; }
-.dm-choices { display: flex; flex-wrap: wrap; gap: 6px; }
+/* Day-menu (prix fixe) builder — compact, no wasted width */
+.dm-card { padding: 12px 14px; margin-bottom: 12px; }
+.dm-off { opacity: .6; }
+.dm-row { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: flex-end; }
+.dm-row .field { margin: 0; }
+.dm-row label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+.dm-row input, .dm-row select { min-height: 30px; padding: 4px 8px; font-size: 13px; }
+.dm-f-name  { flex: 1 1 200px; min-width: 150px; }
+.dm-f-price { width: 88px; }
+.dm-f-when  { width: 148px; }
+.dm-f-date  { width: 150px; }
+.dm-f-course { width: 120px; }
+.dm-f-item  { flex: 1 1 240px; min-width: 180px; }
+.dm-active { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; white-space: nowrap; padding-bottom: 5px; }
+.dm-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.dm-head .dm-row { flex: 1; }
+.dm-del { margin: 0; }
+.dm-sched { margin: 9px 0 7px; font-size: 12px; }
+.dm-courses { display: flex; flex-wrap: wrap; gap: 7px 16px; margin-bottom: 4px; }
+.dm-course { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.dm-course-h { font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
 .dm-choice {
-  display: inline-flex; align-items: center; gap: 6px; font-size: 13px;
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  border: 1px solid var(--line); border-radius: 999px; padding: 3px 6px 3px 10px;
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: 1px solid var(--line); border-radius: 999px; padding: 2px 4px 2px 10px;
 }
 .dm-x {
   border: none; background: color-mix(in srgb, var(--muted) 25%, transparent);
-  color: var(--fg); border-radius: 50%; width: 18px; height: 18px; line-height: 1;
-  font-size: 10px; cursor: pointer; padding: 0;
+  color: var(--fg); border-radius: 50%; width: 16px; height: 16px; padding: 0;
+  font-size: 9px; line-height: 1; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
 }
 .dm-x:hover { background: #ef4444; color: #fff; }
+.dm-add { margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
 .cal-add { margin-bottom: 10px; }
 .cal-scroll { overflow-x: auto; }
 .cal-head, .cal-body {

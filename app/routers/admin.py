@@ -36,6 +36,7 @@ from app.models.oltp import (
     DAY_MENU_COURSES,
     DayMenu,
     DayMenuChoice,
+    day_menu_course_for_category,
     Floor,
     MenuCategory,
     MenuItem,
@@ -1623,8 +1624,15 @@ def day_menus_page(
     items = db.execute(
         select(MenuItem).where(MenuItem.is_active.is_(True)).order_by(MenuItem.name)
     ).scalars().all()
+    # Group items by their day-menu slot so the builder only offers, say, drinks
+    # under Drink. Passed to the page as JSON for the course→item picker.
+    items_by_course: dict[int, list] = {slot: [] for slot in DAY_MENU_COURSES}
+    for it in items:
+        slot = day_menu_course_for_category(it.category.name if it.category else "")
+        items_by_course[slot].append([it.id, f"{it.name} — ${it.price_cents / 100:,.2f}"])
     return render(request, "admin_day_menus.html", {
-        "db": db, "staff": staff, "menus": menus, "items": items,
+        "db": db, "staff": staff, "menus": menus,
+        "items_by_course": items_by_course,
         "courses": DAY_MENU_COURSES, "course_label": day_menu_course_label,
         "today": datetime.now().date().isoformat(),
         "title": "Day menus",

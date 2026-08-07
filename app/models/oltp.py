@@ -151,6 +151,34 @@ def course_for_category(category_name: str) -> int:
     return 2
 
 
+def day_menu_course_for_category(category_name: str) -> int:
+    """Which day-menu slot (DAY_MENU_COURSES) an item's category belongs to.
+
+    Finer than course_for_category: drinks and sides get their own slots here so
+    the builder only offers drinks under Drink, sides under Side, and so on.
+
+    Short keywords like "tea" are matched as whole words, not substrings, so
+    "Steaks & Grill" is a Main and not mistaken for a drink ("s-tea-ks").
+    """
+    n = (category_name or "").strip().lower()
+    words = set(n.replace("&", " ").replace("/", " ").replace("-", " ").split())
+
+    def has(*keys: str) -> bool:                 # whole-word, plural-tolerant
+        return any(k in words or (k + "s") in words for k in keys)
+
+    if "start" in n or "appet" in n or has("salad", "soup"):
+        return 1
+    if "dessert" in n or "sweet" in n:
+        return 3
+    if ("drink" in n or "bever" in n or "cocktail" in n or "coffee" in n
+            or has("beer", "wine", "tea", "juice", "soda", "spirit", "ale",
+                   "lager", "liquor", "cider")):
+        return 4
+    if has("side"):
+        return 5
+    return 2
+
+
 class DeliveryStatus:
     """Section 4.1.4 — Pending -> Preparing -> Ready -> On the way -> Delivered."""
     PENDING = "pending"
