@@ -53,29 +53,28 @@
 {% for dm in menus %}
 {% set color = daycolors[dm.weekday] if dm.weekday is not none else '#7c3aed' %}
 <div class="card dm-card {{ 'dm-off' if not dm.is_active else '' }}" data-name="{{ dm.name|lower }}" data-price="{{ dm.price_cents }}">
-  <div class="dm-main">
-    <div class="dm-when-cell">
-      <span class="dm-icon" style="--bg:{{ color }}">📅</span>
-      <div class="dm-when-txt">
-        {% if dm.menu_date %}<b>{{ dm.menu_date.strftime('%b')|upper }}<br>{{ dm.menu_date.day }}</b><span class="sub">Specific date</span>
-        {% elif dm.weekday is not none %}<b>{{ wdays[dm.weekday][:3]|upper }}</b><span class="sub">Every {{ wdays[dm.weekday] }}</span>
-        {% else %}<b>—</b><span class="sub">Not scheduled</span>{% endif %}
-      </div>
-    </div>
-
-    <div class="dm-body">
-      <b class="dm-name">{{ dm.name }}</b>
-      <div class="dm-row2">
+  <div class="dm-badge" style="--bg:{{ color }}">
+    <span class="dm-badge-top">{% if dm.menu_date %}{{ dm.menu_date.strftime('%b')|upper }} {{ dm.menu_date.day }}{% elif dm.weekday is not none %}{{ wdays[dm.weekday][:3]|upper }}{% else %}—{% endif %}</span>
+    <span class="dm-badge-ico">📅</span>
+    <span class="dm-badge-sub">{% if dm.menu_date %}Specific date{% elif dm.weekday is not none %}Every {{ wdays[dm.weekday] }}{% else %}Not scheduled{% endif %}</span>
+  </div>
+  <div class="dm-content">
+    <div class="dm-main">
+      <div class="dm-title-col">
+        <b class="dm-name">{{ dm.name }}</b>
         <div class="dm-price-line"><span class="dm-price-pill" style="--bg:{{ color }}">${{ dm.price_cents|money }}</span> <span class="sub">Fixed price</span></div>
-        <div class="dm-includes">
-      {% if dm.choices %}<span class="dm-inc-label">INCLUDES</span>{% endif %}
+      </div>
+
+      <div class="dm-includes">
+        {% if dm.choices %}<span class="dm-inc-label">INCLUDES</span>{% endif %}
+        <div class="dm-inc-row">
       {% for slot, label in courses.items() %}
       {% set sc = dm.choices|selectattr('course','equalto',slot)|list %}
       {% if sc %}
       <div class="dm-inc-col">
         <span class="dm-inc-h">{{ label }}{% if sc|length > 1 %} <span class="sub">(pick one)</span>{% endif %}</span>
         {% for c in sc %}
-        <span class="dm-chip">{{ c.menu_item.name }}<form method="post" action="/admin/day-menus/choices/{{ c.id }}/remove" style="display:inline;margin:0"><button class="dm-x" title="Remove">✕</button></form></span>
+            <span class="dm-chip"><span class="dm-chip-ico">{{ c.menu_item.thumb_emoji }}</span>{{ c.menu_item.name }}<form method="post" action="/admin/day-menus/choices/{{ c.id }}/remove" style="display:inline;margin:0"><button class="dm-x" title="Remove">✕</button></form></span>
         {% endfor %}
       </div>
       {% endif %}
@@ -83,9 +82,8 @@
       {% if not dm.choices %}<span class="sub">No courses yet — add one below.</span>{% endif %}
         </div>
       </div>
-    </div>
 
-    <div class="dm-actions">
+      <div class="dm-actions">
       <form method="post" action="/admin/day-menus/{{ dm.id }}/active" class="dm-switch-form">
         <input type="hidden" name="active" value="{{ 0 if dm.is_active else 1 }}">
         <button type="submit" class="dm-switch {{ 'on' if dm.is_active else '' }}" title="{{ 'Turn off' if dm.is_active else 'Turn on' }}"><span class="dm-knob"></span></button>
@@ -117,12 +115,14 @@
 
   {# add a course option #}
   <form method="post" action="/admin/day-menus/{{ dm.id }}/choices/add" class="dm-addrow">
+    <span class="dm-addrow-ico">🍽</span>
     <div class="field dm-a-course"><label>Course</label>
       <select name="course" onchange="dmFillItems(this)">{% for slot, label in courses.items() %}<option value="{{ slot }}">{{ label }}</option>{% endfor %}</select>
     </div>
     <div class="field dm-a-item"><label>Item</label><select name="menu_item_id"></select></div>
     <button class="btn sm">+ Add option</button>
   </form>
+  </div>
 </div>
 {% endfor %}
 {% if not menus %}<div class="card"><p class="empty">No day menus yet — create one above.</p></div>{% endif %}
