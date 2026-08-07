@@ -1148,7 +1148,7 @@ td.pending { color: var(--accent); font-weight: 700; }
   padding: 14px 8px; gap: 8px;
 }
 .dm-badge-top { font-size: 18px; font-weight: 800; line-height: 1.05; }
-.dm-badge-ico { font-size: 22px; }
+.dm-badge-ico { font-size: 44px; line-height: 1; }
 .dm-badge-sub { font-size: 11px; line-height: 1.2; opacity: .95; }
 .dm-content { flex: 1 1 auto; min-width: 0; padding: 15px 18px; }
 
