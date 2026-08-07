@@ -166,22 +166,17 @@
   <div class="daymenu-head">
     <h2 style="margin:0">🍽 {{ active_day_menu.name }}</h2>
     <span class="daymenu-price">${{ active_day_menu.price_cents|money }} fixed</span>
-    <span class="sub" style="margin:0">Today's menu — pick one per course</span>
+    <span class="sub" style="margin:0">pick one per course · adds to {{ 'the table' if active_seat == 0 else 'seat ' ~ active_seat }}</span>
   </div>
   <form method="post" action="/orders/{{ order.id }}/day-menu" class="daymenu-form">
+    {# The seat comes from the seats bar above (active seat), like adding any item. #}
+    <input type="hidden" name="seat_number" value="{{ active_seat }}">
     {% for c in day_menu_courses %}
     <div class="field dm-pick">
       <label>{{ c.label }}</label>
       <select name="item_ids">{% for ch in c.choices %}<option value="{{ ch.menu_item_id }}">{{ ch.menu_item.name }}</option>{% endfor %}</select>
     </div>
     {% endfor %}
-    <div class="field dm-pick">
-      <label>Seat</label>
-      <select name="seat_number">
-        <option value="0" {{ 'selected' if active_seat == 0 else '' }}>Table</option>
-        {% for s in order.seats %}<option value="{{ s.seat_number }}" {{ 'selected' if active_seat == s.seat_number else '' }}>Seat {{ s.seat_number }}</option>{% endfor %}
-      </select>
-    </div>
     <button class="btn primary daymenu-add">Add · ${{ active_day_menu.price_cents|money }}</button>
   </form>
 </div>
@@ -385,6 +380,31 @@
             </div>
             <div class="ordline-total sub">incl.</div>
             <div class="ordline-actions">
+              {# A combo dish keeps its fixed price, but you can still flag allergies
+                 and add a note (e.g. cooking temp) — no price change. #}
+              {% if can('orders.manage') and not ci.allocations and order.status not in ('paid','closed','cancelled') %}
+              <details class="edit-menu" style="display:inline-block">
+                <summary class="btn sm" title="Allergies &amp; notes">✎</summary>
+                <form method="post" action="/orders/{{ order.id }}/items/{{ ci.id }}/edit" class="edit-pop">
+                  <input type="hidden" name="quantity" value="{{ ci.quantity }}">
+                  <input type="hidden" name="course" value="{{ ci.course }}">
+                  <div class="field" style="margin-bottom:8px">
+                    <label>Allergies</label>
+                    <div class="tipset">
+                      {% for a in ALLERGEN_OPTIONS %}
+                      <label class="allergen"><input type="checkbox" name="allergens" value="{{ a }}" {{ 'checked' if a in ci.allergens else '' }}> {{ a }}</label>
+                      {% endfor %}
+                      <input type="text" name="allergen_other" placeholder="Other (specify)" value="{{ ci.allergens.split('Other: ')[1] if 'Other: ' in ci.allergens else '' }}" style="width:150px;min-height:30px;padding:4px 8px">
+                    </div>
+                  </div>
+                  <div class="field" style="margin-bottom:8px">
+                    <label>Notes <span class="sub" style="font-weight:400">— e.g. cooking temp</span></label>
+                    <input type="text" name="notes" value="{{ ci.notes }}">
+                  </div>
+                  <button class="btn sm primary">Save</button>
+                </form>
+              </details>
+              {% endif %}
               {% if can('orders.manage') and ci.kitchen_status == 'pending' and order.status not in ('paid','closed','cancelled') %}
               <form method="post" action="/orders/{{ order.id }}/items/{{ ci.id }}/fire" style="display:inline"><button class="btn sm primary" title="Fire just this item to the kitchen now">Fire</button></form>
               {% endif %}
