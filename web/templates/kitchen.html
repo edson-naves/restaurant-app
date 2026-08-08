@@ -15,7 +15,9 @@
 {# Status filter — the channel view is kept, so All/Dine-in/Delivery and the
    status choice combine. Server-side, not JS, so it survives the 15s reload. #}
 <div class="catbar" style="margin:0 0 18px">
-  <a class="btn sm {{ 'primary' if kstatus == 'all' else '' }}"
+  {# Not a filter but the absence of one, so it never shows as "selected" — only
+     Preparing / Ready light up when actually chosen. #}
+  <a class="btn sm"
      href="/kitchen?view={{ view }}&kstatus=all&mine={{ mine }}">All statuses</a>
   <a class="btn sm {{ 'primary' if kstatus == 'preparing' else '' }}"
      href="/kitchen?view={{ view }}&kstatus=preparing&mine={{ mine }}">Preparing {{ status_counts.preparing }}</a>
