@@ -108,6 +108,13 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
                 "total_cents": total,
                 "guests": order.guest_count if order else 0,
                 "waiter": t.current_waiter.name if t.current_waiter else None,
+                # Food that's up but not yet served — the waiter's cue to run it.
+                # Counts even while the rest of the order is still Preparing, so
+                # partial readiness isn't hidden behind the order's aggregate.
+                "ready_count": sum(
+                    i.quantity for i in order.items
+                    if i.kitchen_status == KitchenStatus.READY
+                ) if order else 0,
                 "minutes": (
                     int((datetime.now() - order.opened_at).total_seconds() // 60)
                     if order else 0

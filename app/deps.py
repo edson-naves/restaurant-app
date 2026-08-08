@@ -22,6 +22,7 @@ from app.security import verify_session
 from app.models.oltp import (
     ALLERGEN_OPTIONS, COURSE_LABELS, category_emoji, course_label,
     order_status_label, seat_color,
+    KitchenStatus, Order, OrderItem, OrderStatus,
     Payment, Reservation, ReservationStatus, RestaurantTable, TableStatus,
 )
 from app.services.money import duration, money
@@ -144,9 +145,13 @@ def require(permission: str):
     return _guard
 
 
-def sidebar_overview(db: Session) -> dict:
+def sidebar_overview(db: Session, staff: Staff | None = None) -> dict:
     """Whole-restaurant "today" numbers for the sidebar panel: waiting bookings
-    for today, tables in use, free tables, and today's takings."""
+    for today, tables in use, free tables, and today's takings.
+
+    "Ready to serve" (food up, waiting to be run) is scoped to the viewer's own
+    tables when they're actually serving some, so a waiter sees their run count;
+    owners/managers, who cover none, see the house-wide number."""
     day_start = datetime.combine(date.today(), datetime.min.time())
     day_end = day_start + timedelta(days=1)
 
@@ -156,7 +161,29 @@ def sidebar_overview(db: Session) -> dict:
         ).scalar_one()
 
     active = RestaurantTable.is_active.is_(True)
+
+    LIVE = (OrderStatus.OPEN, OrderStatus.PREPARING, OrderStatus.READY,
+            OrderStatus.SERVED, OrderStatus.PARTIALLY_PAID)
+    ready_where = [
+        Order.status.in_(LIVE),
+        Order.table_id.is_not(None),
+        OrderItem.kitchen_status == KitchenStatus.READY,
+    ]
+    covers = staff is not None and db.execute(
+        select(Order.id).where(
+            Order.waiter_id == staff.id, Order.status.in_(LIVE)
+        ).limit(1)
+    ).first() is not None
+    if covers:
+        ready_where.append(Order.waiter_id == staff.id)
+    ready_to_serve = db.execute(
+        select(func.count(func.distinct(Order.id)))
+        .select_from(Order).join(OrderItem, OrderItem.order_id == Order.id)
+        .where(*ready_where)
+    ).scalar_one()
+
     return {
+        "ready_to_serve": ready_to_serve,
         "reservations": db.execute(
             select(func.count()).select_from(Reservation).where(
                 Reservation.kind == "reservation",
@@ -207,7 +234,7 @@ def render(request: Request, template: str, ctx: dict):
         # Sidebar "Today's Overview" — computed once per page for the signed-in
         # shell. Cheap COUNT/SUM queries; skipped when there's no session.
         if staff is not None:
-            base["sidebar_ov"] = sidebar_overview(db)
+            base["sidebar_ov"] = sidebar_overview(db, staff)
             # Schedule nav badge: pending time-off + swap requests (managers only).
             if can(staff, "schedule.manage"):
                 from app.services import schedule as _sched

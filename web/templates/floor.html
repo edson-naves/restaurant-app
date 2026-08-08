@@ -78,23 +78,32 @@
          (sec.floor.name if sec.floor else '') ~ ' ' ~
          (c.waiter or 'unassigned') ~ ' ' ~
          c.table.status.replace('_', ' ') ~ ' ' ~
+         (' ready to serve' if c.ready_count else '') ~ ' ' ~
          (c.order.code if c.order else '')
        )|lower %}
     {% if c.order %}
       <a class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
          data-status="{{ c.table.status }}" data-floor="{{ sec_floor_id }}"
          data-mine="{{ '1' if c.table.current_waiter_id == staff.id else '' }}"
+         data-ready="{{ '1' if c.ready_count else '' }}"
          data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
          {% if c.table.zone_ref %}style="border-left-color: {{ c.table.zone_ref.swatch }}"{% endif %}
          href="/orders/{{ c.order.id }}">
         <span class="n">Table {{ c.table.number }}</span>
         <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes|duration }}</span>
         <span class="meta">{{ c.waiter or '—' }}</span>
-        {# Cooking/serving stage as a badge; the card colour still carries the
-           table status (occupied / ready to pay). Preparing / Ready to serve
-           jump to the kitchen; Served (and the table pill) stay on the order. #}
-        {% if c.order.status in ('preparing','ready') %}
-        <span class="pill os-{{ c.order.status }} os-jump" onclick="event.preventDefault();event.stopPropagation();window.location='/kitchen';" title="Go to the kitchen display">{{ c.order.status|ostatus }}</span>
+        {# Food that's plated and waiting — the waiter's run cue. Shown whenever
+           any item is up, even while the rest of the order is still cooking, so
+           partial readiness isn't hidden behind the aggregate status below. #}
+        {% if c.ready_count %}
+        <span class="pill ready-serve" title="{{ c.ready_count }} item{{ '' if c.ready_count == 1 else 's' }} up — run to the table">🔔 {{ c.ready_count }} ready to serve</span>
+        {% endif %}
+        {# Cooking stage as a badge; the card colour still carries the table
+           status (occupied / ready to pay). Preparing jumps to the kitchen;
+           Served (and the table pill) stay on the order. Full readiness is
+           covered by the run cue above, so no separate "ready" pill. #}
+        {% if c.order.status == 'preparing' %}
+        <span class="pill os-preparing os-jump" onclick="event.preventDefault();event.stopPropagation();window.location='/kitchen';" title="Go to the kitchen display">{{ c.order.status|ostatus }}</span>
         {% elif c.order.status == 'served' %}
         <span class="pill os-served">{{ c.order.status|ostatus }}</span>
         {% endif %}
@@ -246,6 +255,9 @@
   // none assigned (owner, manager, kitchen) has no such card, so it stays off
   // and they see the whole floor.
   let mineFilter = document.querySelector('.tbl[data-mine="1"]') !== null;
+  // "Ready to serve" — tables with food up, waiting to be run. Hash-driven from
+  // the sidebar overview (/#ready_serve); no legend button of its own.
+  let readyFilter = false;
   const firstTab = document.querySelector('#floorTabs a.on') ||
                    document.querySelector('#floorTabs a[data-floor]');
   let activeFloor = firstTab ? firstTab.dataset.floor : null;
@@ -293,7 +305,8 @@
       const zoneOk = !zoneFilter || card.dataset.zone === zoneFilter;
       const floorOk = floorFree || !activeFloor || card.dataset.floor === activeFloor;
       const mineOk = !mineFilter || card.dataset.mine === '1';
-      const scopeOk = textOk && zoneOk && floorOk && mineOk;   // everything but status
+      const readyOk = !readyFilter || card.dataset.ready === '1';
+      const scopeOk = textOk && zoneOk && floorOk && mineOk && readyOk;   // everything but status
       if (scopeOk && avail.hasOwnProperty(card.dataset.status)) avail[card.dataset.status]++;
       const hit = scopeOk && (!statusFilter || card.dataset.status === statusFilter);
       card.hidden = !hit;
@@ -321,7 +334,7 @@
       if (head) head.hidden = sec.hidden || !multiFloor;
     });
 
-    const filtering = searching || statusFilter !== null || zoneFilter !== null || mineFilter;
+    const filtering = searching || statusFilter !== null || zoneFilter !== null || mineFilter || readyFilter;
     countEl.textContent = filtering ? shown + ' of ' + cards.length : '';
     clearBtn.hidden = !filtering;
     noneEl.hidden = !(filtering && shown === 0);
@@ -370,6 +383,7 @@
     statusFilter = null;
     zoneFilter = null;
     mineFilter = false;
+    readyFilter = false;
     apply();
   }
 
@@ -390,11 +404,28 @@
       statusFilter = h;
       activeFloor = '';        // show that status on every floor
       apply();
+    } else if (h === 'ready_serve') {
+      readyFilter = true;
+      activeFloor = '';        // food-up tables on every floor
+      apply();
     }
   }
   window.addEventListener('hashchange', applyHash);
   applyHash();
   apply();
+
+  // Keep the board timely so "ready to serve" cues appear without a manual
+  // refresh — reload when the tab regains focus and on a slow idle tick. Held
+  // back while a search or a status/zone filter is active, since those live in
+  // the client and a reload would wipe them (mine/ready ride the URL hash).
+  function idleView() {
+    return document.visibilityState === 'visible' &&
+      !box.value.trim() && statusFilter === null && zoneFilter === null;
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (idleView()) location.reload();
+  });
+  setInterval(function () { if (idleView()) location.reload(); }, 30000);
 })();
 </script>
 {% endblock %}

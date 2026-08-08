@@ -396,6 +396,17 @@ label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 4px; f
 .pill.os-preparing { background: rgba(245,158,11,.15); color: #b45309; }
 .pill.os-ready { background: #2563eb; color: #fff; font-weight: 800; }
 .pill.os-served { background: rgba(16,185,129,.14); color: #047857; }
+/* "Ready to serve" run cue on the floor card — food up, waiting to be run.
+   Solid green and bold so it's caught at a glance; a soft pulse draws the eye. */
+.pill.ready-serve {
+  background: #16a34a; color: #fff; font-weight: 800; text-transform: none;
+  animation: readyPulse 2s ease-in-out infinite;
+}
+@keyframes readyPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(22,163,74,.5); }
+  50% { box-shadow: 0 0 0 5px rgba(22,163,74,0); }
+}
+@media (prefers-reduced-motion: reduce) { .pill.ready-serve { animation: none; } }
 /* Preparing / Ready-to-serve badges jump to the kitchen. */
 .pill.os-jump { cursor: pointer; }
 .pill.os-jump:hover { filter: brightness(1.12); text-decoration: underline; }
