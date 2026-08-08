@@ -1080,21 +1080,12 @@ td.pending { color: var(--accent); font-weight: 700; }
      the manager's Labor and Coverage panels). The tall calendar spans all rows;
      content-sized rows plus a trailing 1fr keep the panels tucked to the top
      with the slack pooled at the bottom — no gaps between them. */
-  grid-template-areas: "team cal" "req cal" "labor cal" "cov cal";
-  grid-template-rows: auto auto auto 1fr;
+  grid-template-areas: "team cal" "req cal" "cov cal";
+  grid-template-rows: auto auto 1fr;
 }
 .team-panel { grid-area: team; min-width: 0; }
 .req-panel { grid-area: req; min-width: 0; }
-.labor-panel { grid-area: labor; min-width: 0; }
 .cov-panel { grid-area: cov; min-width: 0; }
-.labor-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.labor-kpis .lk {
-  background: color-mix(in srgb, var(--muted) 10%, transparent);
-  border-radius: 8px; padding: 8px 10px;
-}
-.labor-kpis .lk small { display: block; color: var(--muted); font-size: 11px; }
-.labor-kpis .lk b { font-size: 17px; }
-.labor-kpis .lk .pill { font-size: 10px; margin-left: 4px; }
 .cov-alerts { display: flex; flex-direction: column; gap: 6px; }
 .cov {
   border-radius: 8px; padding: 8px 10px; font-size: 12px; line-height: 1.35;
@@ -1127,6 +1118,32 @@ td.pending { color: var(--accent); font-weight: 700; }
 .cal-week { font-weight: 700; font-size: 15px; }
 .cal-nav { display: flex; gap: 6px; }
 .cal-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* Labor KPI bar — fills the header's empty middle. Compact inline stats with
+   hairline dividers, plus a popover to set the week's sales forecast. */
+.cal-labor {
+  flex: 1 1 300px; display: flex; align-items: center; justify-content: center;
+  flex-wrap: wrap; gap: 4px 8px;
+  background: color-mix(in srgb, var(--muted) 8%, transparent);
+  border: 1px solid var(--line); border-radius: 10px; padding: 6px 12px;
+}
+.kstat { display: inline-flex; align-items: baseline; gap: 6px; padding: 0 10px; }
+.kstat + .kstat, .cal-labor .fc-pop { border-left: 1px solid var(--line); }
+.cal-labor .fc-pop { padding-left: 10px; margin-left: 2px; }
+.kstat .kk { font-size: 10px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); }
+.kstat .kv { font-size: 15px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.kstat .pill { font-size: 10px; }
+.fc-pop { position: relative; }
+.fc-pop > summary { list-style: none; cursor: pointer; }
+.fc-pop > summary::-webkit-details-marker { display: none; }
+.fc-form {
+  position: absolute; top: calc(100% + 6px); right: 0; z-index: 40; width: 230px;
+  display: flex; flex-direction: column; gap: 6px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px; box-shadow: 0 10px 28px -10px var(--shadow);
+}
+.fc-title { font-size: 11px; font-weight: 700; color: var(--muted); }
+.fc-form .btn { align-self: flex-start; }
 
 /* Week / Day / Month segmented toggle */
 .view-toggle { display: inline-flex; }
@@ -1494,5 +1511,5 @@ body.drag-active, body.drag-active * { user-select: none; -webkit-user-select: n
 .cblock:hover .cb-del, .cblock.menu-open .cb-del { opacity: 1; pointer-events: auto; }
 
 @media (max-width: 900px) {
-  .sched-wrap { grid-template-columns: 1fr; grid-template-areas: "team" "cal" "req" "labor" "cov"; grid-template-rows: none; }
+  .sched-wrap { grid-template-columns: 1fr; grid-template-areas: "team" "cal" "req" "cov"; grid-template-rows: none; }
 }

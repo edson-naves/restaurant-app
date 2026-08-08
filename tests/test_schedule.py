@@ -230,12 +230,12 @@ expected_pct = round(summary["cost_cents"] / 150000 * 100, 1)
 check(summary["pct"] == expected_pct, "labor % = cost / forecast", summary["pct"])
 check(summary["open_count"] >= 1, "coverage counts the open shift", summary["open_count"])
 
-# The Labor summary panel shows for a manager, and is hidden from a waiter.
+# The labor KPI bar and coverage panel show for a manager, hidden from a waiter.
 r = owner_c.get(f"/schedule?week={day}")
-check("Labor summary" in r.text and "Coverage alerts" in r.text,
+check("cal-labor" in r.text and "Coverage alerts" in r.text,
       "labor + coverage panels render for a manager")
 r = waiter_c.get(f"/schedule?week={day}")
-check("Labor summary" not in r.text, "wages/labor stay hidden from a waiter")
+check("cal-labor" not in r.text, "wages/labor stay hidden from a waiter")
 
 # Restore the wage.
 d = SessionLocal(); d.get(Staff, other.id).wage_cents = prev_wage; d.commit(); d.close()

@@ -29,6 +29,32 @@
   <div class="cal card">
     <div class="cal-toolbar">
       <span class="cal-week">{{ period_label }}{% if not can('schedule.manage') %} · your shifts{% endif %}</span>
+      {% if labor %}
+      <div class="cal-labor">
+        <div class="kstat"><span class="kk">Hours</span><span class="kv">{{ '%g'|format(labor.hours) }}h</span></div>
+        <div class="kstat"><span class="kk">Cost</span><span class="kv">${{ labor.cost_cents|money }}</span></div>
+        <div class="kstat"><span class="kk">Forecast</span><span class="kv">${{ labor.forecast_cents|money }}</span></div>
+        <div class="kstat"><span class="kk">Labor</span>
+          {% if labor.forecast_cents %}<span class="kv">{{ labor.pct }}%</span><span class="pill {{ 'open' if labor.is_high else 'ok' }}">{{ 'High' if labor.is_high else 'Good' }}</span>
+          {% else %}<span class="kv">—</span>{% endif %}
+        </div>
+        <details class="fc-pop">
+          <summary class="btn xs" title="Target ≤ {{ '%g'|format(labor.target) }}% of sales · set pay rates on Manage → Staff">⚙ Forecast</summary>
+          <form method="post" action="/schedule/forecast" class="fc-form">
+            <div class="fc-title">Sales forecast · target ≤ {{ '%g'|format(labor.target) }}%</div>
+            <input type="hidden" name="week" value="{{ week_start.isoformat() }}">
+            {% for d, cents in labor.forecast_by_day.items() %}
+            <label class="fc-row sub">
+              <span>{{ d.strftime('%a') }} {{ d.day }}</span>
+              <span>$ <input type="number" min="0" step="1" name="amounts" value="{{ '%g'|format(cents / 100) }}"></span>
+              <input type="hidden" name="dates" value="{{ d.isoformat() }}">
+            </label>
+            {% endfor %}
+            <button class="btn good sm">Save forecast</button>
+          </form>
+        </details>
+      </div>
+      {% endif %}
       <div class="cal-controls">
         <div class="view-toggle">
           <a class="btn sm {{ 'on' if view == 'week' else '' }}" href="{{ week_url }}">Week</a>
@@ -325,36 +351,6 @@
   </aside>
 
   {% if labor %}
-  <aside class="labor-panel card">
-    <h3 style="margin:0 0 10px">Labor summary</h3>
-    <div class="labor-kpis">
-      <div class="lk"><small>Labor hours</small><b>{{ '%g'|format(labor.hours) }}h</b></div>
-      <div class="lk"><small>Labor cost</small><b>${{ labor.cost_cents|money }}</b></div>
-      <div class="lk"><small>Sales forecast</small><b>${{ labor.forecast_cents|money }}</b></div>
-      <div class="lk"><small>Labor %</small>
-        {% if labor.forecast_cents %}
-        <b>{{ labor.pct }}%</b><span class="pill {{ 'open' if labor.is_high else 'ok' }}">{{ 'High' if labor.is_high else 'Good' }}</span>
-        {% else %}<b>—</b>{% endif %}
-      </div>
-    </div>
-    <p class="sub" style="margin:8px 0 0;font-size:11px">Target ≤ {{ '%g'|format(labor.target) }}% of sales. Set pay rates on Manage → Staff.</p>
-
-    <details style="margin-top:10px">
-      <summary class="btn sm" style="cursor:pointer">Set sales forecast</summary>
-      <form method="post" action="/schedule/forecast" style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
-        <input type="hidden" name="week" value="{{ week_start.isoformat() }}">
-        {% for d, cents in labor.forecast_by_day.items() %}
-        <label class="fc-row sub">
-          <span>{{ d.strftime('%a') }} {{ d.day }}</span>
-          <span>$ <input type="number" min="0" step="1" name="amounts" value="{{ '%g'|format(cents / 100) }}"></span>
-          <input type="hidden" name="dates" value="{{ d.isoformat() }}">
-        </label>
-        {% endfor %}
-        <button class="btn good sm" style="align-self:flex-start">Save forecast</button>
-      </form>
-    </details>
-  </aside>
-
   <aside class="cov-panel card">
     <h3 style="margin:0 0 10px">Coverage alerts</h3>
     <div class="cov-alerts">
