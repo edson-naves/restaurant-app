@@ -31,7 +31,7 @@
 {% if not tickets %}
   <div class="card"><p class="empty">
     {% if kstatus != 'all' or view != 'all' or mine %}
-      Nothing matches this filter — <a href="/kitchen?view=all&kstatus=all">show everything</a>.
+      Nothing matches this filter — <a href="/kitchen?view=all&kstatus=all&mine=0">show everything</a>.
     {% else %}
       Nothing in the kitchen right now.
     {% endif %}

@@ -350,6 +350,26 @@ LIVE_STATES = (
 )
 
 
+def _covers_tables(db: Session, staff: Staff) -> bool:
+    """Whether this person is currently serving any tables — used to default the
+    "my tables" filter on for them. Owners, managers and kitchen staff who cover
+    none fall back to seeing everything, so the default never hides the board."""
+    mine = db.execute(
+        select(RestaurantTable.id).where(
+            RestaurantTable.is_active.is_(True),
+            RestaurantTable.current_waiter_id == staff.id,
+        ).limit(1)
+    ).first()
+    if mine:
+        return True
+    return db.execute(
+        select(Order.id).where(
+            Order.waiter_id == staff.id,
+            Order.status.in_(LIVE_STATES),
+        ).limit(1)
+    ).first() is not None
+
+
 def _live_order(db: Session, table_id: int) -> Order | None:
     """The open order sitting on a table, if any."""
     return db.execute(
@@ -1353,7 +1373,7 @@ def kitchen_display(
     request: Request,
     view: str = "all",
     kstatus: str = "all",
-    mine: int = 0,
+    mine: int | None = None,
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("kitchen.view")),
 ):
@@ -1366,6 +1386,10 @@ def kitchen_display(
     KITCHEN_STATES = (KitchenStatus.PREPARING, KitchenStatus.READY)
     if kstatus != "all" and kstatus not in KITCHEN_STATES:
         kstatus = "all"
+
+    # "My tables" defaults on for anyone actually serving tables; unset in the URL
+    # (first visit) means "decide by coverage", an explicit 0/1 (the toggle) wins.
+    mine = (1 if _covers_tables(db, staff) else 0) if mine is None else (1 if mine else 0)
 
     # Self-heal: an order left SERVED while it still has food on the line
     # (preparing/ready items) is inconsistent — re-derive so its cooking items

@@ -242,7 +242,10 @@
 
   let statusFilter = null;
   let zoneFilter = null;
-  let mineFilter = false;
+  // "My tables" defaults on for anyone actually covering tables; someone with
+  // none assigned (owner, manager, kitchen) has no such card, so it stays off
+  // and they see the whole floor.
+  let mineFilter = document.querySelector('.tbl[data-mine="1"]') !== null;
   const firstTab = document.querySelector('#floorTabs a.on') ||
                    document.querySelector('#floorTabs a[data-floor]');
   let activeFloor = firstTab ? firstTab.dataset.floor : null;
