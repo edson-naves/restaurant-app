@@ -233,8 +233,9 @@ function dmCollect(form){
   form.querySelector('.dm-customizations').value = JSON.stringify(rows);
   return true;
 }
-// Live price on the Add button: for a happy hour, the regular à-la-carte total
-// (struck through) beside the discounted final price; otherwise the fixed price.
+// Live price on the Add button: just the amount the guest pays — for a happy
+// hour the discounted total, otherwise the fixed price. The regular à-la-carte
+// price is already shown against each choice, so it's not repeated here.
 function dmPrice(form){
   const out = form.querySelector('.dm-add-price');
   if(!out) return;
@@ -245,7 +246,7 @@ function dmPrice(form){
     });
     const pct = parseInt(form.dataset.discountPercent, 10) || 0;
     const net = Math.round(gross * (100 - pct) / 100);
-    out.innerHTML = '<s class="dm-was">$' + (gross/100).toFixed(2) + '</s> $' + (net/100).toFixed(2);
+    out.textContent = '$' + (net/100).toFixed(2);
   } else {
     const fixed = parseInt(form.dataset.fixed, 10) || 0;
     out.textContent = '$' + (fixed/100).toFixed(2);

@@ -69,6 +69,24 @@ def _guard_timeoff(db, member, starts, ends, force=False) -> None:
         )
 
 
+def _guard_no_pending_request(db, shift_id) -> None:
+    """One open request per shift. A shift with a swap or reschedule still
+    awaiting a manager's decision can't collect another — resubmitting the form
+    would otherwise pile up redundant duplicates for the same shift."""
+    existing = db.execute(
+        select(SwapRequest).where(
+            SwapRequest.shift_id == shift_id,
+            SwapRequest.status == SwapStatus.PENDING,
+        )
+    ).first()
+    if existing is not None:
+        raise HTTPException(
+            400,
+            "There's already a pending request for this shift — wait for the "
+            "manager to approve or deny it before sending another.",
+        )
+
+
 def _parse_date(s: str):
     try:
         return datetime.strptime(s, "%Y-%m-%d").date()
@@ -351,6 +369,7 @@ def request_swap(
     target = db.get(Staff, target_staff_id) if target_staff_id else None
     if target_staff_id and target is None:
         raise HTTPException(404, "Unknown teammate.")
+    _guard_no_pending_request(db, shift.id)
     db.add(SwapRequest(
         shift_id=shift.id, requested_by_id=staff.id,
         target_staff_id=(target.id if target else None),
@@ -379,6 +398,7 @@ def propose_shift_change(
     if shift.staff_id != staff.id and not can(staff, "schedule.manage"):
         raise HTTPException(403, "You can only propose a change to your own shift.")
     starts, ends = _parse_window(date, start, end)
+    _guard_no_pending_request(db, shift.id)
     db.add(SwapRequest(
         shift_id=shift.id, requested_by_id=staff.id, target_staff_id=None,
         new_starts_at=starts, new_ends_at=ends,

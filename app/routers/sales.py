@@ -1353,6 +1353,7 @@ def kitchen_display(
     request: Request,
     view: str = "all",
     kstatus: str = "all",
+    mine: int = 0,
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("kitchen.view")),
 ):
@@ -1405,6 +1406,11 @@ def kitchen_display(
             continue
         if view == "delivery" and not is_delivery:
             continue
+        # "Only my tables": a waiter narrows the board to the orders they're
+        # covering. Applied with the channel view (before the counts) so the
+        # status tallies match the narrowed set.
+        if mine and o.waiter_id != staff.id:
+            continue
         status_counts[o.kitchen_status] = status_counts.get(o.kitchen_status, 0) + 1
         if kstatus != "all" and o.kitchen_status != kstatus:
             continue
@@ -1439,7 +1445,7 @@ def kitchen_display(
 
     return render(request, "kitchen.html", {
         "db": db, "staff": staff, "tickets": tickets, "view": view,
-        "kstatus": kstatus, "status_counts": status_counts,
+        "kstatus": kstatus, "mine": 1 if mine else 0, "status_counts": status_counts,
         "title": "Kitchen display",
     })
 

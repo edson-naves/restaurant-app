@@ -6,9 +6,9 @@
     <p class="sub">{{ tickets|length }} active · auto-refreshes every 15s</p>
   </div>
   <div class="catbar" style="margin:0">
-    <a class="btn sm {{ 'primary' if view == 'all' else '' }}" href="/kitchen?view=all&kstatus={{ kstatus }}">All</a>
-    <a class="btn sm {{ 'primary' if view == 'dine_in' else '' }}" href="/kitchen?view=dine_in&kstatus={{ kstatus }}">Dine-in</a>
-    <a class="btn sm {{ 'primary' if view == 'delivery' else '' }}" href="/kitchen?view=delivery&kstatus={{ kstatus }}">Delivery</a>
+    <a class="btn sm {{ 'primary' if view == 'all' else '' }}" href="/kitchen?view=all&kstatus={{ kstatus }}&mine={{ mine }}">All</a>
+    <a class="btn sm {{ 'primary' if view == 'dine_in' else '' }}" href="/kitchen?view=dine_in&kstatus={{ kstatus }}&mine={{ mine }}">Dine-in</a>
+    <a class="btn sm {{ 'primary' if view == 'delivery' else '' }}" href="/kitchen?view=delivery&kstatus={{ kstatus }}&mine={{ mine }}">Delivery</a>
   </div>
 </div>
 
@@ -16,16 +16,21 @@
    status choice combine. Server-side, not JS, so it survives the 15s reload. #}
 <div class="catbar" style="margin:0 0 18px">
   <a class="btn sm {{ 'primary' if kstatus == 'all' else '' }}"
-     href="/kitchen?view={{ view }}&kstatus=all">All statuses</a>
+     href="/kitchen?view={{ view }}&kstatus=all&mine={{ mine }}">All statuses</a>
   <a class="btn sm {{ 'primary' if kstatus == 'preparing' else '' }}"
-     href="/kitchen?view={{ view }}&kstatus=preparing">Preparing {{ status_counts.preparing }}</a>
+     href="/kitchen?view={{ view }}&kstatus=preparing&mine={{ mine }}">Preparing {{ status_counts.preparing }}</a>
   <a class="btn sm {{ 'primary' if kstatus == 'ready' else '' }}"
-     href="/kitchen?view={{ view }}&kstatus=ready">Ready {{ status_counts.ready }}</a>
+     href="/kitchen?view={{ view }}&kstatus=ready&mine={{ mine }}">Ready {{ status_counts.ready }}</a>
+  {# Waiter's "only my tables" toggle — narrows the board to the orders this
+     person is covering. Sits with the status filters and combines with them. #}
+  <a class="btn sm {{ 'primary' if mine else '' }}"
+     href="/kitchen?view={{ view }}&kstatus={{ kstatus }}&mine={{ 0 if mine else 1 }}"
+     title="Show only tables you're serving">My tables</a>
 </div>
 
 {% if not tickets %}
   <div class="card"><p class="empty">
-    {% if kstatus != 'all' or view != 'all' %}
+    {% if kstatus != 'all' or view != 'all' or mine %}
       Nothing matches this filter — <a href="/kitchen?view=all&kstatus=all">show everything</a>.
     {% else %}
       Nothing in the kitchen right now.
