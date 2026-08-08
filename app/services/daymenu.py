@@ -56,6 +56,32 @@ def resolve_for(db: Session, d: date, now: datetime | None = None) -> DayMenu | 
     return pick(dated) or pick(weekday)
 
 
+def resolve_all_for(db: Session, d: date, now: datetime | None = None) -> list[DayMenu]:
+    """Every day menu orderable on date `d` at time `now` — so a regular all-day
+    prix fixe and a concurrent time-boxed offer (e.g. a happy hour) both show,
+    rather than the single most-specific one `resolve_for` returns.
+
+    Both the dated and recurring-weekday menus that are available right now are
+    included (deduped by id). Menus with an explicit window sort after all-day
+    ones so the standing day menu leads and the happy hour follows."""
+    now = now or datetime.now()
+    t = now.time()
+    dated = db.execute(
+        select(DayMenu).where(DayMenu.is_active.is_(True), DayMenu.menu_date == d)
+    ).scalars().all()
+    weekday = db.execute(
+        select(DayMenu).where(DayMenu.is_active.is_(True), DayMenu.weekday == d.weekday())
+    ).scalars().all()
+    out: list[DayMenu] = []
+    seen: set[int] = set()
+    for m in [*dated, *weekday]:
+        if m.id not in seen and m.available_at(t):
+            out.append(m)
+            seen.add(m.id)
+    out.sort(key=lambda m: (0 if not (m.start_time and m.end_time) else 1, m.id))
+    return out
+
+
 def effective_price_cents(day_menu: DayMenu, items: list[MenuItem]) -> int:
     """What the guest pays for this combo of chosen dishes: the menu's fixed
     price, or the discounted à-la-carte total for a percent (happy-hour) deal."""

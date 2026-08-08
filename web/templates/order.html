@@ -159,30 +159,41 @@
 </div>
 {% endif %}
 
-{# Today's fixed-price menu — sits with the à-la-carte menu, above the grid, so
-   its dishes can be picked and customised alongside the regular items. #}
-{% if active_day_menu and order.status not in ('paid','closed','cancelled') %}
+{# Today's fixed-price menus — sit with the à-la-carte menu, above the grid, so
+   their dishes can be picked and customised alongside the regular items. Every
+   menu that's on right now shows (a standing day menu and a happy hour both). #}
+{% if day_menus and order.status not in ('paid','closed','cancelled') %}
+{% for dmc in day_menus %}
+{% set menu = dmc.menu %}
 <div class="card daymenu-card">
   <div class="daymenu-head">
-    <h2 style="margin:0">🍽 {{ active_day_menu.name }}</h2>
-    <span class="daymenu-price">{{ active_day_menu.offer_label }}</span>
-    {% if active_day_menu.time_label %}<span class="daymenu-time">🕑 {{ active_day_menu.time_label }}</span>{% endif %}
+    <h2 style="margin:0">🍽 {{ menu.name }}</h2>
+    <span class="daymenu-price">{{ menu.offer_label }}</span>
+    {% if menu.time_label %}<span class="daymenu-time">🕑 {{ menu.time_label }}</span>{% endif %}
     <span class="sub" style="margin:0">pick one per course · adds to {{ 'the table' if active_seat == 0 else 'seat ' ~ active_seat }}</span>
   </div>
-  <form method="post" action="/orders/{{ order.id }}/day-menu" class="daymenu-form" onsubmit="return dmCollect(this)">
+  <form method="post" action="/orders/{{ order.id }}/day-menu" class="daymenu-form"
+        data-is-percent="{{ 1 if menu.is_percent else 0 }}"
+        data-discount-percent="{{ menu.discount_percent or 0 }}"
+        data-fixed="{{ menu.price_cents }}"
+        onsubmit="return dmCollect(this)">
     {# The seat comes from the seats bar above (active seat), like adding any item. #}
     <input type="hidden" name="seat_number" value="{{ active_seat }}">
-    <input type="hidden" name="customizations" id="dm-customizations">
-    {% for c in day_menu_courses %}
+    <input type="hidden" name="day_menu_id" value="{{ menu.id }}">
+    <input type="hidden" name="customizations" class="dm-customizations">
+    {% for c in dmc.courses %}
     <div class="dm-course-pick">
       <label class="dm-pick-lbl">{{ c.label }}</label>
-      <select class="dm-course-sel" name="item_ids" onchange="dmRenderCourse(this)">{% for ch in c.choices %}<option value="{{ ch.menu_item_id }}">{{ ch.menu_item.name }}</option>{% endfor %}</select>
+      <select class="dm-course-sel" name="item_ids" onchange="dmRenderCourse(this); dmPrice(this.form)">{% for ch in c.choices %}<option value="{{ ch.menu_item_id }}" data-price="{{ ch.menu_item.price_cents }}">{{ ch.menu_item.name }} · ${{ ch.menu_item.price_cents|money }}</option>{% endfor %}</select>
       <details class="dm-cust"><summary>Customize</summary><div class="dm-cust-body"></div></details>
     </div>
     {% endfor %}
-    <button class="btn primary daymenu-add">Add · {% if active_day_menu.is_percent %}{{ active_day_menu.discount_percent }}% off{% else %}${{ active_day_menu.price_cents|money }}{% endif %}</button>
+    {# Live price: regular à-la-carte total struck through beside the discounted
+       final price for a happy hour; the fixed price for a prix fixe. #}
+    <button class="btn primary daymenu-add">Add · <span class="dm-add-price">{% if menu.is_percent %}{{ menu.discount_percent }}% off{% else %}${{ menu.price_cents|money }}{% endif %}</span></button>
   </form>
 </div>
+{% endfor %}
 <script>
 const DM_MODS = {{ dm_mods|tojson }};
 const DM_ALLERGENS = {{ (ALLERGEN_OPTIONS|list)|tojson }};
@@ -219,10 +230,29 @@ function dmCollect(form){
       notes: (body.querySelector('.dm-note') || {}).value || ''
     });
   });
-  document.getElementById('dm-customizations').value = JSON.stringify(rows);
+  form.querySelector('.dm-customizations').value = JSON.stringify(rows);
   return true;
 }
+// Live price on the Add button: for a happy hour, the regular à-la-carte total
+// (struck through) beside the discounted final price; otherwise the fixed price.
+function dmPrice(form){
+  const out = form.querySelector('.dm-add-price');
+  if(!out) return;
+  if(form.dataset.isPercent === '1'){
+    let gross = 0;
+    form.querySelectorAll('.dm-course-sel option:checked').forEach(function(o){
+      gross += parseInt(o.dataset.price, 10) || 0;
+    });
+    const pct = parseInt(form.dataset.discountPercent, 10) || 0;
+    const net = Math.round(gross * (100 - pct) / 100);
+    out.innerHTML = '<s class="dm-was">$' + (gross/100).toFixed(2) + '</s> $' + (net/100).toFixed(2);
+  } else {
+    const fixed = parseInt(form.dataset.fixed, 10) || 0;
+    out.textContent = '$' + (fixed/100).toFixed(2);
+  }
+}
 document.querySelectorAll('.daymenu-form .dm-course-sel').forEach(dmRenderCourse);
+document.querySelectorAll('.daymenu-form').forEach(dmPrice);
 // Click outside an open Customize panel to close it.
 document.addEventListener('click', function(e){
   document.querySelectorAll('.dm-cust[open]').forEach(function(d){
@@ -411,7 +441,10 @@ document.addEventListener('click', function(e){
               <div>🍽 <b>{{ u.name or "Day menu" }}</b> <span class="pill open">combo</span>{% if combo_paid %} <span class="pill paid">paid ✓</span>{% endif %}</div>
               <div class="sub" style="font-size:11px">{% for ci in u.lines %}{{ ci.menu_item.name }}{% if not loop.last %} · {% endif %}{% endfor %}</div>
             </div>
-            <div class="ordline-total">${{ u.total|money }}</div>
+            {# A discounted combo (happy hour) shows its regular à-la-carte total
+               struck through beside the final price. #}
+            {% set combo_gross = u.lines|sum(attribute='menu_item.price_cents') %}
+            <div class="ordline-total">{% if combo_gross > u.total %}<s class="dm-was">${{ combo_gross|money }}</s> {% endif %}${{ u.total|money }}</div>
             <div class="ordline-actions">
               {% if can('orders.manage') and not combo_paid and order.status not in ('paid','closed','cancelled') %}
               <form method="post" action="/orders/{{ order.id }}/combo/{{ u.combo_id }}/remove" style="display:inline"><button class="btn sm danger" title="Remove the whole combo">×</button></form>

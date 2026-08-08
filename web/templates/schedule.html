@@ -28,7 +28,9 @@
   <!-- Calendar -->
   <div class="cal card">
     <div class="cal-toolbar">
-      <span class="cal-week">{{ period_label }}{% if not can('schedule.manage') %} · your shifts{% endif %}</span>
+      {# The week range is redundant with each day column's date header, so it's
+         dropped; staff still get the "your shifts" scope note. #}
+      {% if not can('schedule.manage') %}<span class="cal-week">your shifts</span>{% endif %}
       {% if labor %}
       <div class="cal-labor">
         <div class="kstat"><span class="kk">Hours</span><span class="kv">{{ '%g'|format(labor.hours) }}h</span></div>

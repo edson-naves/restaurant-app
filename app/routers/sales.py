@@ -716,25 +716,27 @@ def order_screen(
             key=lambda t: t.number,
         )
 
-    # Day menu (prix fixe) for this order's date — offered as a one-tap combo
-    # while the order is still open. Choices are grouped by course for the picker.
-    active_day_menu = None
-    day_menu_courses = []
+    # Day menus (prix fixe) for this order's date — offered as one-tap combos
+    # while the order is still open. Every menu that's on right now is shown (a
+    # standing all-day menu and a concurrent happy hour together), each with its
+    # choices grouped by course for the picker.
+    day_menus = []
     dm_mods: dict[int, list] = {}
     if order.status not in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
         _now = datetime.now()
-        dm = daymenu.resolve_for(db, _now.date(), _now)
-        if dm is not None:
+        for dm in daymenu.resolve_all_for(db, _now.date(), _now):
             by_slot: dict[int, list] = {}
             for c in dm.choices:
                 if c.menu_item and c.menu_item.is_active and c.menu_item.available:
                     by_slot.setdefault(c.course, []).append(c)
             if by_slot:
-                active_day_menu = dm
-                day_menu_courses = [
-                    {"slot": s, "label": day_menu_course_label(s), "choices": by_slot[s]}
-                    for s in sorted(by_slot)
-                ]
+                day_menus.append({
+                    "menu": dm,
+                    "courses": [
+                        {"slot": s, "label": day_menu_course_label(s), "choices": by_slot[s]}
+                        for s in sorted(by_slot)
+                    ],
+                })
                 # Each choosable dish's FREE (zero-price) modifier groups, so a
                 # combo dish can be customised without changing the fixed price.
                 for slot_choices in by_slot.values():
@@ -779,8 +781,7 @@ def order_screen(
         "active_seat": active_seat,
         "seat_cards": seat_cards, "table_card": table_card,
         "line_groups": line_groups,
-        "active_day_menu": active_day_menu, "day_menu_courses": day_menu_courses,
-        "dm_mods": dm_mods,
+        "day_menus": day_menus, "dm_mods": dm_mods,
         "configuring": configuring,
         "title": f"Order {order.code}",
     })
@@ -946,6 +947,7 @@ def add_item(
 def add_day_menu_combo(
     order_id: int,
     seat_number: int = Form(0),
+    day_menu_id: int = Form(0),
     item_ids: list[int] = Form(default=[]),
     customizations: str = Form(""),
     db: Session = Depends(get_db),
@@ -960,7 +962,12 @@ def add_day_menu_combo(
     if order.status in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
         raise HTTPException(400, "This order is closed.")
     _now = datetime.now()
-    dm = daymenu.resolve_for(db, _now.date(), _now)
+    # Several menus can be on at once (a standing menu and a happy hour), so the
+    # form names which one — but only honour it if it's genuinely orderable now.
+    available = daymenu.resolve_all_for(db, _now.date(), _now)
+    dm = next((m for m in available if m.id == day_menu_id), None) if day_menu_id else None
+    if dm is None:
+        dm = daymenu.resolve_for(db, _now.date(), _now)
     if dm is None:
         raise HTTPException(400, "No day menu is on right now.")
     seat = None
