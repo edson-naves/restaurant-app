@@ -20,7 +20,7 @@
   </script>
 </head>
 <body{% if can('schedule.manage') %} data-approve="1"{% endif %}>
-<div class="app-shell">
+<div class="app-shell{% if staff %} has-nav{% endif %}">
   {% if staff %}
   <aside class="sidebar">
     <a class="brand" href="/">🍽️ <span>RMS</span></a>

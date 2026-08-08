@@ -225,6 +225,33 @@ a.side-ov-row[href]:hover { background: var(--panel-2); text-decoration: none; }
   .side-foot .btn { width: auto !important; }
 }
 
+/* Retractable sidebar (desktop): a slim icon rail that expands on hover and
+   overlays the content, so the page — the calendar especially — gets the width
+   back. Overlay (not push) means hovering never reflows the page. Narrow
+   screens keep the top strip above. */
+@media (min-width: 821px) {
+  .sidebar {
+    position: fixed; left: 0; top: 0; height: 100vh; width: 68px; z-index: 60;
+    overflow: hidden; transition: width .16s ease;
+  }
+  .sidebar:hover { width: 216px; box-shadow: 14px 0 46px -12px var(--shadow); }
+  .has-nav .main-area { margin-left: 68px; }
+
+  /* Collapsed: icons only, centred. Labels, the overview panel and the footer
+     text/button reappear when the rail is hovered open. */
+  .sidebar:not(:hover) .brand span,
+  .sidebar:not(:hover) .side-nav a span,
+  .sidebar:not(:hover) .side-ov,
+  .sidebar:not(:hover) .side-user-txt,
+  .sidebar:not(:hover) .side-foot .btn { display: none; }
+  .sidebar:not(:hover) .brand,
+  .sidebar:not(:hover) .side-nav a,
+  .sidebar:not(:hover) .side-user,
+  .sidebar:not(:hover) .side-foot { justify-content: center; padding-left: 0; padding-right: 0; }
+  .sidebar:not(:hover) .side-nav a { position: relative; }
+  .sidebar:not(:hover) .nav-badge { position: absolute; top: 2px; right: 9px; }
+}
+
 /* ---------- generic ---------- */
 h1 { font-family: var(--serif); font-weight: 700; font-size: 25px; letter-spacing: .2px; margin: 0 0 4px; }
 h2 { font-family: var(--serif); font-weight: 600; font-size: 18px; margin: 0 0 12px; }
