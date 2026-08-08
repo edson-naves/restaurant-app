@@ -1357,14 +1357,33 @@ td.pending { color: var(--accent); font-weight: 700; }
 .cal-legend .dot.open { border: 1px dashed #ef4444; background: transparent; }
 .cal-legend .dot.timeoff { background: repeating-linear-gradient(45deg, var(--muted) 0 3px, transparent 3px 6px); }
 
-/* Approved time-off band on the calendar */
-.cblock.timeoff {
-  background: repeating-linear-gradient(45deg,
-    color-mix(in srgb, var(--muted) 22%, var(--panel)) 0 6px,
-    color-mix(in srgb, var(--muted) 12%, var(--panel)) 6px 12px);
-  border: 1px solid color-mix(in srgb, var(--muted) 40%, transparent);
+/* Approved time off: a compact tag pinned at the top of the day column instead
+   of a full-height band (which drowned out the shifts). */
+.col-off {
+  position: absolute; top: 2px; left: 2px; right: 2px; z-index: 6;
+  display: flex; flex-wrap: wrap; gap: 3px; pointer-events: none;
 }
-.cblock.timeoff .cb-name { font-weight: 700; }
+.off-tag {
+  display: inline-flex; align-items: center; gap: 2px; max-width: 100%;
+  font-size: 10px; font-weight: 600; line-height: 1; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+  color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--muted) 32%, transparent);
+  border-radius: 999px; padding: 3px 7px;
+}
+/* A shift laid over someone's approved day off — flagged, not hidden. */
+.cb-conflict {
+  display: inline-block; margin-top: 1px; font-size: 9px; font-weight: 800;
+  color: #b45309; background: color-mix(in srgb, #f59e0b 20%, var(--panel));
+  border: 1px solid color-mix(in srgb, #f59e0b 55%, transparent);
+  border-radius: 4px; padding: 0 3px; line-height: 1.4;
+}
+/* Time-off chip in the month grid */
+.mchip.timeoff {
+  background: color-mix(in srgb, var(--muted) 12%, var(--panel));
+  border-left: 2px dashed color-mix(in srgb, var(--muted) 55%, transparent);
+  color: var(--muted);
+}
 
 /* Requests panel (under the Team panel, left column) */
 .req-panel { min-width: 0; }

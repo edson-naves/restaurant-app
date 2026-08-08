@@ -102,8 +102,8 @@
           <a class="month-date" href="/schedule?view=day&date={{ day.date.isoformat() }}{% if pos %}&pos={{ pos }}{% endif %}{% if who and can('schedule.manage') %}&who={{ who }}{% endif %}">{{ day.date.day }}</a>
           <div class="month-chips">
             {% for c in day.chips %}
-            <div class="mchip {{ 'open' if c.is_open else '' }}" style="--pc:{{ c.color }}" title="{{ c.label }} {{ c.time }}">
-              <span class="mchip-label">{{ c.label }}</span><span class="mchip-time">{{ c.time }}</span>
+            <div class="mchip {{ 'open' if c.is_open else '' }} {{ 'timeoff' if c.is_timeoff else '' }}" style="--pc:{{ c.color }}" title="{% if c.is_timeoff %}{{ c.label }} — day off{% else %}{{ c.label }} {{ c.time }}{% endif %}">
+              <span class="mchip-label">{% if c.is_timeoff %}🌴 {% endif %}{{ c.label }}</span><span class="mchip-time">{{ c.time }}</span>
             </div>
             {% endfor %}
             {% if day.more %}<div class="mchip-more">+{{ day.more }} more</div>{% endif %}
@@ -132,12 +132,10 @@
         </div>
         {% for day in cal.days %}
         <div class="cal-col {{ 'is-today' if day.date == today else '' }}" style="height:calc(var(--rows) * 44px)" data-date="{{ day.date.isoformat() }}">
+          {% if day.timeoff %}
+          <div class="col-off">{% for n in day.timeoff %}<span class="off-tag" title="{{ n }} — approved day off">🌴 {{ n.split()[0] }}</span>{% endfor %}</div>
+          {% endif %}
           {% for b in day.blocks %}
-          {% if b.is_timeoff %}
-          <div class="cblock timeoff" style="top:{{ b.top_pct }}%;height:{{ b.height_pct }}%;left:calc({{ b.lane * 100 / b.lanes }}% + 1px);width:calc({{ 100 / b.lanes }}% - 2px)">
-            <div class="cb-face"><span class="cb-name">🌴 Time off</span><span class="cb-pos">{{ b.label }}</span></div>
-          </div>
-          {% else %}
           {% set pcolor = b.shift.position.color if b.shift.position else '#64748b' %}
           <div class="cblock {{ 'open-shift' if b.is_open else '' }}"
                    data-shift-id="{{ b.shift.id }}"
@@ -151,6 +149,7 @@
               <span class="cb-time">{{ b.shift.starts_at.strftime('%H:%M') }}–{{ b.shift.ends_at.strftime('%H:%M') }}</span>
               <span class="cb-name">{% if b.is_open %}OPEN SHIFT{% else %}{{ b.shift.staff.name }}{% endif %}</span>
               <span class="cb-pos">{{ b.shift.position.name if b.shift.position else b.shift.role }}</span>
+              {% if b.over_timeoff %}<span class="cb-conflict" title="Scheduled over an approved day off">⚠︎ off</span>{% endif %}
               {% if b.state == 'in' %}<span class="sbadge in">● on</span>{% elif b.state == 'done' %}<span class="sbadge done">✓</span>{% endif %}
             </div>
             {% if can('schedule.manage') %}<button type="button" class="cb-del" title="Delete shift" onclick="deleteShift(event, {{ b.shift.id }})">✕</button>{% endif %}
@@ -202,7 +201,6 @@
             </div>
             {% if can('schedule.manage') %}<div class="cb-resize" title="Drag to change hours"></div><div class="cb-extend" title="Drag across days to repeat"></div>{% endif %}
           </div>
-          {% endif %}
           {% endfor %}
         </div>
         {% endfor %}

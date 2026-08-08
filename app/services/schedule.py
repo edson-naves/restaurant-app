@@ -298,8 +298,9 @@ class CalBlock:
     lanes: int                # total lanes that day, for width
     top_off: int = 0          # minutes from the window start
     end_off: int = 0          # minutes from the window start (may exceed a day)
-    is_timeoff: bool = False  # an approved time-off band, not a shift
-    label: str = ""           # staff name for a time-off band
+    is_timeoff: bool = False  # retained for callers; time off is no longer a block
+    label: str = ""
+    over_timeoff: bool = False  # this shift falls on the person's approved day off
 
 
 @dataclass
@@ -307,6 +308,7 @@ class CalDay:
     date: date
     blocks: list[CalBlock] = field(default_factory=list)
     labor_hours: float = 0.0
+    timeoff: list[str] = field(default_factory=list)   # names off this day
 
 
 @dataclass
@@ -395,8 +397,36 @@ def _build_span(db: Session, dates: list[date], staff_list: list[Staff],
     win_start_min = win_start * 60
     span_min = max(60, (win_end - win_start) * 60)
 
+    # Approved time off in the window → who is off each day. Kept as a compact
+    # per-day marker (a small tag at the top of the column, not a full-height
+    # band, which drowned out the shifts) and used to flag any shift laid over
+    # someone's approved day off. Hidden under a position filter (time off has no
+    # position); scoped to the selected person when filtering by staff.
+    off_ids_by_day: dict[date, set[int]] = {}
+    off_names_by_day: dict[date, list[str]] = {}
+    band_ids = [only_staff_id] if only_staff_id else ids
+    if band_ids and not position_id:
+        offs = db.execute(
+            select(TimeOffRequest).where(
+                TimeOffRequest.staff_id.in_(band_ids),
+                TimeOffRequest.status == TimeOffStatus.APPROVED,
+                TimeOffRequest.starts_at < end_dt,
+                TimeOffRequest.ends_at >= start_dt,
+            )
+        ).scalars().all()
+        for off in offs:
+            d = max(off.starts_at.date(), dates[0])
+            last = min(off.ends_at.date(), dates[-1])
+            while d <= last:
+                seen = off_ids_by_day.setdefault(d, set())
+                if off.staff_id not in seen:      # dedup overlapping requests
+                    seen.add(off.staff_id)
+                    off_names_by_day.setdefault(d, []).append(off.staff.name)
+                d += timedelta(days=1)
+
     for sh in shifts:
-        idx = index.get(sh.starts_at.date())
+        the_date = sh.starts_at.date()
+        idx = index.get(the_date)
         if idx is None:
             continue
         smin = sh.starts_at.hour * 60 + sh.starts_at.minute
@@ -408,40 +438,14 @@ def _build_span(db: Session, dates: list[date], staff_list: list[Staff],
             shift=sh, state=clock_state(sh), hours=h, is_open=sh.staff_id is None,
             top_pct=0.0, height_pct=0.0, lane=0, lanes=1,
             top_off=smin - win_start_min, end_off=emin - win_start_min,
+            over_timeoff=sh.staff_id in off_ids_by_day.get(the_date, ()),
         ))
         days[idx].labor_hours += h
 
-    # Approved time off → full-height bands, so a shift laid over someone's day
-    # off is a visible conflict. Hidden when a position filter is active (bands
-    # have no position); scoped to the selected person when filtering by staff.
-    band_ids = [only_staff_id] if only_staff_id else ids
-    if band_ids and not position_id:
-        offs = db.execute(
-            select(TimeOffRequest).where(
-                TimeOffRequest.staff_id.in_(band_ids),
-                TimeOffRequest.status == TimeOffStatus.APPROVED,
-                TimeOffRequest.starts_at < end_dt,
-                TimeOffRequest.ends_at >= start_dt,
-            )
-        ).scalars().all()
-        # One band per person per day — overlapping approved requests (e.g. two
-        # requests covering the same dates) must not stack into duplicate bands.
-        seen_off: set[tuple[int, date]] = set()
-        for off in offs:
-            d = max(off.starts_at.date(), dates[0])
-            last = min(off.ends_at.date(), dates[-1])
-            while d <= last:
-                key = (off.staff_id, d)
-                if key not in seen_off:
-                    seen_off.add(key)
-                    idx = index.get(d)
-                    if idx is not None:
-                        days[idx].blocks.append(CalBlock(
-                            shift=None, state="", hours=0.0, is_open=False,
-                            top_pct=0.0, height_pct=0.0, lane=0, lanes=1,
-                            top_off=0, end_off=span_min, is_timeoff=True, label=off.staff.name,
-                        ))
-                d += timedelta(days=1)
+    for d, names in off_names_by_day.items():
+        idx = index.get(d)
+        if idx is not None:
+            days[idx].timeoff = names
 
     for day in days:
         _layout_day(day.blocks, span_min)
@@ -539,6 +543,32 @@ def build_month(db: Session, anchor: date, staff_list: list[Staff], include_open
     ).scalars().all()
 
     by_day: dict[date, list[MonthChip]] = {}
+    # Approved time off shows first on each day so "who's off" is visible in the
+    # month grid too (dedup per person per day across overlapping requests).
+    band_ids = [only_staff_id] if only_staff_id else ids
+    if band_ids and not position_id:
+        offs = db.execute(
+            select(TimeOffRequest).where(
+                TimeOffRequest.staff_id.in_(band_ids),
+                TimeOffRequest.status == TimeOffStatus.APPROVED,
+                TimeOffRequest.starts_at < end_dt,
+                TimeOffRequest.ends_at >= start_dt,
+            )
+        ).scalars().all()
+        seen_off: set[tuple[int, date]] = set()
+        for off in offs:
+            d = max(off.starts_at.date(), grid_start)
+            last = min(off.ends_at.date(), grid_end - timedelta(days=1))
+            while d <= last:
+                key = (off.staff_id, d)
+                if key not in seen_off:
+                    seen_off.add(key)
+                    by_day.setdefault(d, []).append(MonthChip(
+                        label=off.staff.name.split()[0] if off.staff else "?",
+                        time="Off", color="#94a3b8", is_timeoff=True,
+                    ))
+                d += timedelta(days=1)
+
     for sh in shifts:
         chip = MonthChip(
             label="Open" if sh.staff_id is None else (sh.staff.name.split()[0] if sh.staff else "?"),

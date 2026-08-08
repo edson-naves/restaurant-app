@@ -169,8 +169,10 @@ check(owner_c.post(f"/schedule/timeoff/{req.id}/approve", follow_redirects=False
       "owner approves the request")
 d = SessionLocal(); approved = d.get(TimeOffRequest, req.id).status == "approved"; d.close()
 check(approved, "time off is approved")
-check("cblock timeoff" in owner_c.get(f"/schedule?week={sched.week_start_of(tod).isoformat()}").text,
-      "approved time off shows as a band on the calendar")
+check("off-tag" in owner_c.get(f"/schedule?week={sched.week_start_of(tod).isoformat()}").text,
+      "approved time off shows as a tag on the calendar")
+check("— day off" in owner_c.get(f"/schedule?view=month&date={tod.isoformat()}").text,
+      "approved time off shows in the month view")
 
 # 7b. A second request overlapping an existing one is refused (no double-booking).
 r = waiter_c.post("/schedule/timeoff", follow_redirects=False,
