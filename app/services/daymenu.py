@@ -13,7 +13,7 @@ the combo as one entry at its fixed price.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -29,17 +29,41 @@ class DayMenuError(Exception):
     pass
 
 
-def resolve_for(db: Session, d: date) -> DayMenu | None:
-    """The active day menu for date `d`. A menu tied to this specific date wins
-    over a recurring weekday menu; otherwise the weekday menu (if any) applies."""
+def resolve_for(db: Session, d: date, now: datetime | None = None) -> DayMenu | None:
+    """The active day menu for date `d` at time `now` (default: current time).
+
+    A menu tied to this specific date wins over a recurring weekday menu.
+    Within each group only menus whose timeframe currently applies are eligible
+    (menus with no window are always eligible), and a time-boxed menu — e.g. a
+    happy hour — is preferred over an all-day one while its window is open."""
+    now = now or datetime.now()
+    t = now.time()
+
+    def pick(menus: list[DayMenu]) -> DayMenu | None:
+        avail = [m for m in menus if m.available_at(t)]
+        if not avail:
+            return None
+        # A menu with an explicit window is the more specific offer right now.
+        avail.sort(key=lambda m: 0 if m.start_time and m.end_time else 1)
+        return avail[0]
+
     dated = db.execute(
         select(DayMenu).where(DayMenu.is_active.is_(True), DayMenu.menu_date == d)
-    ).scalars().first()
-    if dated is not None:
-        return dated
-    return db.execute(
+    ).scalars().all()
+    weekday = db.execute(
         select(DayMenu).where(DayMenu.is_active.is_(True), DayMenu.weekday == d.weekday())
-    ).scalars().first()
+    ).scalars().all()
+    return pick(dated) or pick(weekday)
+
+
+def effective_price_cents(day_menu: DayMenu, items: list[MenuItem]) -> int:
+    """What the guest pays for this combo of chosen dishes: the menu's fixed
+    price, or the discounted à-la-carte total for a percent (happy-hour) deal."""
+    if day_menu.is_percent:
+        gross = sum(max(0, mi.price_cents) for mi in items)
+        pct = max(0, min(100, day_menu.discount_percent or 0))
+        return round(gross * (100 - pct) / 100)
+    return day_menu.price_cents
 
 
 def _apply_custom(oi: OrderItem, mi: MenuItem, cz: dict) -> None:
@@ -84,11 +108,11 @@ def add_combo_to_order(
     if not items:
         raise DayMenuError("Pick at least one course for the day menu.")
 
-    # Spread the fixed price across the components, weighted by à-la-carte price,
-    # so a $30 steak carries more of it than a $6 soup and the parts total the
-    # fixed price exactly.
+    # Spread the combo's price (fixed, or the discounted à-la-carte total for a
+    # happy-hour deal) across the components, weighted by à-la-carte price, so a
+    # $30 steak carries more of it than a $6 soup and the parts total exactly.
     weights = [max(1, mi.price_cents) for mi in items]
-    prices = distribute(day_menu.price_cents, weights)
+    prices = distribute(effective_price_cents(day_menu, items), weights)
 
     created: list[OrderItem] = []
     for mi, price in zip(items, prices):

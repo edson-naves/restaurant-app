@@ -722,7 +722,8 @@ def order_screen(
     day_menu_courses = []
     dm_mods: dict[int, list] = {}
     if order.status not in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
-        dm = daymenu.resolve_for(db, datetime.now().date())
+        _now = datetime.now()
+        dm = daymenu.resolve_for(db, _now.date(), _now)
         if dm is not None:
             by_slot: dict[int, list] = {}
             for c in dm.choices:
@@ -958,9 +959,10 @@ def add_day_menu_combo(
         raise HTTPException(404, "Order not found")
     if order.status in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
         raise HTTPException(400, "This order is closed.")
-    dm = daymenu.resolve_for(db, datetime.now().date())
+    _now = datetime.now()
+    dm = daymenu.resolve_for(db, _now.date(), _now)
     if dm is None:
-        raise HTTPException(400, "No day menu is on today.")
+        raise HTTPException(400, "No day menu is on right now.")
     seat = None
     if seat_number:
         seat = db.execute(

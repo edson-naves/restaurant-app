@@ -1044,14 +1044,25 @@ td.pending { color: var(--accent); font-weight: 700; }
 .sbadge.in { background: #16a34a; color: #fff; }
 .sbadge.done { background: color-mix(in srgb, var(--muted) 30%, transparent); }
 
+/* Left rail (Team, then Requests under it) beside the calendar hero; the wide
+   manager panels (Labor, Coverage) span a full-width row below everything. */
 .sched-wrap {
   display: grid; gap: 16px; align-items: start;
   grid-template-columns: 240px minmax(0, 1fr);
-  grid-template-areas: "team cal" "req cal" "labor cal" "cov cal";
+  grid-template-areas: "team cal" "req cal" "aux aux";
+  /* The tall calendar spans both left rows; sizing the Team row to its content
+     and giving the flex to the Requests row keeps Requests tucked right under
+     Team instead of being pushed halfway down beside the calendar. */
+  grid-template-rows: auto 1fr auto;
 }
-.team-panel { grid-area: team; }
-.labor-panel { grid-area: labor; min-width: 0; }
-.cov-panel { grid-area: cov; min-width: 0; }
+.team-panel { grid-area: team; min-width: 0; }
+.req-panel { grid-area: req; min-width: 0; }
+.sched-aux {
+  grid-area: aux; display: grid; gap: 16px; align-items: start;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+.labor-panel { min-width: 0; }
+.cov-panel { min-width: 0; }
 .labor-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .labor-kpis .lk {
   background: color-mix(in srgb, var(--muted) 10%, transparent);
@@ -1145,10 +1156,14 @@ td.pending { color: var(--accent); font-weight: 700; }
 .dm-crow .field { margin: 0; }
 .dm-crow label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
 .dm-c-name { flex: 1 1 240px; min-width: 180px; }
+.dm-c-deal { width: 130px; }
 .dm-c-price { width: 110px; }
+.dm-c-time { width: 200px; }
 .dm-c-when { width: 170px; }
 .dm-c-date { width: 170px; }
 .dm-c-btn { white-space: nowrap; }
+.dm-timerow { display: flex; align-items: center; gap: 6px; }
+.dm-timerow input[type="time"] { width: 90px; }
 
 /* Controls row */
 .dm-controls { margin: 20px 0 12px; }
@@ -1177,12 +1192,18 @@ td.pending { color: var(--accent); font-weight: 700; }
 .dm-main { display: flex; align-items: flex-start; gap: 18px; flex-wrap: wrap; }
 .dm-title-col { flex: 0 0 auto; min-width: 130px; }
 .dm-name { display: block; font-size: 17px; margin-bottom: 6px; }
-.dm-price-line { display: flex; align-items: center; gap: 8px; }
+.dm-price-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .dm-price-line .sub { line-height: 1; }
 .dm-price-pill {
   display: inline-flex; align-items: center; line-height: 1;
   font-weight: 800; font-size: 19px; color: #fff; border-radius: 999px;
   padding: 7px 16px; background: var(--bg);
+}
+.dm-time-pill {
+  display: inline-flex; align-items: center; gap: 4px; line-height: 1;
+  font-weight: 600; font-size: 12px; color: var(--muted);
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 999px; padding: 5px 11px;
 }
 
 /* INCLUDES header on top, course columns below it */
@@ -1235,6 +1256,7 @@ td.pending { color: var(--accent); font-weight: 700; }
 .daymenu-card { border: 1px solid var(--accent); margin-bottom: 16px; }
 .daymenu-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
 .daymenu-price { font-weight: 800; font-size: 18px; color: var(--accent); }
+.daymenu-time { font-weight: 600; font-size: 13px; color: var(--muted); }
 .daymenu-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; }
 .dm-course-pick { flex: 1 1 160px; min-width: 150px; display: flex; flex-direction: column; }
 .dm-pick-lbl { display: block; font-size: 11px; color: var(--muted); margin-bottom: 2px; }
@@ -1264,8 +1286,8 @@ td.pending { color: var(--accent); font-weight: 700; }
 .cal-scroll { overflow-x: auto; }
 .cal-head, .cal-body {
   display: grid;
-  grid-template-columns: 52px repeat(var(--ndays, 7), minmax(120px, 1fr));
-  min-width: calc(52px + var(--ndays, 7) * 120px);
+  grid-template-columns: 52px repeat(var(--ndays, 7), minmax(104px, 1fr));
+  min-width: calc(52px + var(--ndays, 7) * 104px);
 }
 .cal-dayhead { text-align: center; font-size: 12px; padding: 6px 2px; border-bottom: 1px solid var(--line); }
 .cal-dayhead.is-today { background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 8px 8px 0 0; }
@@ -1345,14 +1367,15 @@ td.pending { color: var(--accent); font-weight: 700; }
 .cblock.timeoff .cb-name { font-weight: 700; }
 
 /* Requests panel (under the Team panel, left column) */
-.req-panel { grid-area: req; min-width: 0; }
+.req-panel { min-width: 0; }
 .req-group { margin-top: 12px; }
 .req-title { font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
 .req-badge { background: #ef4444; color: #fff; border-radius: 10px; padding: 0 6px; font-size: 11px; }
 .req-card { border: 1px solid var(--line); border-radius: 8px; padding: 8px; margin-bottom: 6px; display: flex; flex-direction: column; gap: 4px; }
 .req-card .pill { align-self: flex-start; }
 .req-act { display: flex; gap: 6px; }
-.req-form summary { width: 100%; }
+.req-form { margin-top: 10px; }
+.req-form summary { display: flex; width: 100%; box-sizing: border-box; }
 .req-form label { min-width: 0; }
 .req-form input[type="text"] { width: 100%; min-width: 0; box-sizing: border-box; }
 /* Month/day pickers — no year, so a short-notice request never asks for one. */
@@ -1425,5 +1448,5 @@ input.pos-name { flex: none; width: 190px; max-width: 60vw; }
 .cblock:hover .cb-del, .cblock.menu-open .cb-del { opacity: 1; pointer-events: auto; }
 
 @media (max-width: 900px) {
-  .sched-wrap { grid-template-columns: 1fr; grid-template-areas: "team" "cal" "req" "labor" "cov"; }
+  .sched-wrap { grid-template-columns: 1fr; grid-template-areas: "team" "cal" "req" "aux"; grid-template-rows: none; }
 }

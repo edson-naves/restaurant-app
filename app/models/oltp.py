@@ -4,7 +4,7 @@ This is the operational side of the system: what waiters, kitchen staff and
 the delivery coordinator touch during service. It is the source of truth and
 the source system for the dimensional model in star.py.
 """
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from sqlalchemy import (
     Boolean,
@@ -494,6 +494,15 @@ class DayMenu(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     price_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Pricing model: "fixed" charges price_cents for the whole combo; "percent"
+    # takes discount_percent off the combined à-la-carte price of the chosen
+    # courses (a happy-hour deal).
+    discount_type: Mapped[str] = mapped_column(String(10), default="fixed", nullable=False)
+    discount_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Optional "HH:MM" window: when both are set, the menu is only orderable
+    # between them (e.g. happy hour 16:00–18:00). NULL = available all day.
+    start_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    end_time: Mapped[str | None] = mapped_column(String(5), nullable=True)
     menu_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     weekday: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -513,6 +522,36 @@ class DayMenu(Base):
             if c.course not in seen:
                 seen.append(c.course)
         return sorted(seen)
+
+    @property
+    def is_percent(self) -> bool:
+        return self.discount_type == "percent"
+
+    @property
+    def offer_label(self) -> str:
+        """Short human label for the deal — a percentage or the fixed price."""
+        if self.is_percent:
+            return f"{self.discount_percent or 0}% off"
+        return f"${self.price_cents / 100:,.2f} fixed"
+
+    @property
+    def time_label(self) -> str:
+        """The timeframe as a readable 12-hour range, or '' when it runs all day."""
+        def fmt(hm: str) -> str:
+            h, m = (int(x) for x in hm.split(":"))
+            ap = "AM" if h < 12 else "PM"
+            h12 = h % 12 or 12
+            return f"{h12}:{m:02d} {ap}"
+        if self.start_time and self.end_time:
+            return f"{fmt(self.start_time)}–{fmt(self.end_time)}"
+        return ""
+
+    def available_at(self, t: time) -> bool:
+        """Whether this menu is orderable at wall-clock time `t`. A menu with no
+        window is always available; otherwise `t` must fall inside [start, end)."""
+        if not self.start_time or not self.end_time:
+            return True
+        return self.start_time <= f"{t.hour:02d}:{t.minute:02d}" < self.end_time
 
 
 class DayMenuChoice(Base):

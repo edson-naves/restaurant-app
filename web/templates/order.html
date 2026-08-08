@@ -165,7 +165,8 @@
 <div class="card daymenu-card">
   <div class="daymenu-head">
     <h2 style="margin:0">🍽 {{ active_day_menu.name }}</h2>
-    <span class="daymenu-price">${{ active_day_menu.price_cents|money }} fixed</span>
+    <span class="daymenu-price">{{ active_day_menu.offer_label }}</span>
+    {% if active_day_menu.time_label %}<span class="daymenu-time">🕑 {{ active_day_menu.time_label }}</span>{% endif %}
     <span class="sub" style="margin:0">pick one per course · adds to {{ 'the table' if active_seat == 0 else 'seat ' ~ active_seat }}</span>
   </div>
   <form method="post" action="/orders/{{ order.id }}/day-menu" class="daymenu-form" onsubmit="return dmCollect(this)">
@@ -179,7 +180,7 @@
       <details class="dm-cust"><summary>Customize</summary><div class="dm-cust-body"></div></details>
     </div>
     {% endfor %}
-    <button class="btn primary daymenu-add">Add · ${{ active_day_menu.price_cents|money }}</button>
+    <button class="btn primary daymenu-add">Add · {% if active_day_menu.is_percent %}{{ active_day_menu.discount_percent }}% off{% else %}${{ active_day_menu.price_cents|money }}{% endif %}</button>
   </form>
 </div>
 <script>

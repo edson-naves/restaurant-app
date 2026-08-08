@@ -17,7 +17,17 @@
   <div class="dm-create-h">✦ Create new menu</div>
   <form method="post" action="/admin/day-menus/create" class="dm-crow">
     <div class="field dm-c-name"><label>Menu name</label><input type="text" name="name" placeholder="e.g. Sunday Roast" required></div>
-    <div class="field dm-c-price"><label>Price ($)</label><input type="number" name="price" step="0.01" min="0" placeholder="45.00" required></div>
+    <div class="field dm-c-deal"><label>Deal</label>
+      <select name="discount_type" onchange="dmOffer(this)">
+        <option value="fixed">Fixed price</option>
+        <option value="percent">% discount</option>
+      </select>
+    </div>
+    <div class="field dm-c-price dm-fixed"><label>Price ($)</label><input type="number" name="price" step="0.01" min="0" placeholder="45.00"></div>
+    <div class="field dm-c-price dm-percent" style="display:none"><label>Discount (%)</label><input type="number" name="discount_percent" step="1" min="1" max="100" placeholder="25"></div>
+    <div class="field dm-c-time"><label>Happy hour (optional)</label>
+      <div class="dm-timerow"><input type="time" name="start_time"> <span class="sub">to</span> <input type="time" name="end_time"></div>
+    </div>
     <div class="field dm-c-when"><label>When</label>
       <select name="schedule_kind" onchange="dmToggle(this)">
         <option value="date">Specific date</option>
@@ -63,7 +73,10 @@
     <div class="dm-main">
       <div class="dm-title-col">
         <b class="dm-name">{{ dm.name }}</b>
-        <div class="dm-price-line"><span class="dm-price-pill" style="--bg:{{ color }}">${{ dm.price_cents|money }}</span></div>
+        <div class="dm-price-line">
+          <span class="dm-price-pill" style="--bg:{{ color }}">{% if dm.is_percent %}{{ dm.discount_percent }}% off{% else %}${{ dm.price_cents|money }}{% endif %}</span>
+          {% if dm.time_label %}<span class="dm-time-pill">🕑 {{ dm.time_label }}</span>{% endif %}
+        </div>
       </div>
 
       <div class="dm-includes">
@@ -99,7 +112,17 @@
   <div class="dm-edit" id="dm-edit-{{ dm.id }}" hidden>
     <form method="post" action="/admin/day-menus/{{ dm.id }}/edit" class="dm-crow">
       <div class="field dm-c-name"><label>Menu name</label><input type="text" name="name" value="{{ dm.name }}" required></div>
-      <div class="field dm-c-price"><label>Price ($)</label><input type="number" name="price" step="0.01" min="0" value="{{ '%.2f'|format(dm.price_cents / 100) }}" required></div>
+      <div class="field dm-c-deal"><label>Deal</label>
+        <select name="discount_type" onchange="dmOffer(this)">
+          <option value="fixed" {{ 'selected' if not dm.is_percent else '' }}>Fixed price</option>
+          <option value="percent" {{ 'selected' if dm.is_percent else '' }}>% discount</option>
+        </select>
+      </div>
+      <div class="field dm-c-price dm-fixed" style="{{ 'display:none' if dm.is_percent else '' }}"><label>Price ($)</label><input type="number" name="price" step="0.01" min="0" value="{{ '%.2f'|format(dm.price_cents / 100) }}"></div>
+      <div class="field dm-c-price dm-percent" style="{{ '' if dm.is_percent else 'display:none' }}"><label>Discount (%)</label><input type="number" name="discount_percent" step="1" min="1" max="100" value="{{ dm.discount_percent if dm.discount_percent else '' }}"></div>
+      <div class="field dm-c-time"><label>Happy hour (optional)</label>
+        <div class="dm-timerow"><input type="time" name="start_time" value="{{ dm.start_time or '' }}"> <span class="sub">to</span> <input type="time" name="end_time" value="{{ dm.end_time or '' }}"></div>
+      </div>
       <div class="field dm-c-when"><label>When</label>
         <select name="schedule_kind" onchange="dmToggle(this)">
           <option value="date" {{ 'selected' if dm.menu_date else '' }}>Specific date</option>
@@ -158,6 +181,13 @@ function dmToggle(sel){
   const wd = sel.value === 'weekday';
   d.style.display = wd ? 'none' : ''; w.style.display = wd ? '' : 'none';
 }
+function dmOffer(sel){
+  const form = sel.closest('form');
+  const fixed = form.querySelector('.dm-fixed'), pct = form.querySelector('.dm-percent');
+  if(!fixed||!pct) return;
+  const isPct = sel.value === 'percent';
+  fixed.style.display = isPct ? 'none' : ''; pct.style.display = isPct ? '' : 'none';
+}
 function dmEdit(id){
   const p = document.getElementById('dm-edit-' + id);
   if(p) p.hidden = !p.hidden;
@@ -206,6 +236,18 @@ function dmRenderCal(){
   h += '</div></div>';
   cal.innerHTML = h;
 }
-document.querySelectorAll('.dm-addrow select[name="course"]').forEach(dmFillItems);
+// Course picker: remember the last course chosen per menu across the reload
+// that follows adding an option, instead of snapping back to the first course.
+document.querySelectorAll('.dm-addrow').forEach(function(form){
+  const sel = form.querySelector('select[name="course"]');
+  if(!sel) return;
+  const key = 'dmCourse:' + form.action;
+  const saved = sessionStorage.getItem(key);
+  if(saved && sel.querySelector('option[value="' + saved + '"]')) sel.value = saved;
+  const remember = function(){ sessionStorage.setItem(key, sel.value); };
+  sel.addEventListener('change', remember);
+  form.addEventListener('submit', remember);
+  dmFillItems(sel);
+});
 </script>
 {% endblock %}

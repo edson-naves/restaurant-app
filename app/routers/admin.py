@@ -1612,6 +1612,45 @@ def _parse_schedule(kind: str, menu_date: str, weekday: str) -> tuple[date | Non
     return d, None
 
 
+def _parse_time(value: str, field: str) -> str | None:
+    """A blank stays None; otherwise validate and normalise an "HH:MM" time."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%H:%M").strftime("%H:%M")
+    except ValueError:
+        raise HTTPException(400, f"Enter a valid {field} time (HH:MM).")
+
+
+def _parse_offer(
+    discount_type: str, price: str, discount_percent: str,
+    start_time: str, end_time: str,
+) -> tuple[str, int, int | None, str | None, str | None]:
+    """Resolve the pricing model (fixed price or % discount) and the optional
+    time window. Returns (discount_type, price_cents, percent, start, end)."""
+    kind = "percent" if discount_type == "percent" else "fixed"
+    percent: int | None = None
+    price_cents = 0
+    if kind == "percent":
+        try:
+            percent = int((discount_percent or "").strip())
+        except (TypeError, ValueError):
+            raise HTTPException(400, "Enter a discount between 1 and 100%.")
+        if not (1 <= percent <= 100):
+            raise HTTPException(400, "Discount must be between 1 and 100%.")
+    else:
+        price_cents = _cents(price, "Price")
+
+    start = _parse_time(start_time, "start")
+    end = _parse_time(end_time, "end")
+    if (start is None) != (end is None):
+        raise HTTPException(400, "Set both a start and end time, or neither.")
+    if start is not None and start >= end:
+        raise HTTPException(400, "The end time must be after the start time.")
+    return kind, price_cents, percent, start, end
+
+
 @router.get("/day-menus")
 def day_menus_page(
     request: Request,
@@ -1649,7 +1688,11 @@ def day_menus_page(
 @router.post("/day-menus/create")
 def create_day_menu(
     name: str = Form(...),
-    price: str = Form(...),
+    price: str = Form("0"),
+    discount_type: str = Form("fixed"),
+    discount_percent: str = Form(""),
+    start_time: str = Form(""),
+    end_time: str = Form(""),
     schedule_kind: str = Form("date"),
     menu_date: str = Form(""),
     weekday: str = Form(""),
@@ -1660,8 +1703,11 @@ def create_day_menu(
     if not name:
         raise HTTPException(400, "A day-menu name is required.")
     d, wd = _parse_schedule(schedule_kind, menu_date, weekday)
+    kind, price_cents, percent, start, end = _parse_offer(
+        discount_type, price, discount_percent, start_time, end_time)
     db.add(DayMenu(
-        name=name, price_cents=_cents(price, "Price"),
+        name=name, price_cents=price_cents, discount_type=kind,
+        discount_percent=percent, start_time=start, end_time=end,
         menu_date=d, weekday=wd, is_active=True,
     ))
     db.commit()
@@ -1672,7 +1718,11 @@ def create_day_menu(
 def edit_day_menu(
     menu_id: int,
     name: str = Form(...),
-    price: str = Form(...),
+    price: str = Form("0"),
+    discount_type: str = Form("fixed"),
+    discount_percent: str = Form(""),
+    start_time: str = Form(""),
+    end_time: str = Form(""),
     schedule_kind: str = Form("date"),
     menu_date: str = Form(""),
     weekday: str = Form(""),
@@ -1686,8 +1736,14 @@ def edit_day_menu(
     if not name:
         raise HTTPException(400, "A day-menu name is required.")
     d, wd = _parse_schedule(schedule_kind, menu_date, weekday)
+    kind, price_cents, percent, start, end = _parse_offer(
+        discount_type, price, discount_percent, start_time, end_time)
     dm.name = name
-    dm.price_cents = _cents(price, "Price")
+    dm.price_cents = price_cents
+    dm.discount_type = kind
+    dm.discount_percent = percent
+    dm.start_time = start
+    dm.end_time = end
     dm.menu_date = d
     dm.weekday = wd          # active is controlled by the toggle switch, not here
     db.commit()

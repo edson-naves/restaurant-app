@@ -70,6 +70,13 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # à-la-carte line, so existing rows keep behaving exactly as before.
     ("order_item", "combo_id", "INTEGER"),
     ("order_item", "combo_name", "VARCHAR(80) NOT NULL DEFAULT ''"),
+    # Day-menu happy-hour pricing + timeframe. Defaulting discount_type to
+    # 'fixed' keeps every existing menu at its stored price_cents; the percent
+    # and time columns are NULL (all-day, no discount) until a menu opts in.
+    ("day_menu", "discount_type", "VARCHAR(10) NOT NULL DEFAULT 'fixed'"),
+    ("day_menu", "discount_percent", "INTEGER"),
+    ("day_menu", "start_time", "VARCHAR(5)"),
+    ("day_menu", "end_time", "VARCHAR(5)"),
     # A swap request can now propose a new day/time for the shift (reschedule).
     # TIMESTAMP (not DATETIME) — DATETIME is not a Postgres type; TIMESTAMP works
     # on both Postgres and SQLite, so the ADD COLUMN succeeds on the live DB.
