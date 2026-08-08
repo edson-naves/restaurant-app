@@ -325,7 +325,6 @@
   </aside>
 
   {% if labor %}
-  <div class="sched-aux">
   <aside class="labor-panel card">
     <h3 style="margin:0 0 10px">Labor summary</h3>
     <div class="labor-kpis">
@@ -367,7 +366,6 @@
       {% if not labor.open_count and not labor.is_high and not labor.uncovered %}<div class="cov ok">✓ No coverage issues this week.</div>{% endif %}
     </div>
   </aside>
-  </div><!-- /sched-aux -->
   {% endif %}
 </div>
 

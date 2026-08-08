@@ -1049,20 +1049,17 @@ td.pending { color: var(--accent); font-weight: 700; }
 .sched-wrap {
   display: grid; gap: 16px; align-items: start;
   grid-template-columns: 240px minmax(0, 1fr);
-  grid-template-areas: "team cal" "req cal" "aux aux";
-  /* The tall calendar spans both left rows; sizing the Team row to its content
-     and giving the flex to the Requests row keeps Requests tucked right under
-     Team instead of being pushed halfway down beside the calendar. */
-  grid-template-rows: auto 1fr auto;
+  /* Everything but the calendar stacks in the left rail (Team, Requests, then
+     the manager's Labor and Coverage panels). The tall calendar spans all rows;
+     content-sized rows plus a trailing 1fr keep the panels tucked to the top
+     with the slack pooled at the bottom — no gaps between them. */
+  grid-template-areas: "team cal" "req cal" "labor cal" "cov cal";
+  grid-template-rows: auto auto auto 1fr;
 }
 .team-panel { grid-area: team; min-width: 0; }
 .req-panel { grid-area: req; min-width: 0; }
-.sched-aux {
-  grid-area: aux; display: grid; gap: 16px; align-items: start;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-}
-.labor-panel { min-width: 0; }
-.cov-panel { min-width: 0; }
+.labor-panel { grid-area: labor; min-width: 0; }
+.cov-panel { grid-area: cov; min-width: 0; }
 .labor-kpis { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .labor-kpis .lk {
   background: color-mix(in srgb, var(--muted) 10%, transparent);
@@ -1426,6 +1423,9 @@ input.pos-name { flex: none; width: 190px; max-width: 60vw; }
 .cal-body[data-manage="1"] .cb-face { cursor: grab; }
 .cal-body[data-manage="1"] .cb-face:active { cursor: grabbing; }
 .cal-col-over { outline: 2px dashed var(--accent); outline-offset: -2px; background-color: color-mix(in srgb, var(--accent) 10%, transparent); }
+/* While dragging a teammate/shift, don't let the page text get selected. */
+body.drag-active { cursor: grabbing; }
+body.drag-active, body.drag-active * { user-select: none; -webkit-user-select: none; }
 .cal-ghost {
   position: fixed; z-index: 1000; pointer-events: none; border-radius: 7px;
   font-size: 11px; padding: 3px 6px; line-height: 1.25; opacity: .92; overflow: hidden;
@@ -1467,5 +1467,5 @@ input.pos-name { flex: none; width: 190px; max-width: 60vw; }
 .cblock:hover .cb-del, .cblock.menu-open .cb-del { opacity: 1; pointer-events: auto; }
 
 @media (max-width: 900px) {
-  .sched-wrap { grid-template-columns: 1fr; grid-template-areas: "team" "cal" "req" "aux"; grid-template-rows: none; }
+  .sched-wrap { grid-template-columns: 1fr; grid-template-areas: "team" "cal" "req" "labor" "cov"; grid-template-rows: none; }
 }

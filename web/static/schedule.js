@@ -69,6 +69,10 @@
   var drag = null;
 
   function beginDrag(type, source, e, data) {
+    // Stop the browser from starting a native text selection as the pointer
+    // moves — otherwise grabbing a teammate highlights the whole page.
+    if (e.cancelable) e.preventDefault();
+    document.body.classList.add("drag-active");
     var ghost = document.createElement("div");
     ghost.className = "cal-ghost" + (type === "new" ? " new" : "");
     var w = 150, h = 40, dur = DEFAULT_MIN, name = data.name || "New shift";
@@ -133,6 +137,7 @@
   function onDragUp(e) {
     document.removeEventListener("pointermove", onDragMove);
     document.removeEventListener("pointerup", onDragUp);
+    document.body.classList.remove("drag-active");
     var d = drag; drag = null;
     clearOver();
     if (!d) return;
