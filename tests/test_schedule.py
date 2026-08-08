@@ -52,7 +52,7 @@ other = db.query(Staff).filter(
 server_pos = db.query(Position).filter(Position.name == "Server").first()
 check(server_pos is not None, "default positions seeded (Server exists)")
 pos_id = server_pos.id if server_pos else 0
-mon = sched.monday_of(date.today())
+mon = sched.week_start_of(date.today())
 day = mon.isoformat()
 win_start = datetime(mon.year, mon.month, mon.day)
 win_end = win_start + timedelta(days=7)
@@ -169,8 +169,13 @@ check(owner_c.post(f"/schedule/timeoff/{req.id}/approve", follow_redirects=False
       "owner approves the request")
 d = SessionLocal(); approved = d.get(TimeOffRequest, req.id).status == "approved"; d.close()
 check(approved, "time off is approved")
-check("cblock timeoff" in owner_c.get(f"/schedule?week={sched.monday_of(tod).isoformat()}").text,
+check("cblock timeoff" in owner_c.get(f"/schedule?week={sched.week_start_of(tod).isoformat()}").text,
       "approved time off shows as a band on the calendar")
+
+# 7b. A second request overlapping an existing one is refused (no double-booking).
+r = waiter_c.post("/schedule/timeoff", follow_redirects=False,
+                  data={"start_month": tod.month, "start_day": tod.day, "reason": "dup"})
+check(r.status_code == 400, "a second overlapping time-off request is refused", r.status_code)
 
 # 8. Swap: waiter offers their shift to `other`; owner approves → reassigned.
 r = waiter_c.post(f"/schedule/shifts/{sh.id}/swap", follow_redirects=False,

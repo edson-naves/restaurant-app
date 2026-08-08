@@ -126,7 +126,7 @@ def schedule_page(
         "focus": focus, "today": today,
         # The team panel renders in every view, so it's built once here rather
         # than pulled off the (view-specific) calendar object.
-        "team": sched.team_for(db, sched.monday_of(focus), staff_list),
+        "team": sched.team_for(db, sched.week_start_of(focus), staff_list),
         "pos": pos, "who": who,
         "week_url": url("week", focus), "day_url": url("day", focus),
         "month_url": url("month", focus), "today_url": url(view, today),
@@ -155,7 +155,7 @@ def schedule_page(
                    prev_url=url("day", focus - timedelta(days=1)),
                    next_url=url("day", focus + timedelta(days=1)))
     else:
-        week_start = sched.monday_of(focus)
+        week_start = sched.week_start_of(focus)
         cal = sched.build_calendar(db, week_start, staff_list, include_open=manage,
                                    position_id=position_id, only_staff_id=only_staff_id)
         end = week_start + timedelta(days=6)
@@ -210,7 +210,7 @@ def set_forecast(
         else:
             row.forecast_cents = cents
     db.commit()
-    return RedirectResponse(f"/schedule?week={week or sched.monday_of(datetime.now().date()).isoformat()}", status_code=303)
+    return RedirectResponse(f"/schedule?week={week or sched.week_start_of(datetime.now().date()).isoformat()}", status_code=303)
 
 
 @router.get("/schedule/pending-count")
@@ -269,10 +269,24 @@ def file_timeoff(
             e = _make(end_month, end_day, s.year + 1)
     else:
         e = s
+    starts = datetime(s.year, s.month, s.day)
+    ends = datetime(e.year, e.month, e.day, 23, 59, 59)
+    # One live request per period — block a second overlapping pending/approved
+    # request for the same person (so they can't be "booked off" twice).
+    dup = sched.overlapping_timeoff(db, staff.id, starts, ends)
+    if dup is not None:
+        span = dup.starts_at.strftime('%b %d') + (
+            f"–{dup.ends_at.strftime('%b %d')}" if dup.ends_at.date() != dup.starts_at.date() else ""
+        )
+        raise HTTPException(
+            400,
+            f"You already have time off {dup.status} for {span}. "
+            f"Edit or cancel that request instead of filing another.",
+        )
     db.add(TimeOffRequest(
         staff_id=staff.id,
-        starts_at=datetime(s.year, s.month, s.day),
-        ends_at=datetime(e.year, e.month, e.day, 23, 59, 59),
+        starts_at=starts,
+        ends_at=ends,
         reason=reason.strip(),
     ))
     db.commit()
@@ -298,7 +312,7 @@ def _decide_timeoff(db, staff, req_id, status, force=False) -> RedirectResponse:
     req.decided_by_id = staff.id
     db.commit()
     return RedirectResponse(
-        f"/schedule?week={sched.monday_of(req.starts_at.date()).isoformat()}", status_code=303
+        f"/schedule?week={sched.week_start_of(req.starts_at.date()).isoformat()}", status_code=303
     )
 
 
@@ -343,7 +357,7 @@ def request_swap(
     ))
     db.commit()
     return RedirectResponse(
-        f"/schedule?week={sched.monday_of(shift.starts_at.date()).isoformat()}&requested=swap",
+        f"/schedule?week={sched.week_start_of(shift.starts_at.date()).isoformat()}&requested=swap",
         status_code=303,
     )
 
@@ -371,7 +385,7 @@ def propose_shift_change(
     ))
     db.commit()
     return RedirectResponse(
-        f"/schedule?week={sched.monday_of(shift.starts_at.date()).isoformat()}&requested=swap",
+        f"/schedule?week={sched.week_start_of(shift.starts_at.date()).isoformat()}&requested=swap",
         status_code=303,
     )
 
@@ -408,7 +422,7 @@ def approve_swap(
     sw.decided_by_id = staff.id
     db.commit()
     return RedirectResponse(
-        f"/schedule?week={sched.monday_of(shift.starts_at.date()).isoformat()}", status_code=303
+        f"/schedule?week={sched.week_start_of(shift.starts_at.date()).isoformat()}", status_code=303
     )
 
 
@@ -465,7 +479,7 @@ def create_shift(
     ))
     db.commit()
     return RedirectResponse(
-        f"/schedule?week={sched.monday_of(starts.date()).isoformat()}", status_code=303
+        f"/schedule?week={sched.week_start_of(starts.date()).isoformat()}", status_code=303
     )
 
 
@@ -497,7 +511,7 @@ def edit_shift(
     shift.notes = notes.strip()
     db.commit()
     return RedirectResponse(
-        f"/schedule?week={sched.monday_of(starts.date()).isoformat()}", status_code=303
+        f"/schedule?week={sched.week_start_of(starts.date()).isoformat()}", status_code=303
     )
 
 
@@ -539,7 +553,7 @@ def repeat_shift(
         ))
     db.commit()
     return RedirectResponse(
-        f"/schedule?week={sched.monday_of(src.starts_at.date()).isoformat()}", status_code=303
+        f"/schedule?week={sched.week_start_of(src.starts_at.date()).isoformat()}", status_code=303
     )
 
 
@@ -551,7 +565,7 @@ def delete_shift(
 ):
     shift = db.get(Shift, shift_id)
     if shift is not None:
-        week = sched.monday_of(shift.starts_at.date()).isoformat()
+        week = sched.week_start_of(shift.starts_at.date()).isoformat()
         db.delete(shift)
         db.commit()
     else:
@@ -576,7 +590,7 @@ def _clock(db: Session, staff: Staff, shift_id: int, out: bool) -> RedirectRespo
         shift.clock_out_at = None      # re-clocking in clears a prior clock-out
     db.commit()
     return RedirectResponse(
-        f"/schedule?week={sched.monday_of(shift.starts_at.date()).isoformat()}",
+        f"/schedule?week={sched.week_start_of(shift.starts_at.date()).isoformat()}",
         status_code=303,
     )
 

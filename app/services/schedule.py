@@ -161,21 +161,21 @@ def ensure_default_positions(db: Session) -> None:
 # Week math
 # --------------------------------------------------------------------------
 
-def monday_of(d: date) -> date:
-    """The Monday on or before d (weeks run Monday..Sunday)."""
-    return d - timedelta(days=d.weekday())
+def week_start_of(d: date) -> date:
+    """The Sunday on or before d (weeks run Sunday..Saturday)."""
+    return d - timedelta(days=(d.weekday() + 1) % 7)
 
 
 def week_start_for(param: str | None) -> date:
     """Resolve the ?week= param (any YYYY-MM-DD in the week) to that week's
-    Monday; falls back to the current week for a missing/garbage value."""
+    start (Sunday); falls back to the current week for a missing/garbage value."""
     base = date.today()
     if param:
         try:
             base = datetime.strptime(param, "%Y-%m-%d").date()
         except ValueError:
             pass
-    return monday_of(base)
+    return week_start_of(base)
 
 
 def week_days(week_start: date) -> list[date]:
@@ -226,6 +226,24 @@ def overlaps(
     )
     if exclude_id is not None:
         q = q.where(Shift.id != exclude_id)
+    return db.execute(q).scalars().first()
+
+
+def overlapping_timeoff(
+    db: Session, staff_id: int, starts_at: datetime, ends_at: datetime,
+    exclude_id: int | None = None,
+) -> TimeOffRequest | None:
+    """A still-live (pending or approved) time-off request for this staff that
+    overlaps [starts_at, ends_at), or None — used to stop the same person filing
+    two requests for the same dates."""
+    q = select(TimeOffRequest).where(
+        TimeOffRequest.staff_id == staff_id,
+        TimeOffRequest.status.in_((TimeOffStatus.PENDING, TimeOffStatus.APPROVED)),
+        TimeOffRequest.starts_at < ends_at,
+        TimeOffRequest.ends_at > starts_at,
+    )
+    if exclude_id is not None:
+        q = q.where(TimeOffRequest.id != exclude_id)
     return db.execute(q).scalars().first()
 
 
@@ -406,23 +424,29 @@ def _build_span(db: Session, dates: list[date], staff_list: list[Staff],
                 TimeOffRequest.ends_at >= start_dt,
             )
         ).scalars().all()
+        # One band per person per day — overlapping approved requests (e.g. two
+        # requests covering the same dates) must not stack into duplicate bands.
+        seen_off: set[tuple[int, date]] = set()
         for off in offs:
             d = max(off.starts_at.date(), dates[0])
             last = min(off.ends_at.date(), dates[-1])
             while d <= last:
-                idx = index.get(d)
-                if idx is not None:
-                    days[idx].blocks.append(CalBlock(
-                        shift=None, state="", hours=0.0, is_open=False,
-                        top_pct=0.0, height_pct=0.0, lane=0, lanes=1,
-                        top_off=0, end_off=span_min, is_timeoff=True, label=off.staff.name,
-                    ))
+                key = (off.staff_id, d)
+                if key not in seen_off:
+                    seen_off.add(key)
+                    idx = index.get(d)
+                    if idx is not None:
+                        days[idx].blocks.append(CalBlock(
+                            shift=None, state="", hours=0.0, is_open=False,
+                            top_pct=0.0, height_pct=0.0, lane=0, lanes=1,
+                            top_off=0, end_off=span_min, is_timeoff=True, label=off.staff.name,
+                        ))
                 d += timedelta(days=1)
 
     for day in days:
         _layout_day(day.blocks, span_min)
 
-    week_start = monday_of(dates[0])
+    week_start = week_start_of(dates[0])
     team_hours = _week_hours(db, week_start, ids)
     team = [TeamMember(staff=m, weekly_hours=team_hours.get(m.id, 0.0)) for m in staff_list]
     return Calendar(
@@ -491,11 +515,11 @@ def _first_of_next_month(d: date) -> date:
 def build_month(db: Session, anchor: date, staff_list: list[Staff], include_open: bool,
                 position_id: int | None = None, only_staff_id: int | None = None,
                 max_chips: int = 4) -> MonthView:
-    """A month grid (Mon-first weeks) with each day's shifts as coloured chips."""
+    """A month grid (Sun-first weeks) with each day's shifts as coloured chips."""
     first = anchor.replace(day=1)
     last = _first_of_next_month(first) - timedelta(days=1)
-    grid_start = monday_of(first)
-    grid_end = monday_of(last) + timedelta(days=7)      # exclusive; whole weeks
+    grid_start = week_start_of(first)
+    grid_end = week_start_of(last) + timedelta(days=7)   # exclusive; whole weeks
     n_days = (grid_end - grid_start).days
     today = date.today()
 

@@ -94,7 +94,7 @@
     {% if view == 'month' %}
     <div class="month-grid">
       <div class="month-head">
-        {% for d in ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}<div class="mh">{{ d }}</div>{% endfor %}
+        {% for d in ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] %}<div class="mh">{{ d }}</div>{% endfor %}
       </div>
       <div class="month-body">
         {% for week in month.weeks %}{% for day in week %}
@@ -217,7 +217,7 @@
     </div>
   </div>
 
-  <!-- Requests panel -->
+  <!-- Requests panel (left rail, under Team) -->
   <aside class="req-panel card">
     <div class="between" style="margin:0 0 10px">
       <h3 style="margin:0">Requests</h3>
@@ -327,6 +327,7 @@
   </aside>
 
   {% if labor %}
+  <div class="sched-aux">
   <aside class="labor-panel card">
     <h3 style="margin:0 0 10px">Labor summary</h3>
     <div class="labor-kpis">
@@ -368,6 +369,7 @@
       {% if not labor.open_count and not labor.is_high and not labor.uncovered %}<div class="cov ok">✓ No coverage issues this week.</div>{% endif %}
     </div>
   </aside>
+  </div><!-- /sched-aux -->
   {% endif %}
 </div>
 

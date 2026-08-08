@@ -250,10 +250,14 @@
   // away or making you hit refresh.
   function sendForm(f, forced) {
     var act = f.getAttribute("action") || "";
-    var flash = null;
+    var flash = null, decided = false;
     if (act === "/schedule/timeoff") flash = "✓ Time-off request sent for approval";
     else if (act === "/schedule/propose") flash = "✓ Shift-change request sent for approval";
     else if (/\/shifts\/\d+\/swap$/.test(act)) flash = "✓ Swap request sent";
+    else if (/\/(approve|deny)$/.test(act)) {
+      decided = true;
+      flash = /\/approve$/.test(act) ? "✓ Request approved" : "✕ Request denied";
+    }
     var fd = new FormData(f);
     if (forced) fd.set("force", "1");
     fetch(f.action, { method: "POST", body: fd, headers: { "Accept": "application/json" } })
@@ -263,8 +267,21 @@
             if (window.confirm(j.detail || "This conflicts. Proceed anyway?")) sendForm(f, true);
           }).catch(function () { location.reload(); });
         }
+        // A rejection (e.g. a duplicate time-off request) — show the reason and
+        // leave the form as it is, rather than falsely flashing "sent".
+        if (!r.ok) {
+          return r.json().then(function (j) {
+            var msg = (j && j.detail) ? j.detail : "That request couldn't be completed.";
+            if (window.rmsToast) window.rmsToast("⚠ " + msg); else window.alert(msg);
+          }).catch(function () { location.reload(); });
+        }
         if (flash) { try { sessionStorage.setItem("rms-flash", flash); } catch (e2) {} }
-        location.reload();
+        // Approve/deny redirects to the affected week — follow it so the manager
+        // lands where the change is visible (the reassigned shift, the moved
+        // shift, or the time-off band), rather than reloading the current week
+        // where nothing appears to have changed.
+        if (decided && r.redirected && r.url) location.href = r.url;
+        else location.reload();
       })
       .catch(function () { location.reload(); });
   }
