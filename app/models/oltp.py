@@ -907,6 +907,149 @@ class PaymentAllocation(Base):
     __table_args__ = (Index("ix_alloc_item", "order_item_id"),)
 
 
+class PaymentAttemptStatus:
+    """Lifecycle of a durable payment attempt (audit findings #1–#5).
+
+    An attempt is written and committed *before* the external processor is
+    contacted, so a Square success can never be lost if the browser, network, or
+    server dies before local settlement. Terminal states are SETTLED, FAILED,
+    CANCELLED, and REFUNDED; REQUIRES_RECONCILIATION is a parking state for a
+    recovery worker/human when local and processor truth may disagree.
+    """
+    CREATED = "created"                       # persisted, processor not yet called
+    PROCESSOR_PENDING = "processor_pending"   # checkout sent to Square/terminal
+    PROCESSOR_APPROVED = "processor_approved" # Square reports captured/approved
+    SETTLED = "settled"                       # internal Payment written exactly once
+    FAILED = "failed"                         # processor declined / gave up
+    CANCELLED = "cancelled"                   # cancelled before capture
+    REFUND_PENDING = "refund_pending"         # refund sent to processor
+    REFUNDED = "refunded"                     # processor confirmed refund
+    REQUIRES_RECONCILIATION = "requires_reconciliation"  # needs recovery/manual
+
+    TERMINAL = frozenset({SETTLED, FAILED, CANCELLED, REFUNDED})
+
+
+# Allowed forward transitions. Anything not listed is rejected by
+# services.payment_attempts.transition(), so an attempt can never skip straight
+# from CREATED to SETTLED without a recorded processor outcome, and a terminal
+# state (except SETTLED→refund flow) cannot be reopened.
+PAYMENT_ATTEMPT_TRANSITIONS: dict[str, set[str]] = {
+    PaymentAttemptStatus.CREATED: {
+        PaymentAttemptStatus.PROCESSOR_PENDING,
+        PaymentAttemptStatus.CANCELLED,
+        PaymentAttemptStatus.FAILED,
+        PaymentAttemptStatus.REQUIRES_RECONCILIATION,
+    },
+    PaymentAttemptStatus.PROCESSOR_PENDING: {
+        PaymentAttemptStatus.PROCESSOR_APPROVED,
+        PaymentAttemptStatus.FAILED,
+        PaymentAttemptStatus.CANCELLED,
+        PaymentAttemptStatus.REQUIRES_RECONCILIATION,
+    },
+    PaymentAttemptStatus.PROCESSOR_APPROVED: {
+        PaymentAttemptStatus.SETTLED,
+        PaymentAttemptStatus.REQUIRES_RECONCILIATION,
+    },
+    PaymentAttemptStatus.SETTLED: {
+        PaymentAttemptStatus.REFUND_PENDING,
+    },
+    PaymentAttemptStatus.REFUND_PENDING: {
+        PaymentAttemptStatus.REFUNDED,
+        PaymentAttemptStatus.REQUIRES_RECONCILIATION,
+    },
+    PaymentAttemptStatus.REQUIRES_RECONCILIATION: {
+        PaymentAttemptStatus.SETTLED,
+        PaymentAttemptStatus.FAILED,
+        PaymentAttemptStatus.CANCELLED,
+        PaymentAttemptStatus.REFUNDED,
+    },
+    # Terminal — no outgoing transitions.
+    PaymentAttemptStatus.FAILED: set(),
+    PaymentAttemptStatus.CANCELLED: set(),
+    PaymentAttemptStatus.REFUNDED: set(),
+}
+
+
+class PaymentAttempt(Base):
+    """Durable, immutable record of an intent to charge (or refund) a processor.
+
+    Created and committed *before* contacting Square, carrying the exact payable
+    snapshot (locked upstream), an idempotency key, and provider identifiers, so
+    that:
+
+    * a processor success is never lost if the local app fails mid-flow — a
+      recovery worker finds the attempt and completes/flags it;
+    * repeating the same processor completion produces exactly one internal
+      ``Payment`` (``payment_id`` is set once, under a unique constraint);
+    * every internal payment/refund is traceable to a Square transaction.
+
+    The amount fields are a snapshot: once written they are never recomputed from
+    live menu/order state. Only ``status``, provider IDs, ``payment_id``,
+    ``last_error`` and ``updated_at`` change over the attempt's life.
+    """
+    __tablename__ = "payment_attempt"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_id: Mapped[int] = mapped_column(
+        ForeignKey("order.id", ondelete="CASCADE"), nullable=False
+    )
+    seat_id: Mapped[int | None] = mapped_column(ForeignKey("seat.id"), nullable=True)
+    staff_id: Mapped[int] = mapped_column(ForeignKey("staff.id"), nullable=False)
+
+    provider: Mapped[str] = mapped_column(String(20), nullable=False, default="square")
+    # Provider identifiers — filled as the flow progresses, then permanent.
+    provider_checkout_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider_payment_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider_refund_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Client-generated idempotency key sent to the processor; also our dedupe key.
+    idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    # Immutable payable snapshot (integer cents), locked before creation.
+    subtotal_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tax_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tip_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    service_charge_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    discount_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    surcharge_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    expected_total_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False, default="CAD")
+
+    status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default=PaymentAttemptStatus.CREATED
+    )
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    # Set exactly once when the attempt settles into a real Payment. The unique
+    # constraint guarantees one attempt maps to at most one Payment (idempotent
+    # settlement); NULLs stay distinct so many unsettled attempts coexist.
+    payment_id: Mapped[int | None] = mapped_column(
+        ForeignKey("payment.id"), nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now, nullable=False
+    )
+
+    order: Mapped["Order"] = relationship(lazy="joined")
+    seat: Mapped["Seat | None"] = relationship(lazy="joined")
+    staff: Mapped["Staff"] = relationship(lazy="joined", foreign_keys=[staff_id])
+    payment: Mapped["Payment | None"] = relationship(lazy="joined")
+
+    __table_args__ = (
+        # Idempotent create: a retried request with the same key finds the
+        # existing attempt instead of charging twice.
+        UniqueConstraint("idempotency_key", name="uq_attempt_idempotency_key"),
+        # One settled Payment per attempt.
+        UniqueConstraint("payment_id", name="uq_attempt_payment"),
+        CheckConstraint("expected_total_cents >= 0", name="ck_attempt_total_nonneg"),
+        Index("ix_attempt_status", "status"),
+        Index("ix_attempt_order", "order_id"),
+    )
+
+
 class Receipt(Base):
     """Sections 4.2.3 / 4.2.4 / 4.2.7 — sub-receipt per guest, receipt per seat."""
     __tablename__ = "receipt"
