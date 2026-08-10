@@ -85,6 +85,16 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # Pluggable payment providers. Defaulting to 'manual' leaves every existing
     # instrument settling exactly as before (staff-recorded, no processor).
     ("payment_instrument", "provider", "VARCHAR(30) NOT NULL DEFAULT 'manual'"),
+    # PaymentAttempt hardening (review Stages 2a/2b): intent fingerprint,
+    # processor-confirmed amount/currency, and reconciliation evidence. New
+    # UNIQUE(provider, provider_*_id) constraints ship on fresh databases via
+    # create_all; an already-created payment_attempt table only needs the columns.
+    ("payment_attempt", "intent_fingerprint", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    ("payment_attempt", "processor_amount_cents", "INTEGER"),
+    ("payment_attempt", "processor_currency", "VARCHAR(3)"),
+    ("payment_attempt", "reconciled_at", "TIMESTAMP"),
+    ("payment_attempt", "reconciled_by", "VARCHAR(60) NOT NULL DEFAULT ''"),
+    ("payment_attempt", "reconciliation_note", "VARCHAR(300) NOT NULL DEFAULT ''"),
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW
