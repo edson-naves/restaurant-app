@@ -131,6 +131,41 @@ def test_approval_requires_complete_evidence():
             square._request = orig
 
 
+def test_evidence_semantic_validation():
+    """Even with a payment id + currency present, incoherent evidence (negative
+    amount, tip > total, malformed currency) must not approve (#4)."""
+    def poll_with(payment):
+        def fake(method, path, payload=None):
+            if path.endswith("/chk_1"):
+                return {"checkout": {"id": "chk_1", "status": "COMPLETED", "payment_ids": ["pay_9"]}}
+            if path.startswith("/v2/payments/"):
+                return {"payment": payment}
+            raise AssertionError(path)
+        return fake
+
+    cases = [
+        ({"total_money": {"amount": 1300, "currency": "CAD"}, "tip_money": {"amount": 300}},
+         S.PROCESSOR_APPROVED, "valid tipped evidence -> approve"),
+        ({"total_money": {"amount": 1000, "currency": "CAD"}, "tip_money": {"amount": 0}},
+         S.PROCESSOR_APPROVED, "valid zero-tip evidence -> approve"),
+        ({"total_money": {"amount": -500, "currency": "CAD"}, "tip_money": {"amount": 0}},
+         S.REQUIRES_RECONCILIATION, "negative total -> reconcile"),
+        ({"total_money": {"amount": 1000, "currency": "CAD"}, "tip_money": {"amount": -100}},
+         S.REQUIRES_RECONCILIATION, "negative tip -> reconcile"),
+        ({"total_money": {"amount": 1000, "currency": "CAD"}, "tip_money": {"amount": 1500}},
+         S.REQUIRES_RECONCILIATION, "tip > total -> reconcile"),
+        ({"total_money": {"amount": 1000, "currency": "US"}, "tip_money": {"amount": 0}},
+         S.REQUIRES_RECONCILIATION, "malformed currency -> reconcile"),
+    ]
+    for payment, expected, label in cases:
+        orig = _fake(poll_with(payment))
+        try:
+            res = pp.get_provider("square_terminal").poll("chk_1")
+            check(res.status == expected, label + " (#4)")
+        finally:
+            square._request = orig
+
+
 def test_charge_and_refund_forward_currency():
     seen = {}
 
@@ -388,6 +423,7 @@ if __name__ == "__main__":
         test_square_forwards_idempotency_key,
         test_square_poll_reads_processor_evidence,
         test_approval_requires_complete_evidence,
+        test_evidence_semantic_validation,
         test_charge_and_refund_forward_currency,
         test_square_completed_without_payment_id_reconciles,
         test_square_refund_state_mapping,

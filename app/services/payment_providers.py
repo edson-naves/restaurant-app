@@ -288,15 +288,15 @@ class SquareTerminalProvider(PaymentProvider):
             # config (findings #6/#17). processor_amount_cents is the PRE-TIP base
             # so it compares to our pre-tip expected_total_cents.
             ev = square.completed_payment_evidence(checkout)
-            if ev["base_cents"] is None or not ev["currency"]:
-                # COMPLETED but we could not read authoritative amount/currency (the
-                # payment lookup failed or was incomplete). Do NOT approve on partial
-                # evidence — hand it to reconciliation (finding #3).
+            if not _evidence_coherent(ev):
+                # COMPLETED but the evidence is missing OR internally incoherent
+                # (negative amount, tip > total, malformed currency). Do NOT approve
+                # on evidence we cannot trust — reconcile (findings #3/#4).
                 return ChargeResult(
                     status=PaymentAttemptStatus.REQUIRES_RECONCILIATION,
                     provider_checkout_id=provider_checkout_id,
                     provider_payment_id=payment_ids[0],
-                    error="COMPLETED but processor amount/currency evidence is incomplete",
+                    error="COMPLETED but processor evidence is incomplete or incoherent",
                 )
             return ChargeResult(
                 status=PaymentAttemptStatus.PROCESSOR_APPROVED,
@@ -347,6 +347,21 @@ class SquareTerminalProvider(PaymentProvider):
                                 error="cancellation not yet authoritative")
         return CancelResult(ok=False, provider_status=status, requires_reconciliation=True,
                             error=f"unexpected cancel status {status!r}")
+
+
+def _evidence_coherent(ev: dict) -> bool:
+    """Structural + arithmetic sanity of processor evidence before approval (#4).
+    Requires: captured total and base present and >= 0, tip >= 0 and <= total,
+    and a structurally valid 3-letter currency. Anything off -> reconcile."""
+    total = ev.get("captured_total_cents")
+    tip = ev.get("tip_cents") or 0
+    base = ev.get("base_cents")
+    cur = ev.get("currency")
+    if total is None or base is None:
+        return False
+    if total < 0 or tip < 0 or base < 0 or tip > total:
+        return False
+    return isinstance(cur, str) and len(cur) == 3 and cur.isalpha()
 
 
 _SQUARE_REFUND_MAP = {
