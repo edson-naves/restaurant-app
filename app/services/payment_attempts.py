@@ -48,6 +48,24 @@ class TransitionConflict(PaymentAttemptError):
     """A concurrent writer moved the attempt out from under this transition."""
 
 
+# Postgres SQLSTATEs that mean "a concurrency race", not "infrastructure is down":
+# deadlock_detected, serialization_failure, lock_not_available.
+_LOCK_SQLSTATES = frozenset({"40P01", "40001", "55P03"})
+
+
+def is_lock_conflict(exc: Exception) -> bool:
+    """True when an OperationalError is a lock/deadlock race (a transition
+    conflict) rather than a genuine infrastructure failure (DB down, connection
+    reset). Infra failures must propagate, not masquerade as a conflict (#12)."""
+    orig = getattr(exc, "orig", None)
+    sqlstate = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    if sqlstate in _LOCK_SQLSTATES:
+        return True
+    msg = str(orig or exc).lower()
+    return ("deadlock" in msg or "database is locked" in msg
+            or "database table is locked" in msg)
+
+
 def new_idempotency_key() -> str:
     return secrets.token_hex(24)
 
@@ -233,12 +251,20 @@ def transition(
         ).rowcount
         if applied == 1 and commit:
             db.commit()
-    except (IntegrityError, OperationalError) as exc:
+    except IntegrityError as exc:
         db.rollback()
         raise TransitionConflict(
             f"transition {expected} -> {new_status} conflicted "
-            f"(uniqueness or lock): {getattr(exc, 'orig', exc)}"
+            f"(uniqueness): {getattr(exc, 'orig', exc)}"
         ) from exc
+    except OperationalError as exc:
+        db.rollback()
+        if is_lock_conflict(exc):
+            raise TransitionConflict(
+                f"transition {expected} -> {new_status} lost a lock/deadlock race: "
+                f"{getattr(exc, 'orig', exc)}"
+            ) from exc
+        raise  # genuine infrastructure failure — propagate, do not mask as a conflict
     if applied != 1:
         db.rollback()
         try:

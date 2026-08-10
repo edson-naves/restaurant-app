@@ -171,8 +171,14 @@ class SquareTerminalProvider(PaymentProvider):
                 amount_cents, reference_id=reference, note=note,
                 idempotency_key=idempotency_key,   # finding #1: forward the key
             )
-        except square.SquareError as exc:
+        except square.SquareApiError as exc:
+            # A definitive 4xx: Square rejected the request. No charge exists.
             return ChargeResult(status=PaymentAttemptStatus.FAILED, error=str(exc))
+        except square.SquareError as exc:
+            # Transport/unknown (timeout, dropped connection, 5xx). Square may have
+            # accepted the checkout — must reconcile, never assume FAILED (#4).
+            return ChargeResult(status=PaymentAttemptStatus.REQUIRES_RECONCILIATION,
+                                error=f"unknown submission outcome: {exc}")
         return ChargeResult(
             status=PaymentAttemptStatus.PROCESSOR_PENDING,
             provider_checkout_id=checkout.get("id"),
@@ -181,9 +187,17 @@ class SquareTerminalProvider(PaymentProvider):
     def poll(self, provider_checkout_id: str) -> ChargeResult:
         try:
             checkout = square.get_checkout(provider_checkout_id)
-        except square.SquareError as exc:
+        except square.SquareTransportError as exc:
+            # Transient — keep polling.
             return ChargeResult(status=PaymentAttemptStatus.PROCESSOR_PENDING,
-                                provider_checkout_id=provider_checkout_id, error=str(exc))
+                                provider_checkout_id=provider_checkout_id,
+                                error=f"transient lookup error: {exc}")
+        except square.SquareError as exc:
+            # Definitive lookup error (auth/config/not-found). Do not stay PENDING
+            # forever — hand it to reconciliation (#9).
+            return ChargeResult(status=PaymentAttemptStatus.REQUIRES_RECONCILIATION,
+                                provider_checkout_id=provider_checkout_id,
+                                error=f"definitive lookup error: {exc}")
         status = checkout.get("status")
         if status == square.COMPLETED:
             tip_cents, brand, last4 = square.tip_and_card(checkout)
@@ -232,7 +246,19 @@ class SquareTerminalProvider(PaymentProvider):
         except square.SquareError as exc:
             # Do not swallow: an ambiguous cancel must be reconciled (finding #10).
             return CancelResult(ok=False, requires_reconciliation=True, error=str(exc))
-        return CancelResult(ok=True, provider_status=checkout.get("status", ""))
+        # A 2xx does not by itself mean cancellation succeeded — validate the
+        # returned checkout status explicitly (finding #11).
+        status = checkout.get("status") or ""
+        if status == square.CANCELED:
+            return CancelResult(ok=True, provider_status=status)
+        if status == square.COMPLETED:
+            return CancelResult(ok=False, provider_status=status, requires_reconciliation=True,
+                                error="checkout already COMPLETED — a payment likely exists")
+        if status in (square.PENDING, square.IN_PROGRESS, square.CANCEL_REQUESTED):
+            return CancelResult(ok=False, provider_status=status, requires_reconciliation=True,
+                                error="cancellation not yet authoritative")
+        return CancelResult(ok=False, provider_status=status, requires_reconciliation=True,
+                            error=f"unexpected cancel status {status!r}")
 
 
 def _completed_amount(checkout: dict) -> int | None:
