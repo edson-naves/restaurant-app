@@ -153,15 +153,17 @@ def create_refund_attempt(
     staff_id: int,
     provider: str,
     amount_cents: int,
-    currency: str = "CAD",
+    currency: str | None = None,
     charge_attempt_id: int | None = None,
     idempotency_key: str | None = None,
 ) -> RefundAttempt:
-    """Persist a CREATED refund attempt. Commits. Idempotent and concurrency-safe
-    on the idempotency key: a repeat with the same intent returns the same row; a
-    repeat with a *different* intent raises ``IdempotencyConflict`` (#3). The
+    """Persist a CREATED refund attempt. Commits. ``currency`` defaults to the
+    venue currency when omitted — never a hard-coded CAD (#3). Idempotent and
+    concurrency-safe on the idempotency key: a repeat with the same intent returns
+    the same row; a *different* intent raises ``IdempotencyConflict`` (#3). The
     charge-attempt linkage is validated (#7)."""
     _validate_provider(provider)
+    currency = (currency or venue_currency()).upper()
     if amount_cents <= 0:
         raise PaymentAttemptError("refund amount must be positive.")
 

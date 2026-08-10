@@ -29,6 +29,7 @@ from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
+from app.config import venue_currency
 from app.models.oltp import (
     PAYMENT_ATTEMPT_TRANSITIONS,
     AuditEvent,
@@ -140,16 +141,19 @@ def create_attempt(
     service_charge_cents: int = 0,
     discount_cents: int = 0,
     surcharge_cents: int = 0,
-    currency: str = "CAD",
+    currency: str | None = None,
     idempotency_key: str | None = None,
 ) -> PaymentAttempt:
     """Persist a CREATED attempt from an already-locked payable snapshot. Commits.
 
-    Idempotent and concurrency-safe: a repeated key (sequential or concurrent)
-    returns the existing attempt; a repeated key with a different intent raises
+    ``currency`` defaults to the venue currency (``config.venue_currency()``) when
+    omitted — never a hard-coded CAD — so a USD venue does not silently create a
+    CAD intent (#3). Idempotent and concurrency-safe: a repeated key returns the
+    existing attempt; a repeated key with a different intent raises
     ``IdempotencyConflict``; an unregistered provider is rejected.
     """
     _validate_provider(provider)
+    currency = (currency or venue_currency()).upper()
     if expected_total_cents < 0:
         raise PaymentAttemptError("expected_total_cents cannot be negative.")
 

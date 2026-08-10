@@ -177,6 +177,18 @@ def test_wrong_charge_attempt_rejected():
     check(raised, "a charge attempt not backing this payment is rejected (#7)")
 
 
+def test_refund_currency_defaults_to_venue():
+    db, ids = _db()
+    old = os.environ.get("VENUE_CURRENCY")
+    os.environ["VENUE_CURRENCY"] = "USD"
+    try:
+        r = ra.create_refund_attempt(db, payment_id=ids["payment_id"], staff_id=ids["staff_id"],
+                                     provider="manual", amount_cents=500)  # currency omitted
+        check(r.currency == "USD", "omitted refund currency defaults to venue, not CAD (#3)")
+    finally:
+        os.environ.pop("VENUE_CURRENCY", None) if old is None else os.environ.__setitem__("VENUE_CURRENCY", old)
+
+
 def test_refund_state_transitions():
     db, ids = _db()
     r = _mkref(db, ids, 500)
@@ -201,6 +213,7 @@ if __name__ == "__main__":
         test_legacy_refund_provider_derivation,
         test_legacy_square_payment_refunded_as_manual_rejected,
         test_refund_currency_must_match,
+        test_refund_currency_defaults_to_venue,
         test_provider_mismatch_rejected,
         test_wrong_charge_attempt_rejected,
         test_refund_state_transitions,
