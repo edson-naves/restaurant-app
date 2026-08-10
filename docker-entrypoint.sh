@@ -4,10 +4,13 @@ set -e
 
 # Initialise a fresh database: schema + reference data (menu, tables, floors,
 # channels, payment instruments) + a single owner account. Idempotent — a no-op
-# once staff exist — so it is safe to run on every cold start. Never blocks
-# startup: if it errors (e.g. OWNER_PIN unset on a brand-new DB) the server
-# still comes up so the problem is visible in the logs and the URL responds.
-python -m app.bootstrap || echo "entrypoint: bootstrap reported an error (continuing)"
+# once staff exist — so it is safe to run on every cold start.
+#
+# Fail closed: if bootstrap errors (e.g. OWNER_PIN unset on a brand-new DB, or a
+# migration failure) the container exits non-zero instead of starting the web
+# server against a partially initialised or mismatched schema. `set -e` above
+# turns the failure below into an abort.
+python -m app.bootstrap
 
 # Cloud Run injects PORT (usually 8080) and expects the app to listen on it.
 # Locally PORT is unset, so we default to 8000 — the port the compose Caddy

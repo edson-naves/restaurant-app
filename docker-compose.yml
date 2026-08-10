@@ -30,6 +30,25 @@ services:
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-rms}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-restaurant}
       # Used only to seed the owner on a brand-new database (idempotent).
       OWNER_PIN: ${OWNER_PIN:-}
+      # This compose file is the on-prem PRODUCTION stack, so fail closed on a
+      # missing session key rather than falling back to the public dev key.
+      APP_ENV: ${APP_ENV:-production}
+      # Required: `docker compose up` refuses to start without it. Generate with
+      #   python -c "import secrets; print(secrets.token_urlsafe(48))"
+      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env}
+      # Caddy terminates HTTPS in front of the app, so the session cookie is
+      # HTTPS-only by default here.
+      COOKIE_SECURE: ${COOKIE_SECURE:-1}
+      TZ: ${TZ:-America/Vancouver}
+      # Square terminal payments. Leave the four blanks unset for a cash-only
+      # venue; set all of them together to enable card payments (a partial set
+      # fails startup — see app/config.py).
+      SQUARE_ENV: ${SQUARE_ENV:-sandbox}
+      SQUARE_APPLICATION_ID: ${SQUARE_APPLICATION_ID:-}
+      SQUARE_ACCESS_TOKEN: ${SQUARE_ACCESS_TOKEN:-}
+      SQUARE_LOCATION_ID: ${SQUARE_LOCATION_ID:-}
+      SQUARE_DEVICE_ID: ${SQUARE_DEVICE_ID:-}
+      SQUARE_CURRENCY: ${SQUARE_CURRENCY:-CAD}
     depends_on:
       db:
         condition: service_healthy

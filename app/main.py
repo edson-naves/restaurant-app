@@ -29,17 +29,24 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app import migrate
+from app.config import is_production, validate_startup_config
 from app.database import Base, SessionLocal, engine
 from app.deps import WEB_DIR, templates
 from app.routers import admin, analytics, auth, pay, reservations, sales, schedule
 
 app = FastAPI(title="Restaurant Management System", version="1.0")
 
+# Fail closed on missing production config (SECRET_KEY, partial Square) before
+# doing anything else; log non-fatal warnings.
+for _warning in validate_startup_config():
+    print(f"[config] WARNING: {_warning}", flush=True)
+
 Base.metadata.create_all(engine)
 # create_all adds tables, never columns — see migrate.py. Log what changed so a
 # schema migration on deploy (esp. on Postgres/Render) is visible and verifiable
-# in the service logs rather than silent.
-_migrated = migrate.run(engine)
+# in the service logs rather than silent. In production a real migration failure
+# is fatal (strict) rather than silently skipped.
+_migrated = migrate.run(engine, strict=is_production())
 if _migrated:
     print(f"[migrate] applied: {', '.join(_migrated)}", flush=True)
 else:
@@ -93,4 +100,23 @@ def http_error(request: Request, exc: StarletteHTTPException):
 
 @app.get("/healthz", response_class=HTMLResponse)
 def healthz():
+    """Liveness: the process is up and serving. Does not touch the database, so
+    an orchestrator restarts a wedged process without being fooled by a slow DB."""
     return "ok"
+
+
+@app.get("/readyz", response_class=HTMLResponse)
+def readyz():
+    """Readiness: prove the app can actually serve traffic — the database is
+    reachable and the core schema exists. Returns 503 until it can, so a load
+    balancer/orchestrator does not route to an instance that cannot transact."""
+    from sqlalchemy import text
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+            # A core table proves migrations/bootstrap ran, not just that a DB
+            # socket answered.
+            conn.execute(text('SELECT 1 FROM staff LIMIT 1'))
+    except Exception as exc:  # noqa: BLE001
+        return HTMLResponse(f"not ready: {exc}", status_code=503)
+    return "ready"

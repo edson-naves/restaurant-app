@@ -26,6 +26,8 @@ import hmac
 import os
 import secrets
 
+from app.config import ConfigError, is_production
+
 # Public, non-secret default so local dev needs no configuration. Production
 # overrides it with a real SECRET_KEY; if it is ever left as this in prod, the
 # sessions are only as safe as a value printed in the source — hence the name.
@@ -35,7 +37,18 @@ _DEV_SECRET = "dev-insecure-secret-set-SECRET_KEY-in-production"
 def _secret() -> bytes:
     # Read at call time so a changed env var takes effect without touching import
     # order, mirroring how the Square client reads its config.
-    return (os.environ.get("SECRET_KEY") or _DEV_SECRET).encode("utf-8")
+    key = (os.environ.get("SECRET_KEY") or "").strip()
+    if key:
+        return key.encode("utf-8")
+    # Fail closed in production: never sign sessions with the public dev key.
+    # validate_startup_config() catches this at boot; this is the defence in
+    # depth if something reaches here anyway.
+    if is_production():
+        raise ConfigError(
+            "SECRET_KEY is required in production — refusing to sign sessions "
+            "with the public development key."
+        )
+    return _DEV_SECRET.encode("utf-8")
 
 
 def cookie_secure() -> bool:
