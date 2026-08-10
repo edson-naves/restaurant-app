@@ -106,7 +106,23 @@ WIDENED_COLUMNS: tuple[tuple[str, str, int, str], ...] = (
     # plaintext, so the old VARCHAR(8) overflows on the first login that upgrades
     # a legacy PIN to a hash.
     ("staff", "pin_code", 128, "VARCHAR(128)"),
+    # PaymentAttempt.provider grew VARCHAR(20) -> VARCHAR(30) (shared
+    # PROVIDER_KEY_LEN) when 'square' stopped being a silent default.
+    ("payment_attempt", "provider", 30, "VARCHAR(30)"),
 )
+
+# Provider-scoped uniqueness added to *existing* payment tables. create_all()
+# builds these on a fresh DB but never adds a constraint to a table that already
+# exists, so an upgraded Stage-2a database needs them applied explicitly. Each is
+# duplicate-scanned and fail-closed before creation (see _migrate_payment_hardening).
+UNIQUE_CONSTRAINTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("payment_attempt", "uq_attempt_provider_payment", ("provider", "provider_payment_id")),
+    ("payment_attempt", "uq_attempt_provider_checkout", ("provider", "provider_checkout_id")),
+)
+
+# Canonical provider backfill: the retired 'square' default becomes the real
+# registry key before the provider-scoped constraints are applied.
+PROVIDER_BACKFILL = (("payment_attempt", "square", "square_terminal"),)
 
 DEFAULT_FLOOR = "1st floor"
 
@@ -147,6 +163,7 @@ def run(engine: Engine, strict: bool = False) -> list[str]:
         applied.extend(_backfill_locations(conn))
     # SQLite does not enforce VARCHAR length, so no column ever needs widening
     # there — the model's new size applies to fresh databases via create_all.
+    applied.extend(_migrate_payment_hardening(engine, strict))
     return applied
 
 
@@ -220,6 +237,121 @@ def _run_postgres(engine: Engine, strict: bool = False) -> list[str]:
             if strict:
                 raise MigrationError(f"failed to widen {table}.{column}: {exc}") from exc
             applied.append(f"SKIPPED widen {table}.{column}: {exc}")
+
+    applied.extend(_migrate_payment_hardening(engine, strict))
+    return applied
+
+
+def _column_exists(conn, table: str, column: str) -> bool:
+    if conn.engine.dialect.name == "sqlite":
+        rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+        return any(r[1] == column for r in rows)
+    return conn.execute(
+        text("SELECT 1 FROM information_schema.columns WHERE table_name=:t "
+             "AND column_name=:c AND table_schema=current_schema()"),
+        {"t": table, "c": column},
+    ).first() is not None
+
+
+def _constraint_exists(conn, table: str, name: str) -> bool:
+    if conn.engine.dialect.name == "sqlite":
+        # A named UNIQUE constraint surfaces as an index (from create_all's inline
+        # constraint) or as our upgrade index — either proves enforcement exists.
+        got = conn.execute(
+            text("SELECT 1 FROM sqlite_master WHERE type='index' AND tbl_name=:t "
+                 "AND (name=:n OR sql LIKE :like)"),
+            {"t": table, "n": name, "like": "%UNIQUE%"},
+        ).fetchall()
+        # Fall back to reading the table's own UNIQUE constraint list.
+        idx = conn.execute(text(f"PRAGMA index_list({table})")).fetchall()
+        return bool(got) and any(r[2] for r in idx)  # any unique index present
+    return conn.execute(
+        text("SELECT 1 FROM information_schema.table_constraints WHERE constraint_name=:n "
+             "AND table_name=:t AND table_schema=current_schema()"),
+        {"n": name, "t": table},
+    ).first() is not None
+
+
+def _duplicates(conn, table: str, cols: tuple[str, ...]) -> list[tuple]:
+    """Rows that would violate a unique constraint on ``cols`` (NULLs excluded,
+    since NULL keeps a row distinct on both engines)."""
+    collist = ", ".join(cols)
+    notnull = " AND ".join(f"{c} IS NOT NULL" for c in cols)
+    q = (f"SELECT {collist}, COUNT(*) AS n FROM {table} WHERE {notnull} "
+         f"GROUP BY {collist} HAVING COUNT(*) > 1")
+    return conn.execute(text(q)).fetchall()
+
+
+def _migrate_payment_hardening(engine: Engine, strict: bool) -> list[str]:
+    """Upgrade an existing payment_attempt table to the hardened schema:
+    canonical provider backfill, retire the old provider_refund_id column, and
+    add the provider-scoped UNIQUE constraints — duplicate-scanned and fail-closed
+    so financial data is never silently rewritten. No-op on a fresh DB where
+    create_all already produced everything."""
+    applied: list[str] = []
+    pg = engine.dialect.name != "sqlite"
+    q = (lambda s: f'"{s}"') if pg else (lambda s: s)
+
+    # 1. Canonical provider backfill (before the provider-scoped constraints).
+    for table, old, new in PROVIDER_BACKFILL:
+        with engine.begin() as conn:
+            if not _column_exists(conn, table, "provider"):
+                continue
+            n = conn.execute(text(f"UPDATE {q(table)} SET provider=:new WHERE provider=:old"),
+                             {"new": new, "old": old}).rowcount
+            if n:
+                applied.append(f"backfilled {table}.provider {old}->{new} ({n} rows)")
+
+    # 2. Retire the old provider_refund_id (refunds now live on refund_attempt).
+    #    Drop only when it holds no data; otherwise report and keep it (never lose
+    #    financial evidence silently).
+    with engine.begin() as conn:
+        if _column_exists(conn, "payment_attempt", "provider_refund_id"):
+            leftover = conn.execute(
+                text("SELECT COUNT(*) FROM payment_attempt WHERE provider_refund_id IS NOT NULL")
+            ).scalar_one()
+            if leftover:
+                applied.append(f"KEPT payment_attempt.provider_refund_id ({leftover} non-null "
+                               "rows) — retire manually after moving them to refund_attempt")
+            else:
+                try:
+                    conn.execute(text('ALTER TABLE payment_attempt DROP COLUMN '
+                                      + ("IF EXISTS " if pg else "") + "provider_refund_id"))
+                    applied.append("dropped retired payment_attempt.provider_refund_id")
+                except Exception as exc:  # noqa: BLE001 — SQLite <3.35 can't drop
+                    if strict and pg:
+                        raise MigrationError(f"failed to drop provider_refund_id: {exc}") from exc
+                    applied.append(f"SKIPPED drop provider_refund_id: {exc}")
+
+    # 3. Provider-scoped uniqueness — dup-scan, fail closed, then create.
+    for table, name, cols in UNIQUE_CONSTRAINTS:
+        with engine.connect() as conn:
+            if not all(_column_exists(conn, table, c) for c in cols):
+                continue
+            if _constraint_exists(conn, table, name):
+                continue
+            dupes = _duplicates(conn, table, cols)
+        if dupes:
+            msg = (f"cannot add {name}: {len(dupes)} duplicate group(s) in "
+                   f"{table}({', '.join(cols)}) — e.g. {dupes[0]}. Resolve before upgrading.")
+            if strict:
+                raise MigrationError(msg)
+            applied.append(f"BLOCKED {msg}")
+            continue
+        try:
+            with engine.begin() as conn:
+                if pg:
+                    conn.execute(text(f'ALTER TABLE {q(table)} ADD CONSTRAINT {name} '
+                                      f'UNIQUE ({", ".join(cols)})'))
+                else:
+                    conn.execute(text(f'CREATE UNIQUE INDEX IF NOT EXISTS {name} '
+                                      f'ON {table} ({", ".join(cols)})'))
+            applied.append(f"added {name} on {table}({', '.join(cols)})")
+        except Exception as exc:  # noqa: BLE001
+            if strict:
+                raise MigrationError(f"failed to add {name}: {exc}") from exc
+            applied.append(f"SKIPPED {name}: {exc}")
+
     return applied
 
 
