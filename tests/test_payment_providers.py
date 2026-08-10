@@ -293,6 +293,34 @@ def test_square_4xx_classification():
             square._request = orig
 
 
+def test_unsupported_cancel_is_explicit():
+    # Manual does not advertise CANCEL and must not inherit a false success (#3).
+    raised = False
+    try:
+        pp.get_provider("manual").cancel(provider_checkout_id="x")
+    except NotImplementedError:
+        raised = True
+    check(raised, "an unsupported provider cancel raises, never returns ok=True (#3)")
+    check(pp.Capability.CANCEL in pp.get_provider("square_terminal").capabilities,
+          "Square advertises CANCEL and implements it (#3)")
+
+
+def test_cancel_capability_must_be_backed():
+    class NoCancelPay(pp.PaymentProvider):
+        key = "no_cancel_pay"; is_external = True
+        capabilities = frozenset({pp.Capability.CANCEL})  # advertises but never overrides cancel()
+        def charge(self, *, amount_cents, currency, idempotency_key, reference="", note="", tip_cents=0):
+            return pp.ChargeResult(status=S.PROCESSOR_APPROVED)
+        def refund(self, *, amount_cents, currency, idempotency_key, provider_payment_id=None):
+            return pp.RefundResult(status=R.COMPLETED)
+    raised = False
+    try:
+        pp.register(NoCancelPay())
+    except ValueError:
+        raised = True
+    check(raised, "advertising CANCEL without implementing cancel() is rejected (#3)")
+
+
 def test_unknown_capability_name_rejected():
     class TeleportPay(pp.PaymentProvider):
         key = "teleport_pay"; is_external = True
@@ -432,6 +460,8 @@ if __name__ == "__main__":
         test_charge_transport_ambiguity_reconciles,
         test_charge_definitive_decline_fails,
         test_square_4xx_classification,
+        test_unsupported_cancel_is_explicit,
+        test_cancel_capability_must_be_backed,
         test_unknown_capability_name_rejected,
         test_poll_transient_stays_pending_definitive_reconciles,
         test_cancel_status_mapping,

@@ -48,6 +48,7 @@ class Capability:
     REFUND = "refund"
     PARTIAL_REFUND = "partial_refund"
     LOOKUP = "lookup"                # provider-side reconciliation lookup
+    CANCEL = "cancel"                # cancel a pre-capture charge
 
 
 # The complete, closed capability vocabulary. A provider advertising anything
@@ -55,6 +56,7 @@ class Capability:
 ALL_CAPABILITIES = frozenset({
     Capability.POLLING, Capability.WEBHOOKS, Capability.AUTHORIZE, Capability.CAPTURE,
     Capability.PARTIAL_CAPTURE, Capability.REFUND, Capability.PARTIAL_REFUND, Capability.LOOKUP,
+    Capability.CANCEL,
 })
 
 # A capability is only advertisable if its backing method is actually implemented
@@ -68,6 +70,7 @@ _CAPABILITY_METHOD = {
     Capability.CAPTURE: "capture",
     Capability.PARTIAL_CAPTURE: "capture",
     Capability.WEBHOOKS: "handle_webhook",
+    Capability.CANCEL: "cancel",
 }
 
 
@@ -158,7 +161,9 @@ class PaymentProvider(ABC):
         ...
 
     def cancel(self, *, provider_checkout_id: str) -> CancelResult:
-        return CancelResult(ok=True)
+        # Never report a successful cancel by default — a provider that does not
+        # support cancellation must fail explicitly, not inherit false success (#3).
+        raise NotImplementedError(f"{self.key} does not support CANCEL")
 
     # Optional, capability-gated methods. A provider that advertises the matching
     # capability MUST override the method; register() enforces it (#10). The base
@@ -215,7 +220,7 @@ class SquareTerminalProvider(PaymentProvider):
     # immediate-capture, so no AUTHORIZE/CAPTURE split is advertised (#10/#19).
     capabilities = frozenset({
         Capability.POLLING, Capability.REFUND,
-        Capability.PARTIAL_REFUND, Capability.LOOKUP,
+        Capability.PARTIAL_REFUND, Capability.LOOKUP, Capability.CANCEL,
     })
 
     def is_configured(self) -> bool:
