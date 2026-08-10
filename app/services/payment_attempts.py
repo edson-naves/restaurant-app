@@ -77,6 +77,12 @@ def new_idempotency_key() -> str:
     return secrets.token_hex(24)
 
 
+def canonical_selection(item_ids) -> str:
+    """Stable identity of the paid-item set: sorted, de-duplicated, comma-joined
+    (Stage 2c). '' means a whole-order/amount-only intent."""
+    return ",".join(str(i) for i in sorted({int(i) for i in (item_ids or [])}))
+
+
 def intent_fingerprint(
     *,
     provider: str,
@@ -91,13 +97,15 @@ def intent_fingerprint(
     service_charge_cents: int,
     discount_cents: int,
     surcharge_cents: int,
+    line_selection: str = "",
 ) -> str:
     """Stable hash of the immutable intent behind an idempotency key. Reusing a
-    key with a different fingerprint is rejected as a conflict."""
+    key with a different fingerprint — including a different paid-item selection —
+    is rejected as a conflict."""
     canonical = "|".join(str(x) for x in (
         provider, order_id, seat_id, staff_id, currency.upper(),
         expected_total_cents, subtotal_cents, tax_cents, tip_cents,
-        service_charge_cents, discount_cents, surcharge_cents,
+        service_charge_cents, discount_cents, surcharge_cents, line_selection,
     ))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:64]
 
@@ -168,6 +176,7 @@ def create_attempt(
     discount_cents: int = 0,
     surcharge_cents: int = 0,
     currency: str | None = None,
+    line_selection: str = "",
     idempotency_key: str | None = None,
 ) -> PaymentAttempt:
     """Persist a CREATED attempt from an already-locked payable snapshot. Commits.
@@ -188,7 +197,7 @@ def create_attempt(
         currency=currency, expected_total_cents=expected_total_cents,
         subtotal_cents=subtotal_cents, tax_cents=tax_cents, tip_cents=tip_cents,
         service_charge_cents=service_charge_cents, discount_cents=discount_cents,
-        surcharge_cents=surcharge_cents,
+        surcharge_cents=surcharge_cents, line_selection=line_selection,
     )
 
     if idempotency_key:
@@ -202,6 +211,7 @@ def create_attempt(
     attempt = PaymentAttempt(
         order_id=order_id, seat_id=seat_id, staff_id=staff_id, provider=provider,
         idempotency_key=idempotency_key, intent_fingerprint=fingerprint,
+        line_selection=line_selection,
         subtotal_cents=subtotal_cents, tax_cents=tax_cents, tip_cents=tip_cents,
         service_charge_cents=service_charge_cents, discount_cents=discount_cents,
         surcharge_cents=surcharge_cents, expected_total_cents=expected_total_cents,

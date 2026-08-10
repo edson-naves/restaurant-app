@@ -1063,9 +1063,13 @@ class PaymentAttempt(Base):
     # Client-generated idempotency key sent to the processor; also our dedupe key.
     idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
     # Fingerprint of the immutable intent behind idempotency_key (finding #3), so
-    # reusing a key with different order/amount/currency is a conflict, not a
-    # silent wrong-attempt hit.
+    # reusing a key with different order/amount/currency/selection is a conflict,
+    # not a silent wrong-attempt hit.
     intent_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    # Canonical identity of WHAT is being paid — the sorted set of OrderItem ids
+    # this attempt settles (Stage 2c). Part of the intent fingerprint, and what
+    # settlement reconciles against.
+    line_selection: Mapped[str] = mapped_column(String(500), nullable=False, default="")
 
     # Immutable payable snapshot (integer cents), locked before creation.
     subtotal_cents: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
