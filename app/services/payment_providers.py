@@ -5,13 +5,18 @@ spine; each real-world payment method is a small adapter implementing
 ``PaymentProvider`` and registered by a string key. ``PaymentInstrument.provider``
 names which adapter settles an instrument.
 
-Adding a brand-new machine/processor for a new client is:
+Adding a charge / poll / refund / cancel provider is additive:
 
-    1. subclass PaymentProvider (charge/poll/refund/cancel + a capabilities set),
+    1. subclass PaymentProvider (implement the methods for the capabilities you
+       advertise — register() rejects a provider that claims more than it backs),
     2. register(MyProvider()),
     3. set instrument.provider = "my_key".
 
-No change to routers, settlement, refunds, or the state machines.
+Scope, honestly stated: the auth/capture, webhook, and lookup contracts are
+*defined and registration-validated* but not yet consumed by settlement, and the
+providers are not yet wired into the live charge/refund routes — that is Stage 2c.
+So this is "plug in a new charge/refund/polling provider without touching the
+state machines", not yet "plug in any processor shape with zero core work".
 
 Capabilities (finding #7) let the settlement core ask what a provider supports
 (polling, webhooks, auth/capture split, partial capture/refund, lookup) instead
@@ -43,6 +48,20 @@ class Capability:
     REFUND = "refund"
     PARTIAL_REFUND = "partial_refund"
     LOOKUP = "lookup"                # provider-side reconciliation lookup
+
+
+# A capability is only advertisable if its backing method is actually implemented
+# (finding #10). register() validates this — a provider may not claim behavior it
+# does not provide. REFUND/PARTIAL_REFUND share the abstract refund() (always
+# implemented on a concrete provider), so they need no override check here.
+_CAPABILITY_METHOD = {
+    Capability.POLLING: "poll",
+    Capability.LOOKUP: "lookup",
+    Capability.AUTHORIZE: "authorize",
+    Capability.CAPTURE: "capture",
+    Capability.PARTIAL_CAPTURE: "capture",
+    Capability.WEBHOOKS: "handle_webhook",
+}
 
 
 # --------------------------------------------------------------------------
@@ -134,6 +153,23 @@ class PaymentProvider(ABC):
     def cancel(self, *, provider_checkout_id: str) -> CancelResult:
         return CancelResult(ok=True)
 
+    # Optional, capability-gated methods. A provider that advertises the matching
+    # capability MUST override the method; register() enforces it (#10). The base
+    # versions exist only so the contract is discoverable and the override check
+    # has something to compare against.
+    def lookup(self, *, provider_payment_id: str | None = None,
+               provider_checkout_id: str | None = None) -> dict:
+        raise NotImplementedError(f"{self.key} does not support LOOKUP")
+
+    def authorize(self, *, amount_cents: int, currency: str, idempotency_key: str) -> ChargeResult:
+        raise NotImplementedError(f"{self.key} does not support AUTHORIZE")
+
+    def capture(self, *, provider_payment_id: str, amount_cents: int | None = None) -> ChargeResult:
+        raise NotImplementedError(f"{self.key} does not support CAPTURE")
+
+    def handle_webhook(self, payload: dict) -> dict:
+        raise NotImplementedError(f"{self.key} does not support WEBHOOKS")
+
 
 # --------------------------------------------------------------------------
 # Adapters
@@ -168,13 +204,24 @@ class SquareTerminalProvider(PaymentProvider):
     key = "square_terminal"
     label = "Square terminal"
     is_external = True
+    # Only what the adapter actually backs with a method. Square Terminal is
+    # immediate-capture, so no AUTHORIZE/CAPTURE split is advertised (#10/#19).
     capabilities = frozenset({
-        Capability.POLLING, Capability.CAPTURE, Capability.REFUND,
+        Capability.POLLING, Capability.REFUND,
         Capability.PARTIAL_REFUND, Capability.LOOKUP,
     })
 
     def is_configured(self) -> bool:
         return square.is_configured()
+
+    def lookup(self, *, provider_payment_id=None, provider_checkout_id=None) -> dict:
+        """Provider-side reconciliation read: fetch the authoritative Payment or
+        terminal checkout so a recovery worker can resolve an ambiguous attempt."""
+        if provider_payment_id:
+            return square.get_payment(provider_payment_id)
+        if provider_checkout_id:
+            return square.get_checkout(provider_checkout_id)
+        raise ValueError("lookup needs a provider payment id or checkout id")
 
     def charge(self, *, amount_cents, currency, idempotency_key,
                reference="", note="", tip_cents=0) -> ChargeResult:
@@ -305,9 +352,28 @@ class UnknownProvider(KeyError):
 _REGISTRY: dict[str, PaymentProvider] = {}
 
 
-def register(provider: PaymentProvider) -> None:
+def _validate_capabilities(provider: PaymentProvider) -> None:
+    """A provider may not advertise a capability it does not implement (#10)."""
+    for cap in provider.capabilities:
+        method_name = _CAPABILITY_METHOD.get(cap)
+        if method_name is None:
+            continue  # REFUND/PARTIAL_REFUND ride the abstract refund()
+        impl = getattr(type(provider), method_name, None)
+        base = getattr(PaymentProvider, method_name, None)
+        if impl is None or impl is base:
+            raise ValueError(
+                f"provider {provider.key!r} advertises capability {cap!r} but does not "
+                f"implement {method_name}()")
+
+
+def register(provider: PaymentProvider, *, override: bool = False) -> None:
     if not provider.key:
         raise ValueError("payment provider must define a non-empty key")
+    if provider.key in _REGISTRY and not override:
+        raise ValueError(
+            f"a payment provider is already registered for {provider.key!r}; "
+            f"pass override=True to replace it deliberately (#18)")
+    _validate_capabilities(provider)
     _REGISTRY[provider.key] = provider
 
 
