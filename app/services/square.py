@@ -307,12 +307,21 @@ def wait_for_checkout(checkout_id: str, timeout_s: float = 120.0, interval_s: fl
 
 
 def _safe_int(v) -> int | None:
-    """Parse an untrusted processor amount. Returns None (not a crash) on anything
-    non-numeric, so malformed evidence reconciles instead of raising."""
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return None
+    """Strictly parse an untrusted processor money amount (minor units), which
+    must be an integer number of cents. Returns None (never a crash, never a
+    silent coercion) for anything that isn't an exact integer — so a float, bool,
+    decimal string, or arbitrary object maps to incomplete evidence and reconciles
+    (finding #2). Accepts a Python int (not bool) or an integer-only string."""
+    if isinstance(v, bool):
+        return None                      # bool is an int subclass — reject explicitly
+    if isinstance(v, int):
+        return v
+    if isinstance(v, str):
+        s = v.strip()
+        digits = s[1:] if s[:1] in "+-" else s
+        if digits.isdigit():             # integer-only string, no '.', no NaN/inf
+            return int(s)
+    return None
 
 
 def completed_payment_evidence(checkout: dict) -> dict:

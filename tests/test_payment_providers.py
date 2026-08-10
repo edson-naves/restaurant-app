@@ -199,6 +199,21 @@ def test_evidence_parse_hardening():
             square._request = orig
 
 
+def test_strict_money_parsing():
+    """Processor money is an integer number of minor units; floats/bools/decimal
+    strings must not be silently coerced (#2)."""
+    si = square._safe_int
+    check(si(1000) == 1000, "int 1000 accepted (#2)")
+    check(si("1000") == 1000, "integer string accepted (#2)")
+    check(si("-5") == -5, "signed integer string accepted (#2)")
+    check(si(1000.9) is None, "float rejected (#2)")
+    check(si(True) is None, "bool True rejected (#2)")
+    check(si(False) is None, "bool False rejected (#2)")
+    check(si("10.5") is None, "decimal string rejected (#2)")
+    check(si({"x": 1}) is None, "arbitrary object rejected (#2)")
+    check(si(float("nan")) is None, "NaN rejected (#2)")
+
+
 def test_charge_and_refund_forward_currency():
     seen = {}
 
@@ -486,6 +501,7 @@ if __name__ == "__main__":
         test_approval_requires_complete_evidence,
         test_evidence_semantic_validation,
         test_evidence_parse_hardening,
+        test_strict_money_parsing,
         test_charge_and_refund_forward_currency,
         test_square_completed_without_payment_id_reconciles,
         test_square_refund_state_mapping,
