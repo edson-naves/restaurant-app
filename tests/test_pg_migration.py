@@ -123,6 +123,29 @@ def _build_legacy_instruments(engine):
                           "('cash','Cash','cash')"))
 
 
+# payment_instrument that already HAS the provider column with an explicit value —
+# used to prove the historical backfill never overwrites a deliberate choice.
+INSTRUMENT_WITH_PROVIDER_DDL = """
+CREATE TABLE payment_instrument (
+  id SERIAL PRIMARY KEY,
+  code VARCHAR(30) UNIQUE NOT NULL,
+  name VARCHAR(60) NOT NULL,
+  instrument_type VARCHAR(20) NOT NULL,
+  is_third_party BOOLEAN DEFAULT FALSE,
+  delivery_only BOOLEAN DEFAULT FALSE,
+  provider VARCHAR(30) NOT NULL DEFAULT 'manual'
+);
+"""
+
+
+def _build_instrument_with_provider(engine, code, provider):
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS payment_instrument CASCADE"))
+        conn.execute(text(INSTRUMENT_WITH_PROVIDER_DDL))
+        conn.execute(text("INSERT INTO payment_instrument (code, name, instrument_type, provider) "
+                          "VALUES (:c,'Card','card',:p)"), {"c": code, "p": provider})
+
+
 def test_clean_upgrade(engine):
     _build_legacy(engine, [
         {"o": 1, "s": 1, "p": "square", "pp": "PAY_A", "pc": "CHK_A", "k": "k1", "t": 4500, "st": "settled"},
@@ -169,6 +192,62 @@ def test_card_terminal_instrument_backfilled(engine):
     check(rows.get("card_terminal") == "square_terminal",
           "legacy card_terminal instrument backfilled to square_terminal (#2)")
     check(rows.get("cash") == "manual", "ordinary cash instrument stays manual (#2)")
+
+
+def _instrument_provider(engine, code):
+    with engine.connect() as conn:
+        return conn.execute(text("SELECT provider FROM payment_instrument WHERE code=:c"),
+                            {"c": code}).scalar_one()
+
+
+def test_card_terminal_preserves_explicit_provider(engine):
+    # A deliberately-chosen provider must survive the historical backfill (#1).
+    _build_legacy(engine, [])
+    _build_instrument_with_provider(engine, "card_terminal", "stripe_terminal")
+    migrate.run(engine, strict=True)
+    check(_instrument_provider(engine, "card_terminal") == "stripe_terminal",
+          "card_terminal + alternate provider is left unchanged (#1)")
+    # An already-correct square_terminal is also untouched.
+    _build_legacy(engine, [])
+    _build_instrument_with_provider(engine, "card_terminal", "square_terminal")
+    migrate.run(engine, strict=True)
+    check(_instrument_provider(engine, "card_terminal") == "square_terminal",
+          "card_terminal + square_terminal unchanged (#1)")
+
+
+def test_hardening_is_idempotent(engine):
+    _build_legacy(engine, [
+        {"o": 1, "s": 1, "p": "square", "pp": "PAY_A", "pc": "CHK_A", "k": "k1", "t": 100, "st": "created"},
+    ])
+    _build_legacy_instruments(engine)
+    first = migrate.run(engine, strict=True)
+    second = migrate.run(engine, strict=True)   # re-run must change nothing semantically
+    payment_changes = [a for a in second if "payment_attempt" in a or "payment_instrument" in a
+                       or "constraint" in a.lower() or "default" in a or "backfill" in a]
+    check(payment_changes == [], f"second migration run is a no-op ({payment_changes})")
+    check(_instrument_provider(engine, "card_terminal") == "square_terminal",
+          "provider values stable across repeated runs")
+
+
+def test_hardening_atomic_rollback(engine):
+    # A duplicate provider_payment_id makes the constraint step fail AFTER the
+    # default-drop/backfill steps. Atomicity means those earlier steps roll back.
+    _build_legacy(engine, [
+        {"o": 1, "s": 1, "p": "square", "pp": "DUP", "pc": None, "k": "a1", "t": 100, "st": "created"},
+        {"o": 2, "s": 1, "p": "square", "pp": "DUP", "pc": None, "k": "a2", "t": 100, "st": "created"},
+    ])
+    check(_column_default(engine, "payment_attempt", "provider") is not None, "default present pre-run")
+    raised = False
+    try:
+        migrate.run(engine, strict=True)
+    except migrate.MigrationError:
+        raised = True
+    check(raised, "strict migration fails on the duplicate")
+    check(_column_default(engine, "payment_attempt", "provider") is not None,
+          "earlier steps rolled back: provider default still present (atomic — #2)")
+    with engine.connect() as conn:
+        providers = {r[0] for r in conn.execute(text("SELECT provider FROM payment_attempt"))}
+    check(providers == {"square"}, "provider backfill rolled back too (rows still 'square')")
 
 
 def test_nonnull_provider_refund_id_fails_strict(engine):
@@ -236,7 +315,9 @@ if __name__ == "__main__":
         sys.exit(0)
     print(f"Postgres: {pg_dsn()}")
     for fn in (test_clean_upgrade, test_provider_default_removed,
-               test_card_terminal_instrument_backfilled, test_nonnull_provider_refund_id_fails_strict,
+               test_card_terminal_instrument_backfilled, test_card_terminal_preserves_explicit_provider,
+               test_hardening_is_idempotent, test_hardening_atomic_rollback,
+               test_nonnull_provider_refund_id_fails_strict,
                test_upgrade_blocks_on_duplicate_payment_id,
                test_upgrade_blocks_on_duplicate_checkout_id, test_duplicate_rejected_after_upgrade):
         print(f"- {fn.__name__}")
