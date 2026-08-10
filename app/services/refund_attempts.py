@@ -231,6 +231,23 @@ def _by_key(db: Session, key: str) -> RefundAttempt | None:
     ).scalar_one_or_none()
 
 
+def _require_external_refund_id(
+    refund: RefundAttempt, provider_refund_id: str | None, new_status: str,
+) -> None:
+    """An external refund cannot enter PROCESSOR_PENDING or COMPLETED without a
+    durable provider_refund_id — the refund equivalent of the external-approval
+    invariant (finding #1). Manual/local refunds need none. If the outcome is
+    genuinely unknown, route to REQUIRES_RECONCILIATION instead. Effective id
+    combines what's persisted with what this transition supplies."""
+    from app.services.payment_providers import get_provider
+    if not get_provider(refund.provider).is_external:
+        return
+    if not (provider_refund_id or refund.provider_refund_id):
+        raise PaymentAttemptError(
+            f"an external refund cannot enter {new_status} without a provider_refund_id "
+            "(#1); use REQUIRES_RECONCILIATION if the processor outcome is unknown.")
+
+
 def transition_refund(
     db: Session,
     refund: RefundAttempt,
@@ -250,6 +267,8 @@ def transition_refund(
         raise PaymentAttemptError(
             "resolve a REQUIRES_RECONCILIATION refund via resolve_refund_reconciliation(), "
             "not transition_refund().")
+    if new_status in (RefundAttemptStatus.PROCESSOR_PENDING, RefundAttemptStatus.COMPLETED):
+        _require_external_refund_id(refund, provider_refund_id, new_status)
     allowed = REFUND_ATTEMPT_TRANSITIONS.get(refund.status, set())
     if new_status not in allowed:
         raise PaymentAttemptError(
@@ -333,6 +352,10 @@ def resolve_refund_reconciliation(
         raise PaymentAttemptError(f"cannot resolve a refund to {resolved_status!r}.")
     if not (note or "").strip():
         raise PaymentAttemptError("refund reconciliation resolution requires a note.")
+    # Resolving an external refund to COMPLETED needs an authoritative refund id —
+    # check up front so a rejection leaves no half-written audit/reconciliation.
+    if resolved_status == RefundAttemptStatus.COMPLETED:
+        _require_external_refund_id(refund, provider_refund_id, resolved_status)
 
     if automatic:
         if not (provider_evidence or "").strip():

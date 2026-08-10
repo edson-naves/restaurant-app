@@ -271,6 +271,74 @@ def test_refund_reconciliation_authority():
           "automatic refund reconciliation with evidence is accepted (#1)")
 
 
+def test_external_refund_requires_refund_id():
+    db, ids = _db()
+    _settled_attempt(db, ids)  # square_terminal settled charge
+    r = _mkref(db, ids, 500, provider="square_terminal", key="er1")
+    raised = False
+    try:
+        ra.transition_refund(db, r, R.PROCESSOR_PENDING)  # no id
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "external refund -> PENDING without provider_refund_id rejected (#1)")
+    ra.transition_refund(db, r, R.PROCESSOR_PENDING, provider_refund_id="rf_1")
+    check(r.status == R.PROCESSOR_PENDING, "external refund -> PENDING with id accepted (#1)")
+    ra.transition_refund(db, r, R.COMPLETED)  # persisted id carries forward
+    check(r.status == R.COMPLETED, "external refund PENDING(persisted id) -> COMPLETED accepted (#1)")
+
+    r2 = _mkref(db, ids, 200, provider="square_terminal", key="er2")
+    raised = False
+    try:
+        ra.transition_refund(db, r2, R.COMPLETED)  # no id
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "external refund CREATED -> COMPLETED without id rejected (#1)")
+
+
+def test_manual_refund_completes_without_id():
+    db, ids = _db()  # seeded manual payment, no attempt
+    r = _mkref(db, ids, 100, provider="manual")
+    ra.transition_refund(db, r, R.COMPLETED)  # no provider_refund_id needed
+    check(r.status == R.COMPLETED, "manual refund completes without a processor id (#1)")
+
+
+def test_external_refund_reconciliation_requires_id():
+    db, ids = _db()
+    _settled_attempt(db, ids)
+    r = _mkref(db, ids, 500, provider="square_terminal", key="er")
+    ra.transition_refund(db, r, R.REQUIRES_RECONCILIATION)
+    raised = False
+    try:
+        ra.resolve_refund_reconciliation(db, r, resolved_status=R.COMPLETED, note="x",
+                                         automatic=True, provider_evidence="ev")  # no id
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "external reconciliation -> COMPLETED without refund id rejected (#1)")
+    ra.resolve_refund_reconciliation(db, r, resolved_status=R.COMPLETED, note="x",
+                                     automatic=True, provider_evidence="ev", provider_refund_id="rf_done")
+    check(r.status == R.COMPLETED, "external reconciliation -> COMPLETED with refund id accepted (#1)")
+
+
+def test_refund_provider_id_unique_and_write_once():
+    db, ids = _db()
+    _settled_attempt(db, ids)
+    a = _mkref(db, ids, 100, provider="square_terminal", key="u1")
+    b = _mkref(db, ids, 100, provider="square_terminal", key="u2")
+    ra.transition_refund(db, a, R.PROCESSOR_PENDING, provider_refund_id="RF")
+    raised = False
+    try:
+        ra.transition_refund(db, a, R.COMPLETED, provider_refund_id="RF2")  # change id
+    except pa.TransitionConflict:
+        raised = True
+    check(raised, "provider_refund_id is write-once (#1)")
+    raised = False
+    try:
+        ra.transition_refund(db, b, R.PROCESSOR_PENDING, provider_refund_id="RF")  # duplicate
+    except pa.TransitionConflict:
+        raised = True
+    check(raised, "duplicate (provider, provider_refund_id) rejected (#1)")
+
+
 def test_refund_state_transitions():
     db, ids = _db()
     r = _mkref(db, ids, 500)
@@ -296,6 +364,10 @@ if __name__ == "__main__":
         test_legacy_square_payment_refunded_as_manual_rejected,
         test_legacy_provider_must_be_derivable,
         test_refund_reconciliation_authority,
+        test_external_refund_requires_refund_id,
+        test_manual_refund_completes_without_id,
+        test_external_refund_reconciliation_requires_id,
+        test_refund_provider_id_unique_and_write_once,
         test_refund_currency_must_match,
         test_refund_currency_defaults_to_venue,
         test_provider_mismatch_rejected,
