@@ -22,16 +22,20 @@ from sqlalchemy.orm import Session
 from app.config import venue_currency
 from app.models.oltp import (
     REFUND_ATTEMPT_TRANSITIONS,
+    AuditEvent,
     Payment,
     PaymentAttempt,
     PaymentAttemptStatus,
     RefundAttempt,
     RefundAttemptStatus,
+    Staff,
 )
 from app.services.payment_attempts import (
     IdempotencyConflict,
     PaymentAttemptError,
+    ReconciliationAuthorityError,
     TransitionConflict,
+    _RECON_ROLES,
     _validate_provider,
     is_lock_conflict,
 )
@@ -236,8 +240,16 @@ def transition_refund(
     refund_id: int | None = None,
     last_error: str | None = None,
     commit: bool = True,
+    _from_resolver: bool = False,
 ) -> RefundAttempt:
-    """Concurrency-safe compare-and-swap transition for a refund attempt."""
+    """Concurrency-safe compare-and-swap transition for a refund attempt.
+
+    Leaving REQUIRES_RECONCILIATION is gated by ``resolve_refund_reconciliation``
+    (finding #1): a plain transition cannot resolve an ambiguous refund."""
+    if refund.status == RefundAttemptStatus.REQUIRES_RECONCILIATION and not _from_resolver:
+        raise PaymentAttemptError(
+            "resolve a REQUIRES_RECONCILIATION refund via resolve_refund_reconciliation(), "
+            "not transition_refund().")
     allowed = REFUND_ATTEMPT_TRANSITIONS.get(refund.status, set())
     if new_status not in allowed:
         raise PaymentAttemptError(
@@ -289,3 +301,60 @@ def transition_refund(
         )
     db.refresh(refund)
     return refund
+
+
+def resolve_refund_reconciliation(
+    db: Session,
+    refund: RefundAttempt,
+    *,
+    resolved_status: str,
+    note: str,
+    actor: Staff | None = None,
+    automatic: bool = False,
+    provider_evidence: str | None = None,
+    provider_refund_id: str | None = None,
+) -> RefundAttempt:
+    """Resolve an ambiguous refund under explicit authority, with an audit trail
+    (finding #1) — mirrors resolve_reconciliation for charge attempts. The only
+    exit from a REQUIRES_RECONCILIATION refund.
+
+    * **Manual** — ``actor`` must be a Staff with an OWNER/MANAGER role.
+    * **Automatic** — ``automatic=True`` (a recovery worker) MUST supply
+      ``provider_evidence``; a note alone cannot resolve.
+    """
+    if refund.status != RefundAttemptStatus.REQUIRES_RECONCILIATION:
+        raise PaymentAttemptError(
+            "resolve_refund_reconciliation only applies to a REQUIRES_RECONCILIATION refund.")
+    if resolved_status not in (
+        RefundAttemptStatus.COMPLETED,
+        RefundAttemptStatus.FAILED,
+        RefundAttemptStatus.REJECTED,
+    ):
+        raise PaymentAttemptError(f"cannot resolve a refund to {resolved_status!r}.")
+    if not (note or "").strip():
+        raise PaymentAttemptError("refund reconciliation resolution requires a note.")
+
+    if automatic:
+        if not (provider_evidence or "").strip():
+            raise ReconciliationAuthorityError(
+                "automatic refund reconciliation must supply provider_evidence — a note "
+                "alone cannot resolve an ambiguous refund (#1).")
+        actor_id, resolved_by = None, "system:auto"
+    else:
+        if actor is None or actor.role not in _RECON_ROLES:
+            raise ReconciliationAuthorityError(
+                "manual refund reconciliation requires an OWNER/MANAGER actor (#1).")
+        actor_id, resolved_by = actor.id, actor.name
+
+    detail = f"refund {refund.id} -> {resolved_status}"
+    if provider_evidence:
+        detail += f" [evidence: {provider_evidence}]"
+    detail = f"{detail}: {note.strip()}"[:300]
+    db.add(AuditEvent(staff_id=actor_id, action="reconcile_refund_attempt", detail=detail))
+
+    refund.reconciled_at = datetime.now()
+    refund.reconciled_by = resolved_by[:60]
+    refund.reconciliation_note = (
+        (note.strip() + (f" | evidence: {provider_evidence}" if provider_evidence else ""))[:300])
+    return transition_refund(
+        db, refund, resolved_status, provider_refund_id=provider_refund_id, _from_resolver=True)

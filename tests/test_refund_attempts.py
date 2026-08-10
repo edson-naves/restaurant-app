@@ -10,8 +10,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tests._pay_fixture import new_db as _db
 
 from app.models.oltp import (
-    Payment, PaymentAttemptStatus as PS, PaymentInstrument,
-    RefundAttempt, RefundAttemptStatus as R,
+    AuditEvent, Payment, PaymentAttemptStatus as PS, PaymentInstrument,
+    RefundAttempt, RefundAttemptStatus as R, Staff,
 )
 from app.services import payment_attempts as pa
 from app.services import refund_attempts as ra
@@ -220,6 +220,56 @@ def test_refund_currency_defaults_to_venue():
         os.environ.pop("VENUE_CURRENCY", None) if old is None else os.environ.__setitem__("VENUE_CURRENCY", old)
 
 
+def test_refund_reconciliation_authority():
+    db, ids = _db()
+    r = _mkref(db, ids, 500, provider="manual")
+    ra.transition_refund(db, r, R.REQUIRES_RECONCILIATION, last_error="lost")
+
+    # bare transition out of reconciliation is blocked
+    for target in (R.COMPLETED, R.FAILED):
+        raised = False
+        try:
+            ra.transition_refund(db, r, target)
+        except pa.PaymentAttemptError:
+            raised = True
+        check(raised, f"bare refund reconciliation -> {target} rejected (#1)")
+
+    # unauthorized actor cannot resolve
+    waiter = Staff(name="Wanda", role="waiter", pin_code="x")
+    db.add(waiter); db.commit()
+    raised = False
+    try:
+        ra.resolve_refund_reconciliation(db, r, resolved_status=R.COMPLETED, note="ok", actor=waiter)
+    except pa.ReconciliationAuthorityError:
+        raised = True
+    check(raised, "a non-manager cannot resolve refund reconciliation (#1)")
+
+    # automatic without evidence rejected
+    raised = False
+    try:
+        ra.resolve_refund_reconciliation(db, r, resolved_status=R.COMPLETED, note="x", automatic=True)
+    except pa.ReconciliationAuthorityError:
+        raised = True
+    check(raised, "automatic refund reconciliation needs provider evidence (#1)")
+
+    # authorized owner resolves + audit
+    owner = db.get(Staff, ids["staff_id"])  # seeded owner
+    ra.resolve_refund_reconciliation(db, r, resolved_status=R.COMPLETED, note="verified in dashboard",
+                                     actor=owner, provider_evidence="rf_123")
+    check(r.status == R.COMPLETED and r.reconciled_by == owner.name,
+          "authorized manager resolves refund + records who (#1)")
+    check(db.query(AuditEvent).filter_by(action="reconcile_refund_attempt").count() == 1,
+          "an audit event is written for the refund resolution (#1)")
+
+    # automatic WITH evidence accepted (fresh refund)
+    r2 = _mkref(db, ids, 200, provider="manual", key="r2")
+    ra.transition_refund(db, r2, R.REQUIRES_RECONCILIATION)
+    ra.resolve_refund_reconciliation(db, r2, resolved_status=R.FAILED, note="processor lookup",
+                                     automatic=True, provider_evidence="lookup:not_found")
+    check(r2.status == R.FAILED and r2.reconciled_by == "system:auto",
+          "automatic refund reconciliation with evidence is accepted (#1)")
+
+
 def test_refund_state_transitions():
     db, ids = _db()
     r = _mkref(db, ids, 500)
@@ -244,6 +294,7 @@ if __name__ == "__main__":
         test_legacy_refund_provider_derivation,
         test_legacy_square_payment_refunded_as_manual_rejected,
         test_legacy_provider_must_be_derivable,
+        test_refund_reconciliation_authority,
         test_refund_currency_must_match,
         test_refund_currency_defaults_to_venue,
         test_provider_mismatch_rejected,

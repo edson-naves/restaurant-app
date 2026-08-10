@@ -141,6 +141,33 @@ def test_concurrent_refund_same_key(engine, ids):
     check(n == 1, "exactly one RefundAttempt row persisted (#16)")
 
 
+def test_concurrent_refund_reconciliation(engine, ids):
+    from app.models.oltp import RefundAttemptStatus as R
+    Sess = Session(engine)
+    db0 = Sess()
+    r = ra.create_refund_attempt(db0, payment_id=ids["payment_id"], staff_id=ids["staff_id"],
+                                 provider="manual", amount_cents=500, idempotency_key="rr")
+    ra.transition_refund(db0, r, R.REQUIRES_RECONCILIATION)
+    rid = r.id
+    db0.close()
+
+    def resolve(_i):
+        db = Sess()
+        try:
+            ref = db.get(RefundAttempt, rid)
+            ra.resolve_refund_reconciliation(db, ref, resolved_status=R.COMPLETED,
+                                             note="auto", automatic=True, provider_evidence="ev")
+            return "ok"
+        finally:
+            db.close()
+
+    results = _run_concurrently(resolve, 6)
+    wins = [r for r in results if r[0] == "ok"]
+    refusals = [r for r in results if r[0] == "err" and isinstance(r[1], pa.PaymentAttemptError)]
+    check(len(wins) == 1, f"exactly one refund reconciliation wins ({len(wins)})")
+    check(len(refusals) == 5, "the losers refuse with an explicit typed error (#1)")
+
+
 def test_provider_payment_id_unique(engine, ids):
     Sess = Session(engine)
     db = Sess()
@@ -208,6 +235,7 @@ if __name__ == "__main__":
         test_concurrent_same_key_create,
         test_concurrent_conflicting_transition,
         test_concurrent_refund_same_key,
+        test_concurrent_refund_reconciliation,
         test_provider_payment_id_unique,
         test_fk_enforced,
         test_one_settlement_per_attempt,
