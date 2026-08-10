@@ -303,6 +303,31 @@ def _migrate_payment_hardening(engine: Engine, strict: bool) -> list[str]:
             if n:
                 applied.append(f"backfilled {table}.provider {old}->{new} ({n} rows)")
 
+    # 1b. An existing terminal-card instrument predates the provider column and
+    # would take the 'manual' default; map it to square_terminal by its stable
+    # business key (#2). Ordinary cash/manual instruments keep 'manual'.
+    with engine.begin() as conn:
+        if _column_exists(conn, "payment_instrument", "provider"):
+            n = conn.execute(text(
+                "UPDATE payment_instrument SET provider='square_terminal' "
+                "WHERE code='card_terminal' AND provider <> 'square_terminal'")).rowcount
+            if n:
+                applied.append(f"backfilled payment_instrument card_terminal->square_terminal ({n})")
+
+    # 1c. Remove the retired legacy DEFAULT 'square' on payment_attempt.provider
+    # (widening the type does not drop it — #1). Postgres only; SQLite's model has
+    # no server default and cannot DROP DEFAULT without a table rebuild.
+    if pg:
+        with engine.begin() as conn:
+            if _column_exists(conn, "payment_attempt", "provider"):
+                has_default = conn.execute(text(
+                    "SELECT column_default FROM information_schema.columns "
+                    "WHERE table_name='payment_attempt' AND column_name='provider' "
+                    "AND table_schema=current_schema()")).scalar_one_or_none()
+                if has_default is not None:
+                    conn.execute(text('ALTER TABLE payment_attempt ALTER COLUMN provider DROP DEFAULT'))
+                    applied.append("dropped legacy default on payment_attempt.provider")
+
     # 2. Retire the old provider_refund_id (refunds now live on refund_attempt).
     #    Drop only when it holds no data; otherwise report and keep it (never lose
     #    financial evidence silently).
@@ -312,8 +337,12 @@ def _migrate_payment_hardening(engine: Engine, strict: bool) -> list[str]:
                 text("SELECT COUNT(*) FROM payment_attempt WHERE provider_refund_id IS NOT NULL")
             ).scalar_one()
             if leftover:
-                applied.append(f"KEPT payment_attempt.provider_refund_id ({leftover} non-null "
-                               "rows) — retire manually after moving them to refund_attempt")
+                msg = (f"payment_attempt.provider_refund_id still holds {leftover} non-null "
+                       "row(s); migrate them into refund_attempt before upgrading. Financially "
+                       "meaningful legacy data must not be left behind.")
+                if strict:
+                    raise MigrationError(msg)          # fail closed in production (#6)
+                applied.append(f"KEPT (non-strict): {msg}")
             else:
                 try:
                     conn.execute(text('ALTER TABLE payment_attempt DROP COLUMN '
