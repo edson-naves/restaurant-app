@@ -32,7 +32,9 @@ class ConfigError(RuntimeError):
 
 # Square is optional (a cash-only venue needs none), but a *partial* Square
 # config is a deployment mistake — it silently disables card payments. Require
-# all or nothing.
+# all or nothing. Note: SQUARE_APPLICATION_ID is deliberately NOT here — the
+# server-side Terminal flow (app/services/square.py) never reads it; it is only
+# a client-side SDK value. So the required server set is exactly these three.
 _SQUARE_REQUIRED = (
     "SQUARE_ACCESS_TOKEN",
     "SQUARE_LOCATION_ID",

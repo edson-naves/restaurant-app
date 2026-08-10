@@ -109,7 +109,10 @@ def healthz():
 def readyz():
     """Readiness: prove the app can actually serve traffic — the database is
     reachable and the core schema exists. Returns 503 until it can, so a load
-    balancer/orchestrator does not route to an instance that cannot transact."""
+    balancer/orchestrator does not route to an instance that cannot transact.
+
+    The response body is deliberately generic; the underlying error (SQL, driver,
+    host, schema) is logged server-side only, never returned to the caller."""
     from sqlalchemy import text
     try:
         with engine.connect() as conn:
@@ -117,6 +120,8 @@ def readyz():
             # A core table proves migrations/bootstrap ran, not just that a DB
             # socket answered.
             conn.execute(text('SELECT 1 FROM staff LIMIT 1'))
-    except Exception as exc:  # noqa: BLE001
-        return HTMLResponse(f"not ready: {exc}", status_code=503)
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger("readyz").exception("readiness check failed")
+        return HTMLResponse("not ready", status_code=503)
     return "ready"
