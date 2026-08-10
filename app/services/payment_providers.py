@@ -359,10 +359,10 @@ def _evidence_coherent(ev: dict) -> bool:
     Requires: captured total and base present and >= 0, tip >= 0 and <= total,
     and a structurally valid 3-letter currency. Anything off -> reconcile."""
     total = ev.get("captured_total_cents")
-    tip = ev.get("tip_cents") or 0
+    tip = ev.get("tip_cents")
     base = ev.get("base_cents")
     cur = ev.get("currency")
-    if total is None or base is None:
+    if total is None or base is None or tip is None:  # missing/malformed -> incoherent
         return False
     if total < 0 or tip < 0 or base < 0 or tip > total:
         return False
