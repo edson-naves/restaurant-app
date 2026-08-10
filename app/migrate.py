@@ -120,7 +120,12 @@ WIDENED_COLUMNS: tuple[tuple[str, str, int, str], ...] = (
 DEFAULT_FLOOR = "1st floor"
 
 
-def run(engine: Engine) -> list[str]:
+class MigrationError(RuntimeError):
+    """A schema migration failed. Raised in strict mode so deployment aborts
+    rather than starting the app against a mismatched schema."""
+
+
+def run(engine: Engine, strict: bool = False) -> list[str]:
     """Apply any missing columns, then backfill. Returns what changed.
 
     These additive migrations exist to evolve an *existing* database whose
@@ -130,9 +135,13 @@ def run(engine: Engine) -> list[str]:
     find every column present and do nothing — but an existing Postgres created
     before a column was added still needs it, which is what the Postgres branch
     handles (previously it was skipped, so new columns never reached prod).
+
+    ``strict`` (production): a genuine ALTER failure raises ``MigrationError``
+    instead of being recorded as ``SKIPPED …`` and swallowed, so the app never
+    starts expecting a newer schema than the database actually has.
     """
     if engine.dialect.name != "sqlite":
-        return _run_postgres(engine)
+        return _run_postgres(engine, strict=strict)
     applied: list[str] = []
     with engine.begin() as conn:
         for table, column, ddl in ADDED_COLUMNS:
@@ -181,7 +190,7 @@ def _pg_boolean_ddl(ddl: str) -> str:
     return ddl
 
 
-def _run_postgres(engine: Engine) -> list[str]:
+def _run_postgres(engine: Engine, strict: bool = False) -> list[str]:
     """Additive ADD COLUMN for an existing Postgres database (Render).
 
     Only columns that are genuinely missing are added, checked against
@@ -221,7 +230,9 @@ def _run_postgres(engine: Engine) -> list[str]:
                     text(f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS {column} {_pg_boolean_ddl(ddl)}')
                 )
             applied.append(f"{table}.{column}")
-        except Exception as exc:               # noqa: BLE001 — never block startup
+        except Exception as exc:               # noqa: BLE001
+            if strict:
+                raise MigrationError(f"failed to add {table}.{column}: {exc}") from exc
             applied.append(f"SKIPPED {table}.{column}: {exc}")
 
     # Widen any column that outgrew its original length (e.g. pin_code now holds
@@ -247,7 +258,9 @@ def _run_postgres(engine: Engine) -> list[str]:
                     text(f'ALTER TABLE "{table}" ALTER COLUMN {column} TYPE {ddl}')
                 )
             applied.append(f"widened {table}.{column} -> {ddl}")
-        except Exception as exc:               # noqa: BLE001 — never block startup
+        except Exception as exc:               # noqa: BLE001
+            if strict:
+                raise MigrationError(f"failed to widen {table}.{column}: {exc}") from exc
             applied.append(f"SKIPPED widen {table}.{column}: {exc}")
     # Required invariant — NOT swallowed (halts if pre-existing duplicates make
     # the unique index impossible).
