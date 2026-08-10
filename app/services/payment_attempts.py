@@ -113,6 +113,32 @@ def _validate_provider(provider: str) -> None:
         raise PaymentAttemptError(str(exc)) from exc
 
 
+def _valid_currency(cur: str | None) -> bool:
+    return isinstance(cur, str) and len(cur) == 3 and cur.isalpha()
+
+
+def _require_approval_evidence(
+    attempt: PaymentAttempt, provider_payment_id: str | None,
+    processor_amount_cents: int | None, processor_currency: str | None,
+) -> None:
+    """External providers cannot enter PROCESSOR_APPROVED without authoritative
+    evidence — enforced at the state-machine boundary, not just in the Square
+    adapter (finding #2). Manual/local providers approve instantly with no
+    external evidence. Effective values combine what's already persisted with
+    what this transition supplies."""
+    from app.services.payment_providers import get_provider
+    if not get_provider(attempt.provider).is_external:
+        return
+    eff_pay = provider_payment_id or attempt.provider_payment_id
+    eff_amt = (processor_amount_cents if processor_amount_cents is not None
+               else attempt.processor_amount_cents)
+    eff_cur = processor_currency or attempt.processor_currency
+    if not eff_pay or eff_amt is None or eff_amt < 0 or not _valid_currency(eff_cur):
+        raise PaymentAttemptError(
+            "an external provider cannot enter PROCESSOR_APPROVED without a provider "
+            "payment id, a non-negative processor amount, and a valid processor currency (#2).")
+
+
 def _by_key(db: Session, key: str) -> PaymentAttempt | None:
     return db.execute(
         select(PaymentAttempt).where(PaymentAttempt.idempotency_key == key)
@@ -231,6 +257,9 @@ def transition(
         )
     if new_status == PaymentAttemptStatus.SETTLED and payment_id is None:
         raise PaymentAttemptError("settling an attempt requires a payment_id.")
+    if new_status == PaymentAttemptStatus.PROCESSOR_APPROVED:
+        _require_approval_evidence(attempt, provider_payment_id,
+                                   processor_amount_cents, processor_currency)
 
     expected = attempt.status
     values: dict = {"status": new_status, "updated_at": datetime.now()}
