@@ -129,6 +129,37 @@ def test_legacy_square_payment_refunded_as_manual_rejected():
     check(raised, "legacy square payment cannot be refunded as manual (#4)")
 
 
+def test_legacy_provider_must_be_derivable():
+    """A legacy payment whose provider cannot be derived (blank or unregistered
+    instrument provider) fails closed — caller input never becomes authoritative (#5)."""
+    db, ids = _db()
+    # blank instrument provider
+    blank = PaymentInstrument(code="blank_inst", name="Blank", instrument_type="card", provider="")
+    db.add(blank); db.flush()
+    pay1 = Payment(order_id=ids["order_id"], instrument_id=blank.id, staff_id=ids["staff_id"], total_cents=1000)
+    db.add(pay1); db.commit()
+    raised = False
+    try:
+        ra.create_refund_attempt(db, payment_id=pay1.id, staff_id=ids["staff_id"],
+                                 provider="manual", amount_cents=100)
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "legacy payment with blank instrument provider is rejected (#5)")
+
+    # unregistered instrument provider
+    bogus = PaymentInstrument(code="bogus_inst", name="Bogus", instrument_type="card", provider="ghost_pay")
+    db.add(bogus); db.flush()
+    pay2 = Payment(order_id=ids["order_id"], instrument_id=bogus.id, staff_id=ids["staff_id"], total_cents=1000)
+    db.add(pay2); db.commit()
+    raised = False
+    try:
+        ra.create_refund_attempt(db, payment_id=pay2.id, staff_id=ids["staff_id"],
+                                 provider="ghost_pay", amount_cents=100)
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "legacy payment with unregistered instrument provider is rejected (#5)")
+
+
 def test_refund_currency_must_match():
     db, ids = _db()
     _settled_attempt(db, ids)  # CAD square_terminal charge
@@ -212,6 +243,7 @@ if __name__ == "__main__":
         test_same_key_different_amount_conflicts,
         test_legacy_refund_provider_derivation,
         test_legacy_square_payment_refunded_as_manual_rejected,
+        test_legacy_provider_must_be_derivable,
         test_refund_currency_must_match,
         test_refund_currency_defaults_to_venue,
         test_provider_mismatch_rejected,

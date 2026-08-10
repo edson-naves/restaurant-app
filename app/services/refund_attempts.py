@@ -77,12 +77,23 @@ def _resolve_charge_attempt(
     if attempt is None:
         # Legacy payment predating PaymentAttempt: derive the canonical provider
         # from the original Payment's instrument and reject a caller mismatch —
-        # never trust the caller to say what a historical payment was (#4).
+        # never trust the caller to say what a historical payment was (#4). Fail
+        # closed if the provider cannot actually be derived (#5): a missing
+        # instrument, a blank provider, or an unregistered provider must error, not
+        # let caller input silently become authoritative.
         payment = db.get(Payment, payment_id)
         if payment is None:
             raise PaymentAttemptError(f"payment {payment_id} does not exist.")
-        inst_provider = payment.instrument.provider if payment.instrument else None
-        if inst_provider and inst_provider != provider:
+        if payment.instrument is None:
+            raise PaymentAttemptError(
+                f"cannot derive a provider for legacy payment {payment_id}: no instrument.")
+        inst_provider = (payment.instrument.provider or "").strip()
+        if not inst_provider:
+            raise PaymentAttemptError(
+                f"cannot derive a provider for legacy payment {payment_id}: "
+                "instrument provider is blank.")
+        _validate_provider(inst_provider)  # the derived provider must be registered
+        if inst_provider != provider:
             raise PaymentAttemptError(
                 f"refund provider {provider!r} != payment instrument provider "
                 f"{inst_provider!r} (legacy payment {payment_id}).")
