@@ -130,12 +130,18 @@ def create_checkout(
     note: str = "",
     allow_tip: bool = True,
     device_id: str | None = None,
+    idempotency_key: str | None = None,
 ) -> dict:
     """Send an amount to the terminal for the customer to pay + tip on.
 
     amount_cents is the pre-tip total to charge (items + tax + any service
     charge). The terminal adds the tip on top. Returns the created checkout
     (status PENDING); poll get_checkout / wait_for_checkout for the result.
+
+    ``idempotency_key`` is the caller's durable key (the PaymentAttempt's), so a
+    retry after a crash reaches Square with the *same* key and cannot double
+    charge. Only when no key is supplied do we mint one (never for a real
+    attempt-backed charge).
     """
     # tip_settings lives inside device_options (DeviceCheckoutOptions) — that's
     # what drives the tip prompt shown to the customer on the terminal.
@@ -149,7 +155,7 @@ def create_checkout(
     else:
         device_options["tip_settings"] = {"allow_tipping": False}
     body = {
-        "idempotency_key": str(uuid.uuid4()),
+        "idempotency_key": idempotency_key or str(uuid.uuid4()),
         "checkout": {
             "amount_money": {"amount": int(amount_cents), "currency": currency()},
             "device_options": device_options,

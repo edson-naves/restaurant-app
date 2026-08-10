@@ -1,49 +1,64 @@
-"""Pluggable payment providers (Stage 2b).
+"""Pluggable payment providers (hardened per review).
 
-The goal: support *any* payment method across many different venues without the
-order/settlement/refund core knowing anything provider-specific. The durable
-``PaymentAttempt`` state machine (payment_attempts.py) is the neutral spine; each
-real-world payment method is a small **adapter** implementing ``PaymentProvider``
-and registered by a string key. ``PaymentInstrument.provider`` names which adapter
-settles a given instrument.
+The durable ``PaymentAttempt``/``RefundAttempt`` state machines are the neutral
+spine; each real-world payment method is a small adapter implementing
+``PaymentProvider`` and registered by a string key. ``PaymentInstrument.provider``
+names which adapter settles an instrument.
 
-Adding a brand-new machine/processor for a new client is therefore:
+Adding a brand-new machine/processor for a new client is:
 
-    1. write a class subclassing PaymentProvider (charge/poll/refund/cancel),
-    2. call register(MyProvider()),
+    1. subclass PaymentProvider (charge/poll/refund/cancel + a capabilities set),
+    2. register(MyProvider()),
     3. set instrument.provider = "my_key".
 
-No change to routers, settlement, refunds, or the state machine.
+No change to routers, settlement, refunds, or the state machines.
 
-Two adapters ship here:
-
-* ``ManualProvider`` — cash, e-transfer, keyed card, delivery-platform tender:
-  no external processor, so a charge is instantly approved and a refund is a
-  local ledger entry (staff hands the money back). This is the default.
-* ``SquareTerminalProvider`` — the Square card terminal: asynchronous (create +
-  poll) with a real Refunds API call.
+Capabilities (finding #7) let the settlement core ask what a provider supports
+(polling, webhooks, auth/capture split, partial capture/refund, lookup) instead
+of assuming Square-terminal shape. Results carry the processor-confirmed amount
+and currency (finding #8) so settlement can verify or reconcile against the local
+snapshot, and every provider outcome maps to an explicit
+``PaymentAttemptStatus``/``RefundAttemptStatus`` — including the ambiguous cases
+(finding #9/#10/#11).
 """
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from app.models.oltp import PaymentAttemptStatus
+from app.models.oltp import PaymentAttemptStatus, RefundAttemptStatus
 from app.services import square
 
 
 # --------------------------------------------------------------------------
-# Result value objects — provider-neutral, expressed in the attempt's vocabulary
+# Capability vocabulary (finding #7)
+# --------------------------------------------------------------------------
+
+class Capability:
+    POLLING = "polling"
+    WEBHOOKS = "webhooks"
+    AUTHORIZE = "authorize"          # auth without capture
+    CAPTURE = "capture"              # later capture of an auth
+    PARTIAL_CAPTURE = "partial_capture"
+    REFUND = "refund"
+    PARTIAL_REFUND = "partial_refund"
+    LOOKUP = "lookup"                # provider-side reconciliation lookup
+
+
+# --------------------------------------------------------------------------
+# Result value objects — provider-neutral, in the attempts' vocabulary
 # --------------------------------------------------------------------------
 
 @dataclass
 class ChargeResult:
     """Outcome of asking a provider to charge. ``status`` is a
-    ``PaymentAttemptStatus`` value so the caller feeds it straight into the state
-    machine without provider-specific mapping."""
+    ``PaymentAttemptStatus`` value fed straight into the state machine."""
     status: str
     provider_checkout_id: str | None = None
     provider_payment_id: str | None = None
+    # Processor-confirmed amount/currency (finding #8) for settlement to verify.
+    processor_amount_cents: int | None = None
+    processor_currency: str | None = None
     tip_cents: int = 0
     card_brand: str | None = None
     card_last4: str | None = None
@@ -52,12 +67,25 @@ class ChargeResult:
 
 @dataclass
 class RefundResult:
-    ok: bool
+    status: str                       # a RefundAttemptStatus value
     provider_refund_id: str | None = None
-    # True when an external processor actually reversed funds; False for a
-    # manual/local refund where the ledger entry *is* the reversal.
-    external: bool = False
-    pending: bool = False
+    external: bool = False            # did an external processor reverse funds?
+    error: str = ""
+
+    @property
+    def ok(self) -> bool:
+        return self.status in (RefundAttemptStatus.COMPLETED,
+                               RefundAttemptStatus.PROCESSOR_PENDING)
+
+
+@dataclass
+class CancelResult:
+    """Outcome of a pre-capture cancel (finding #10). Never silently swallowed:
+    an ambiguous/failed cancel flags for reconciliation instead of assuming
+    success."""
+    ok: bool
+    provider_status: str = ""
+    requires_reconciliation: bool = False
     error: str = ""
 
 
@@ -66,48 +94,33 @@ class RefundResult:
 # --------------------------------------------------------------------------
 
 class PaymentProvider(ABC):
-    key: str = ""            # unique; matches PaymentInstrument.provider
+    key: str = ""
     label: str = ""
-    is_external: bool = False   # does it call an outside processor?
-    needs_polling: bool = False  # does charge() return PENDING to be polled?
+    is_external: bool = False
+    capabilities: frozenset[str] = frozenset()
+
+    @property
+    def needs_polling(self) -> bool:
+        return Capability.POLLING in self.capabilities
 
     def is_configured(self) -> bool:
-        """Whether this provider can be used right now (credentials present, …).
-        Manual providers are always ready; external ones check their config."""
         return True
 
     @abstractmethod
-    def charge(
-        self,
-        *,
-        amount_cents: int,
-        currency: str,
-        idempotency_key: str,
-        reference: str = "",
-        note: str = "",
-        tip_cents: int = 0,
-    ) -> ChargeResult:
-        """Initiate a charge for an already-persisted PaymentAttempt snapshot."""
+    def charge(self, *, amount_cents: int, currency: str, idempotency_key: str,
+               reference: str = "", note: str = "", tip_cents: int = 0) -> ChargeResult:
+        ...
 
     def poll(self, provider_checkout_id: str) -> ChargeResult:
-        """Re-read an in-progress charge. Only meaningful when needs_polling."""
         raise NotImplementedError(f"{self.key} does not support polling")
 
     @abstractmethod
-    def refund(
-        self,
-        *,
-        amount_cents: int,
-        currency: str,
-        idempotency_key: str,
-        provider_payment_id: str | None = None,
-    ) -> RefundResult:
-        """Reverse funds. External providers call their processor; manual ones
-        record a local reversal."""
+    def refund(self, *, amount_cents: int, currency: str, idempotency_key: str,
+               provider_payment_id: str | None = None) -> RefundResult:
+        ...
 
-    def cancel(self, *, provider_checkout_id: str) -> None:
-        """Cancel a still-pending (pre-capture) charge. Default: nothing to do."""
-        return None
+    def cancel(self, *, provider_checkout_id: str) -> CancelResult:
+        return CancelResult(ok=True)
 
 
 # --------------------------------------------------------------------------
@@ -115,23 +128,26 @@ class PaymentProvider(ABC):
 # --------------------------------------------------------------------------
 
 class ManualProvider(PaymentProvider):
-    """No external processor: staff attest the money moved. A charge is approved
-    immediately; a refund is a local ledger reversal (the cash goes back by
-    hand). Covers cash, e-transfer, keyed cards, and platform tenders."""
+    """No external processor: staff attest the money moved. Charge is approved
+    immediately; refund is a local ledger reversal. Covers cash, e-transfer,
+    keyed cards, and platform tenders."""
     key = "manual"
     label = "Manual / cash"
     is_external = False
-    needs_polling = False
+    capabilities = frozenset({Capability.REFUND, Capability.PARTIAL_REFUND})
 
     def charge(self, *, amount_cents, currency, idempotency_key,
                reference="", note="", tip_cents=0) -> ChargeResult:
-        return ChargeResult(status=PaymentAttemptStatus.PROCESSOR_APPROVED,
-                            tip_cents=tip_cents)
+        return ChargeResult(
+            status=PaymentAttemptStatus.PROCESSOR_APPROVED,
+            processor_amount_cents=amount_cents, processor_currency=currency,
+            tip_cents=tip_cents,
+        )
 
     def refund(self, *, amount_cents, currency, idempotency_key,
                provider_payment_id=None) -> RefundResult:
         # Nothing to call — the local Refund ledger entry is the reversal.
-        return RefundResult(ok=True, external=False)
+        return RefundResult(status=RefundAttemptStatus.COMPLETED, external=False)
 
 
 class SquareTerminalProvider(PaymentProvider):
@@ -140,7 +156,10 @@ class SquareTerminalProvider(PaymentProvider):
     key = "square_terminal"
     label = "Square terminal"
     is_external = True
-    needs_polling = True
+    capabilities = frozenset({
+        Capability.POLLING, Capability.CAPTURE, Capability.REFUND,
+        Capability.PARTIAL_REFUND, Capability.LOOKUP,
+    })
 
     def is_configured(self) -> bool:
         return square.is_configured()
@@ -150,6 +169,7 @@ class SquareTerminalProvider(PaymentProvider):
         try:
             checkout = square.create_checkout(
                 amount_cents, reference_id=reference, note=note,
+                idempotency_key=idempotency_key,   # finding #1: forward the key
             )
         except square.SquareError as exc:
             return ChargeResult(status=PaymentAttemptStatus.FAILED, error=str(exc))
@@ -163,16 +183,26 @@ class SquareTerminalProvider(PaymentProvider):
             checkout = square.get_checkout(provider_checkout_id)
         except square.SquareError as exc:
             return ChargeResult(status=PaymentAttemptStatus.PROCESSOR_PENDING,
-                                provider_checkout_id=provider_checkout_id,
-                                error=str(exc))
+                                provider_checkout_id=provider_checkout_id, error=str(exc))
         status = checkout.get("status")
         if status == square.COMPLETED:
             tip_cents, brand, last4 = square.tip_and_card(checkout)
             payment_ids = checkout.get("payment_ids") or []
+            if not payment_ids:
+                # Completed but no authoritative payment id — cannot reconcile,
+                # refund, or link. Do NOT treat as ordinary approval (finding #9).
+                return ChargeResult(
+                    status=PaymentAttemptStatus.REQUIRES_RECONCILIATION,
+                    provider_checkout_id=provider_checkout_id,
+                    error="Square COMPLETED without a payment id",
+                )
+            amount = _completed_amount(checkout)
             return ChargeResult(
                 status=PaymentAttemptStatus.PROCESSOR_APPROVED,
                 provider_checkout_id=provider_checkout_id,
-                provider_payment_id=payment_ids[0] if payment_ids else None,
+                provider_payment_id=payment_ids[0],
+                processor_amount_cents=amount,
+                processor_currency=(square.currency()),
                 tip_cents=tip_cents, card_brand=brand, card_last4=last4,
             )
         if status == square.CANCELED:
@@ -184,28 +214,48 @@ class SquareTerminalProvider(PaymentProvider):
     def refund(self, *, amount_cents, currency, idempotency_key,
                provider_payment_id=None) -> RefundResult:
         if not provider_payment_id:
-            return RefundResult(ok=False, external=True,
+            return RefundResult(status=RefundAttemptStatus.REQUIRES_RECONCILIATION,
+                                external=True,
                                 error="no Square payment id to refund against")
         try:
-            refund = square.create_refund(
-                provider_payment_id, amount_cents, idempotency_key,
-            )
+            refund = square.create_refund(provider_payment_id, amount_cents, idempotency_key)
         except square.SquareError as exc:
-            return RefundResult(ok=False, external=True, error=str(exc))
-        status = refund.get("status")
-        return RefundResult(
-            ok=status in (square.REFUND_COMPLETED, square.REFUND_PENDING),
-            provider_refund_id=refund.get("id"),
-            external=True,
-            pending=status == square.REFUND_PENDING,
-            error="" if status != square.REFUND_REJECTED else "refund rejected",
-        )
+            # Transport/API failure: unknown processor outcome → reconcile.
+            return RefundResult(status=RefundAttemptStatus.REQUIRES_RECONCILIATION,
+                                external=True, error=str(exc))
+        # Explicit mapping of every known Square refund state (finding #11).
+        return _map_square_refund(refund)
 
-    def cancel(self, *, provider_checkout_id: str) -> None:
+    def cancel(self, *, provider_checkout_id: str) -> CancelResult:
         try:
-            square.cancel_checkout(provider_checkout_id)
-        except square.SquareError:
-            pass
+            checkout = square.cancel_checkout(provider_checkout_id)
+        except square.SquareError as exc:
+            # Do not swallow: an ambiguous cancel must be reconciled (finding #10).
+            return CancelResult(ok=False, requires_reconciliation=True, error=str(exc))
+        return CancelResult(ok=True, provider_status=checkout.get("status", ""))
+
+
+def _completed_amount(checkout: dict) -> int | None:
+    money = checkout.get("amount_money") or {}
+    amt = money.get("amount")
+    return int(amt) if amt is not None else None
+
+
+_SQUARE_REFUND_MAP = {
+    square.REFUND_COMPLETED: (RefundAttemptStatus.COMPLETED, ""),
+    square.REFUND_PENDING: (RefundAttemptStatus.PROCESSOR_PENDING, ""),
+    square.REFUND_REJECTED: (RefundAttemptStatus.REJECTED, "Square rejected the refund"),
+    square.REFUND_FAILED: (RefundAttemptStatus.FAILED, "Square refund failed"),
+}
+
+
+def _map_square_refund(refund: dict) -> RefundResult:
+    status = refund.get("status")
+    mapped, err = _SQUARE_REFUND_MAP.get(
+        status, (RefundAttemptStatus.REQUIRES_RECONCILIATION, f"unknown Square refund status {status!r}")
+    )
+    return RefundResult(status=mapped, provider_refund_id=refund.get("id"),
+                        external=True, error=err)
 
 
 # --------------------------------------------------------------------------
@@ -220,29 +270,23 @@ _REGISTRY: dict[str, PaymentProvider] = {}
 
 
 def register(provider: PaymentProvider) -> None:
-    """Register (or replace) an adapter by its key. Call at import time."""
     if not provider.key:
         raise ValueError("payment provider must define a non-empty key")
     _REGISTRY[provider.key] = provider
 
 
 def get_provider(key: str) -> PaymentProvider:
-    """Resolve an adapter by key. Falls back to 'manual' semantics only via an
-    explicit key — an unknown key is an error, never a silent guess."""
     try:
         return _REGISTRY[key]
     except KeyError as exc:
         raise UnknownProvider(
-            f"no payment provider registered for {key!r} "
-            f"(known: {sorted(_REGISTRY)})"
+            f"no payment provider registered for {key!r} (known: {sorted(_REGISTRY)})"
         ) from exc
 
 
 def available() -> list[PaymentProvider]:
-    """All registered providers (for admin UIs / diagnostics)."""
     return list(_REGISTRY.values())
 
 
-# Ship with the two reference adapters registered.
 register(ManualProvider())
 register(SquareTerminalProvider())
