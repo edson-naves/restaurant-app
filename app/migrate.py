@@ -96,8 +96,9 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("payment_attempt", "reconciled_by", "VARCHAR(60) NOT NULL DEFAULT ''"),
     ("payment_attempt", "reconciliation_note", "VARCHAR(300) NOT NULL DEFAULT ''"),
     ("refund_attempt", "intent_fingerprint", "VARCHAR(64) NOT NULL DEFAULT ''"),
-    # Stage 2c: the paid-item selection captured on the charge attempt.
-    ("payment_attempt", "line_selection", "VARCHAR(500) NOT NULL DEFAULT ''"),
+    # Stage 2c: the paid-item selection captured on the charge attempt (TEXT so a
+    # large legitimate selection never overflows a fragile VARCHAR cap).
+    ("payment_attempt", "line_selection", "TEXT NOT NULL DEFAULT ''"),
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW

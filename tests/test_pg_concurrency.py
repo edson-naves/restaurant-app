@@ -17,9 +17,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests._pay_fixture import Session, fresh_schema, make_engine, pg_dsn, seed_parents
 
-from app.models.oltp import PaymentAttempt, PaymentAttemptStatus as S, RefundAttempt
+from app.models.oltp import Payment, PaymentAttempt, PaymentAttemptStatus as S, RefundAttempt
 from app.services import payment_attempts as pa
 from app.services import refund_attempts as ra
+from app.services import settlement as settle
 
 _failures = []
 
@@ -168,6 +169,59 @@ def test_concurrent_refund_reconciliation(engine, ids):
     check(len(refusals) == 5, "the losers refuse with an explicit typed error (#1)")
 
 
+def _approved_ext(db, ids, key):
+    a = pa.create_attempt(db, provider="square_terminal", order_id=ids["order_id"],
+                          staff_id=ids["staff_id"], expected_total_cents=1000,
+                          subtotal_cents=1000, currency="CAD", idempotency_key=key)
+    pa.transition(db, a, S.PROCESSOR_PENDING, provider_checkout_id="chk_" + key)
+    pa.transition(db, a, S.PROCESSOR_APPROVED, provider_payment_id="pay_" + key,
+                  processor_amount_cents=1000, processor_currency="CAD")
+    return a
+
+
+def _pay_factory(db, ids):
+    def make():
+        p = Payment(order_id=ids["order_id"], instrument_id=ids["instrument_id"],
+                    staff_id=ids["staff_id"], total_cents=1000)
+        db.add(p)
+        return p
+    return make
+
+
+def test_settlement_cas_converges_on_winner(engine, ids):
+    """A CAS-losing settle converges ONLY on a real SETTLED winner (#2)."""
+    Sess = Session(engine)
+    sa, sb = Sess(), Sess()
+    a = _approved_ext(sa, ids, "cw")
+    aid = a.id
+    b = sb.get(PaymentAttempt, aid)                 # B loads the APPROVED attempt
+    pay_a = settle.settle_charge(sa, a, payment_factory=_pay_factory(sa, ids)).payment
+    sa.commit()                                     # A settles first
+    res_b = settle.settle_charge(sb, b, payment_factory=_pay_factory(sb, ids))
+    check(res_b.is_settled and res_b.payment.id == pay_a.id,
+          "CAS loser converges on the real winner's Payment (#2)")
+    sa.close(); sb.close()
+
+
+def test_settlement_cas_reraises_on_non_winner(engine, ids):
+    """A CAS loss to a NON-settled state (e.g. reconciliation) re-raises rather
+    than reporting false success (#2)."""
+    Sess = Session(engine)
+    sa, sb = Sess(), Sess()
+    a = _approved_ext(sa, ids, "cr")
+    aid = a.id
+    b = sb.get(PaymentAttempt, aid)
+    pa.transition(sa, a, S.REQUIRES_RECONCILIATION, last_error="lost")
+    sa.commit()                                     # A parks it, does not settle
+    raised = False
+    try:
+        settle.settle_charge(sb, b, payment_factory=_pay_factory(sb, ids))
+    except pa.TransitionConflict:
+        raised = True
+    check(raised, "CAS loss to a non-settled state re-raises, not false success (#2)")
+    sa.close(); sb.close()
+
+
 def test_provider_payment_id_unique(engine, ids):
     Sess = Session(engine)
     db = Sess()
@@ -239,6 +293,8 @@ if __name__ == "__main__":
         test_provider_payment_id_unique,
         test_fk_enforced,
         test_one_settlement_per_attempt,
+        test_settlement_cas_converges_on_winner,
+        test_settlement_cas_reraises_on_non_winner,
     ]
     for fn in tests:
         print(f"- {fn.__name__}")

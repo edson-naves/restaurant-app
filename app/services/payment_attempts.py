@@ -79,8 +79,13 @@ def new_idempotency_key() -> str:
 
 def canonical_selection(item_ids) -> str:
     """Stable identity of the paid-item set: sorted, de-duplicated, comma-joined
-    (Stage 2c). '' means a whole-order/amount-only intent."""
-    return ",".join(str(i) for i in sorted({int(i) for i in (item_ids or [])}))
+    (Stage 2c). '' means a whole-order/amount-only intent. Malformed ids raise an
+    explicit domain error rather than silently coercing (slice-1 review #4)."""
+    try:
+        ids = sorted({int(i) for i in (item_ids or [])})
+    except (TypeError, ValueError) as exc:
+        raise PaymentAttemptError(f"invalid item id in selection: {exc}") from exc
+    return ",".join(str(i) for i in ids)
 
 
 def intent_fingerprint(
@@ -176,19 +181,22 @@ def create_attempt(
     discount_cents: int = 0,
     surcharge_cents: int = 0,
     currency: str | None = None,
-    line_selection: str = "",
+    item_ids=None,
     idempotency_key: str | None = None,
 ) -> PaymentAttempt:
     """Persist a CREATED attempt from an already-locked payable snapshot. Commits.
 
     ``currency`` defaults to the venue currency (``config.venue_currency()``) when
     omitted — never a hard-coded CAD — so a USD venue does not silently create a
-    CAD intent (#3). Idempotent and concurrency-safe: a repeated key returns the
-    existing attempt; a repeated key with a different intent raises
+    CAD intent (#3). ``item_ids`` (the paid selection) is canonicalized *here*, so
+    the paid-item identity is owned by the attempt service, not the caller
+    (slice-1 review #4). Idempotent and concurrency-safe: a repeated key returns
+    the existing attempt; a repeated key with a different intent raises
     ``IdempotencyConflict``; an unregistered provider is rejected.
     """
     _validate_provider(provider)
     currency = (currency or venue_currency()).upper()
+    line_selection = canonical_selection(item_ids)
     if expected_total_cents < 0:
         raise PaymentAttemptError("expected_total_cents cannot be negative.")
 

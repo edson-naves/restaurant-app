@@ -1,26 +1,26 @@
-"""Charge settlement (Stage 2c, slice 1).
+"""Charge settlement (Stage 2c, slice 1 — corrected per slice-1 deep review).
 
 Turns a PROCESSOR_APPROVED PaymentAttempt into exactly one local Payment, under
-two guardrails the reviewer requires before live wiring:
+the reviewer's guardrails:
 
-* **Amount/currency invariant (guardrail #3).** For an external provider, the
-  processor-confirmed pre-tip base and currency must match the attempt's
-  immutable snapshot (``expected_total_cents`` / ``currency``). A mismatch does
-  NOT settle — the attempt is parked in REQUIRES_RECONCILIATION and no Payment is
-  written. The order/payment is never silently adjusted to match the processor.
+* **Amount/currency invariant (#3).** For an external provider, the processor
+  pre-tip base and currency must equal the attempt snapshot. A mismatch parks the
+  attempt in REQUIRES_RECONCILIATION and writes NO Payment.
+* **Idempotent local ledger (#6).** At most one Payment per attempt (write-once,
+  unique ``payment_id``); a retry converges on the existing Payment.
 
-* **Idempotent local ledger (guardrail #6).** At most one Payment per attempt: a
-  settled attempt already carries ``payment_id`` (write-once, unique), so a retry
-  after a processor-success + local-failure converges on the existing Payment
-  instead of creating a second one.
-
-This module is provider-neutral and does not itself build a Payment — the caller
-passes a ``payment_factory`` that performs the venue's real Payment creation
-(``pay_seat`` etc.). Concurrency is serialized by the caller's order-row
-``SELECT ... FOR UPDATE`` (slice 2); this service adds the attempt-level guards.
+**Transaction contract (slice-1 review #1, #3).** ``settle_charge`` never uses an
+exception to control the transaction: a mismatch is reported as a structured
+``SettlementResult`` so the *caller* commits the reconciliation transition
+intentionally (in slice 2 the live route owns the order-row lock and a single
+commit). ``payment_factory`` MUST use the same Session and MUST NOT commit or
+rollback — it mutates + flushes only, so a lost CAS race rolls the Payment back
+with the attempt transition. (Slice 2 refactors ``pay_seat`` into a no-commit
+core to honour this.)
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable
 
 from sqlalchemy.orm import Session
@@ -29,9 +29,22 @@ from app.config import venue_currency
 from app.models.oltp import Payment, PaymentAttempt, PaymentAttemptStatus
 from app.services import payment_attempts as pa
 
+SETTLED = "settled"
+RECONCILED = "reconciled"
 
-class SettlementMismatch(pa.PaymentAttemptError):
-    """Processor evidence disagrees with the attempt's snapshot — do not settle."""
+
+@dataclass
+class SettlementResult:
+    """Outcome of a settlement attempt. ``settled`` carries the one Payment;
+    ``reconciled`` means processor evidence disagreed and the attempt was parked
+    (no Payment). No exception is used to drive the caller's transaction."""
+    status: str
+    payment: Payment | None = None
+    reason: str = ""
+
+    @property
+    def is_settled(self) -> bool:
+        return self.status == SETTLED
 
 
 def _mismatch_reason(attempt: PaymentAttempt) -> str | None:
@@ -58,16 +71,16 @@ def settle_charge(
     *,
     payment_factory: Callable[[], Payment],
     commit: bool = True,
-) -> Payment:
+) -> SettlementResult:
     """Settle an approved attempt into exactly one Payment. Idempotent.
 
-    Returns the existing Payment on a retry. Raises ``SettlementMismatch`` (after
-    parking the attempt in REQUIRES_RECONCILIATION) when processor evidence does
-    not match the snapshot — no Payment is created in that case.
+    Returns a ``SettlementResult`` — never raises to signal a mismatch, so the
+    caller's transaction (which owns the reconciliation transition) is committed
+    intentionally rather than rolled back by an escaping exception.
     """
     # Idempotent: already settled -> return the one Payment, create nothing.
     if attempt.payment_id is not None:
-        return db.get(Payment, attempt.payment_id)
+        return SettlementResult(SETTLED, db.get(Payment, attempt.payment_id))
 
     if attempt.status != PaymentAttemptStatus.PROCESSOR_APPROVED:
         raise pa.PaymentAttemptError(
@@ -76,20 +89,27 @@ def settle_charge(
 
     reason = _mismatch_reason(attempt)
     if reason is not None:
-        # Do not settle a disagreeing charge — park it, write no Payment.
+        # Park for reconciliation (durably, via the caller's commit) and write no
+        # Payment. Returning — not raising — is what makes the reconciliation
+        # survive the caller's outer transaction (slice-1 review #1).
         pa.transition(db, attempt, PaymentAttemptStatus.REQUIRES_RECONCILIATION,
                       last_error=f"settlement mismatch: {reason}", commit=commit)
-        raise SettlementMismatch(reason)
+        return SettlementResult(RECONCILED, None, reason)
 
     payment = payment_factory()
-    db.flush()  # assign payment.id
+    db.flush()  # assign payment.id; never commit here — the caller owns the tx
     try:
         pa.transition(db, attempt, PaymentAttemptStatus.SETTLED,
                       payment_id=payment.id, commit=commit)
     except pa.TransitionConflict:
-        # A concurrent settle won (same order lock normally prevents this). Roll
-        # back our Payment and converge on the winner's.
+        # A CAS loss is NOT automatically "someone settled". Roll our Payment back
+        # and converge ONLY on a proven winner: the DB truth must show SETTLED +
+        # an existing payment_id. Anything else (moved to reconciliation, etc.) is
+        # a real conflict and is re-raised (slice-1 review #2).
         db.rollback()
         db.refresh(attempt)
-        return db.get(Payment, attempt.payment_id)
-    return payment
+        winner = db.get(Payment, attempt.payment_id) if attempt.payment_id is not None else None
+        if attempt.status == PaymentAttemptStatus.SETTLED and winner is not None:
+            return SettlementResult(SETTLED, winner)
+        raise
+    return SettlementResult(SETTLED, payment)
