@@ -201,6 +201,30 @@ def test_processor_evidence_is_write_once():
     check(raised, "processor amount evidence cannot be overwritten with a different value (#8)")
 
 
+def test_reconciliation_validation_and_automatic():
+    db, ids = _db()
+    a = _mk(db, ids)
+    pa.transition(db, a, S.REQUIRES_RECONCILIATION, last_error="x")
+    owner = db.get(Staff, ids["staff_id"])
+    raised = False
+    try:
+        pa.resolve_reconciliation(db, a, resolved_status=S.PROCESSOR_PENDING, note="x", actor=owner)
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "resolve to an invalid target status is rejected")
+    raised = False
+    try:
+        pa.resolve_reconciliation(db, a, resolved_status=S.FAILED, note="", actor=owner)
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "resolve with an empty note is rejected")
+    # automatic + evidence resolves (FAILED needs no payment_id)
+    pa.resolve_reconciliation(db, a, resolved_status=S.FAILED, note="lookup: gone",
+                              automatic=True, provider_evidence="sq_lookup")
+    check(a.status == S.FAILED and a.reconciled_by == "system:auto",
+          "automatic charge reconciliation with evidence resolves")
+
+
 def test_reconciliation_authority_and_audit():
     db, ids = _db()
     a = _mk(db, ids)
@@ -258,6 +282,7 @@ if __name__ == "__main__":
         test_external_approval_requires_evidence,
         test_currency_defaults_to_venue,
         test_processor_evidence_is_write_once,
+        test_reconciliation_validation_and_automatic,
         test_reconciliation_authority_and_audit,
     ):
         print(f"- {fn.__name__}")

@@ -339,6 +339,25 @@ def test_refund_provider_id_unique_and_write_once():
     check(raised, "duplicate (provider, provider_refund_id) rejected (#1)")
 
 
+def test_refund_reconciliation_validation():
+    db, ids = _db()
+    r = _mkref(db, ids, 500, provider="manual")
+    ra.transition_refund(db, r, R.REQUIRES_RECONCILIATION)
+    owner = db.get(Staff, ids["staff_id"])
+    raised = False
+    try:
+        ra.resolve_refund_reconciliation(db, r, resolved_status=R.PROCESSOR_PENDING, note="x", actor=owner)
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "resolve refund to an invalid target status is rejected")
+    raised = False
+    try:
+        ra.resolve_refund_reconciliation(db, r, resolved_status=R.FAILED, note="", actor=owner)
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "resolve refund with an empty note is rejected")
+
+
 def test_refund_state_transitions():
     db, ids = _db()
     r = _mkref(db, ids, 500)
@@ -364,6 +383,7 @@ if __name__ == "__main__":
         test_legacy_square_payment_refunded_as_manual_rejected,
         test_legacy_provider_must_be_derivable,
         test_refund_reconciliation_authority,
+        test_refund_reconciliation_validation,
         test_external_refund_requires_refund_id,
         test_manual_refund_completes_without_id,
         test_external_refund_reconciliation_requires_id,
