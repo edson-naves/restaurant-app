@@ -406,7 +406,8 @@ def _terminal_instrument(db: Session) -> PaymentInstrument:
     ).scalars().first()
     if inst is None:
         inst = PaymentInstrument(
-            code="card_terminal", name="Card (terminal)", instrument_type="card"
+            code="card_terminal", name="Card (terminal)", instrument_type="card",
+            provider="square_terminal",
         )
         db.add(inst)
         db.flush()

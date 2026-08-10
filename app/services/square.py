@@ -179,6 +179,37 @@ def get_payment(payment_id: str) -> dict:
     return _request("GET", f"/v2/payments/{payment_id}")["payment"]
 
 
+# Refund lifecycle (Square). COMPLETED means the money is on its way back.
+REFUND_PENDING = "PENDING"
+REFUND_COMPLETED = "COMPLETED"
+REFUND_REJECTED = "REJECTED"
+REFUND_FAILED = "FAILED"
+
+
+def create_refund(
+    payment_id: str,
+    amount_cents: int,
+    idempotency_key: str,
+    reason: str = "",
+) -> dict:
+    """Reverse money to the card via the Square Refunds API (RefundPayment).
+
+    ``idempotency_key`` makes the call safe to retry: Square returns the same
+    refund for a repeated key instead of refunding twice. Returns the refund dict
+    (``id``, ``status`` — PENDING/COMPLETED/REJECTED/FAILED). Raises SquareError
+    on transport/API failure so the caller can flag the attempt for reconciliation
+    rather than marking it refunded.
+    """
+    body = {
+        "idempotency_key": idempotency_key,
+        "payment_id": payment_id,
+        "amount_money": {"amount": int(amount_cents), "currency": currency()},
+    }
+    if reason:
+        body["reason"] = reason[:192]
+    return _request("POST", "/v2/refunds", body)["refund"]
+
+
 def wait_for_checkout(checkout_id: str, timeout_s: float = 120.0, interval_s: float = 1.5) -> dict:
     """Poll until the checkout completes, cancels, or we give up.
 

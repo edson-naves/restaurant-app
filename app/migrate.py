@@ -104,6 +104,9 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # created by create_all. Additive; existing menus/orders untouched.
     ("modifier", "station_id", "INTEGER REFERENCES station(id)"),
     ("modifier_option", "station_id", "INTEGER REFERENCES station(id)"),
+    # Pluggable payment providers. Defaulting to 'manual' leaves every existing
+    # instrument settling exactly as before (staff-recorded, no processor).
+    ("payment_instrument", "provider", "VARCHAR(30) NOT NULL DEFAULT 'manual'"),
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW
