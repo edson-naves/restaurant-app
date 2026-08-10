@@ -232,6 +232,48 @@ def test_charge_definitive_decline_fails():
         square._request = orig
 
 
+def test_square_4xx_classification():
+    """Only a definitive financial decline is FAILED; conflict/auth/config/
+    invalid/unexpected 4xx -> reconciliation, never safe-to-retry (#8)."""
+    def err(status, code=None, cat=None):
+        def fake(method, path, payload=None):
+            raise square.SquareApiError("boom", status_code=status, code=code, error_category=cat)
+        return fake
+
+    cases = [
+        ((402, None, "PAYMENT_METHOD_ERROR"), S.FAILED, "402 payment-method decline -> FAILED"),
+        ((400, "CARD_DECLINED", None), S.FAILED, "CARD_DECLINED -> FAILED"),
+        ((409, "IDEMPOTENCY_KEY_REUSED", None), S.REQUIRES_RECONCILIATION, "409 conflict -> reconcile (charge may exist)"),
+        ((401, None, "AUTHENTICATION_ERROR"), S.REQUIRES_RECONCILIATION, "401 auth/config -> reconcile, not safe-retry"),
+        ((404, "NOT_FOUND", None), S.REQUIRES_RECONCILIATION, "404 invalid target -> reconcile"),
+        ((400, "SOMETHING_ODD", None), S.REQUIRES_RECONCILIATION, "unexpected 4xx -> reconcile"),
+    ]
+    for (status, code, cat), expected, label in cases:
+        orig = _fake(err(status, code, cat))
+        try:
+            res = pp.get_provider("square_terminal").charge(
+                amount_cents=1000, currency="CAD", idempotency_key="k")
+            check(res.status == expected, label + " (#8)")
+        finally:
+            square._request = orig
+
+
+def test_unknown_capability_name_rejected():
+    class TeleportPay(pp.PaymentProvider):
+        key = "teleport_pay"; is_external = True
+        capabilities = frozenset({"teleport"})  # not in the vocabulary
+        def charge(self, *, amount_cents, currency, idempotency_key, reference="", note="", tip_cents=0):
+            return pp.ChargeResult(status=S.PROCESSOR_APPROVED)
+        def refund(self, *, amount_cents, currency, idempotency_key, provider_payment_id=None):
+            return pp.RefundResult(status=R.COMPLETED)
+    raised = False
+    try:
+        pp.register(TeleportPay())
+    except ValueError as exc:
+        raised = "unknown" in str(exc).lower()
+    check(raised, "a provider advertising an unknown capability name is rejected (#7)")
+
+
 def test_poll_transient_stays_pending_definitive_reconciles():
     def transient(method, path, payload=None):
         raise square.SquareTransportError("503 from Square")
@@ -353,6 +395,8 @@ if __name__ == "__main__":
         test_cancel_is_not_swallowed,
         test_charge_transport_ambiguity_reconciles,
         test_charge_definitive_decline_fails,
+        test_square_4xx_classification,
+        test_unknown_capability_name_rejected,
         test_poll_transient_stays_pending_definitive_reconciles,
         test_cancel_status_mapping,
         test_operationalerror_classification,
