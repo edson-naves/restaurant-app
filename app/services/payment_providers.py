@@ -52,11 +52,23 @@ class Capability:
 @dataclass
 class ChargeResult:
     """Outcome of asking a provider to charge. ``status`` is a
-    ``PaymentAttemptStatus`` value fed straight into the state machine."""
+    ``PaymentAttemptStatus`` value fed straight into the state machine.
+
+    Amount/tip semantics (finding #17), so settlement compares like with like:
+      * the attempt's ``expected_total_cents`` is the **pre-tip** amount we asked
+        the terminal to charge (items + tax + service charge + surcharge - discount);
+      * the guest adds a tip on the terminal, so the processor captures
+        base + tip;
+      * ``processor_amount_cents`` here is the processor's **pre-tip base**
+        (captured total - tip), directly comparable to ``expected_total_cents``;
+      * ``tip_cents`` is the processor-confirmed tip.
+    ``processor_amount_cents``/``processor_currency`` are read from authoritative
+    processor evidence, never local config, and are None when unreadable so
+    settlement never verifies against a fabricated value (findings #6/#8).
+    """
     status: str
     provider_checkout_id: str | None = None
     provider_payment_id: str | None = None
-    # Processor-confirmed amount/currency (finding #8) for settlement to verify.
     processor_amount_cents: int | None = None
     processor_currency: str | None = None
     tip_cents: int = 0
@@ -170,6 +182,7 @@ class SquareTerminalProvider(PaymentProvider):
             checkout = square.create_checkout(
                 amount_cents, reference_id=reference, note=note,
                 idempotency_key=idempotency_key,   # finding #1: forward the key
+                currency_code=currency,            # finding #5: per-operation currency
             )
         except square.SquareApiError as exc:
             # A definitive 4xx: Square rejected the request. No charge exists.
@@ -200,7 +213,6 @@ class SquareTerminalProvider(PaymentProvider):
                                 error=f"definitive lookup error: {exc}")
         status = checkout.get("status")
         if status == square.COMPLETED:
-            tip_cents, brand, last4 = square.tip_and_card(checkout)
             payment_ids = checkout.get("payment_ids") or []
             if not payment_ids:
                 # Completed but no authoritative payment id — cannot reconcile,
@@ -210,14 +222,17 @@ class SquareTerminalProvider(PaymentProvider):
                     provider_checkout_id=provider_checkout_id,
                     error="Square COMPLETED without a payment id",
                 )
-            amount = _completed_amount(checkout)
+            # Authoritative amount/currency from the Payment object, not local
+            # config (findings #6/#17). processor_amount_cents is the PRE-TIP base
+            # so it compares to our pre-tip expected_total_cents.
+            ev = square.completed_payment_evidence(checkout)
             return ChargeResult(
                 status=PaymentAttemptStatus.PROCESSOR_APPROVED,
                 provider_checkout_id=provider_checkout_id,
                 provider_payment_id=payment_ids[0],
-                processor_amount_cents=amount,
-                processor_currency=(square.currency()),
-                tip_cents=tip_cents, card_brand=brand, card_last4=last4,
+                processor_amount_cents=ev["base_cents"],
+                processor_currency=ev["currency"],
+                tip_cents=ev["tip_cents"], card_brand=ev["brand"], card_last4=ev["last4"],
             )
         if status == square.CANCELED:
             return ChargeResult(status=PaymentAttemptStatus.CANCELLED,
@@ -232,7 +247,8 @@ class SquareTerminalProvider(PaymentProvider):
                                 external=True,
                                 error="no Square payment id to refund against")
         try:
-            refund = square.create_refund(provider_payment_id, amount_cents, idempotency_key)
+            refund = square.create_refund(provider_payment_id, amount_cents,
+                                          idempotency_key, currency_code=currency)
         except square.SquareError as exc:
             # Transport/API failure: unknown processor outcome → reconcile.
             return RefundResult(status=RefundAttemptStatus.REQUIRES_RECONCILIATION,
@@ -259,12 +275,6 @@ class SquareTerminalProvider(PaymentProvider):
                                 error="cancellation not yet authoritative")
         return CancelResult(ok=False, provider_status=status, requires_reconciliation=True,
                             error=f"unexpected cancel status {status!r}")
-
-
-def _completed_amount(checkout: dict) -> int | None:
-    money = checkout.get("amount_money") or {}
-    amt = money.get("amount")
-    return int(amt) if amt is not None else None
 
 
 _SQUARE_REFUND_MAP = {

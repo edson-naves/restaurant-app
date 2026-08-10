@@ -226,21 +226,22 @@ def transition(
     values: dict = {"status": new_status, "updated_at": datetime.now()}
     if last_error is not None:
         values["last_error"] = last_error
-    if processor_amount_cents is not None:
-        values["processor_amount_cents"] = processor_amount_cents
-    if processor_currency is not None:
-        values["processor_currency"] = processor_currency
 
+    # All write-once: NULL accepts a first value, the same value is idempotent, a
+    # different value fails the guarded UPDATE (rowcount 0) -> TransitionConflict.
+    # Processor amount/currency are evidence and must never be overwritten (#8).
     conds = [PaymentAttempt.id == attempt.id, PaymentAttempt.status == expected]
     for field, val in (
         ("provider_checkout_id", provider_checkout_id),
         ("provider_payment_id", provider_payment_id),
         ("payment_id", payment_id),
+        ("processor_amount_cents", processor_amount_cents),
+        ("processor_currency", processor_currency),
     ):
         if val is not None:
             values[field] = val
             col = getattr(PaymentAttempt, field)
-            conds.append(or_(col.is_(None), col == val))  # write-once
+            conds.append(or_(col.is_(None), col == val))
 
     # A uniqueness violation (duplicate payment/provider id) or a lock/deadlock
     # under concurrency both mean this transition did not win — surface either as
