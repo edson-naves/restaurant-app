@@ -31,6 +31,7 @@ from app.services.payment_attempts import (
     PaymentAttemptError,
     TransitionConflict,
     _validate_provider,
+    is_lock_conflict,
 )
 
 
@@ -211,12 +212,20 @@ def transition_refund(
         ).rowcount
         if applied == 1 and commit:
             db.commit()
-    except (IntegrityError, OperationalError) as exc:
+    except IntegrityError as exc:
         db.rollback()
         raise TransitionConflict(
             f"refund transition {expected} -> {new_status} conflicted "
-            f"(uniqueness or lock): {getattr(exc, 'orig', exc)}"
+            f"(uniqueness): {getattr(exc, 'orig', exc)}"
         ) from exc
+    except OperationalError as exc:
+        db.rollback()
+        if is_lock_conflict(exc):
+            raise TransitionConflict(
+                f"refund transition {expected} -> {new_status} lost a lock/deadlock race: "
+                f"{getattr(exc, 'orig', exc)}"
+            ) from exc
+        raise  # genuine infrastructure failure — propagate
     if applied != 1:
         db.rollback()
         try:

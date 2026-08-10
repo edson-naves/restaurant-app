@@ -43,6 +43,27 @@ class SquareError(Exception):
     """Any non-2xx from Square, or a checkout that ended without completing."""
 
 
+class SquareTransportError(SquareError):
+    """The request may or may not have reached Square — a timeout, a dropped
+    connection, or a 5xx/throttle. The processor outcome is UNKNOWN, so the caller
+    must reconcile rather than assume the operation did not happen."""
+
+
+class SquareApiError(SquareError):
+    """Square returned a definitive error response (a 4xx). The operation did not
+    succeed; ``status_code`` lets the caller tell a decline from an auth/config
+    problem or a not-found."""
+
+    def __init__(self, message: str, status_code: int):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+# HTTP statuses whose outcome is ambiguous/retryable rather than a definitive
+# rejection (server errors + throttling + request timeout).
+_TRANSIENT_STATUS = frozenset({408, 425, 429})
+
+
 # --------------------------------------------------------------------------
 # Configuration (read at call time so env changes need no restart of imports)
 # --------------------------------------------------------------------------
@@ -103,10 +124,16 @@ def _request(method: str, path: str, payload: dict | None = None) -> dict:
     try:
         resp = httpx.request(method, url, headers=_headers(), json=payload, timeout=_TIMEOUT)
     except httpx.HTTPError as exc:
-        raise SquareError(f"Could not reach the card terminal service: {exc}") from exc
-    if resp.status_code // 100 != 2:
-        raise SquareError(_error_message(resp))
-    return resp.json()
+        # Never reached a response — the request may still have been processed.
+        raise SquareTransportError(f"Could not reach the card terminal service: {exc}") from exc
+    code = resp.status_code
+    if code // 100 == 2:
+        return resp.json()
+    if code >= 500 or code in _TRANSIENT_STATUS:
+        # Server-side/throttle: the operation may have taken effect. Ambiguous.
+        raise SquareTransportError(_error_message(resp))
+    # A definitive 4xx: decline, validation, auth/config, or not-found.
+    raise SquareApiError(_error_message(resp), status_code=code)
 
 
 def _error_message(resp: httpx.Response) -> str:

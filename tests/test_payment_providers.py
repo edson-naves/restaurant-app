@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.models.oltp import PaymentAttemptStatus as S
 from app.models.oltp import RefundAttemptStatus as R
+from app.services import payment_attempts as pa
 from app.services import payment_providers as pp
 from app.services import square
 
@@ -144,6 +145,83 @@ def test_cancel_is_not_swallowed():
         square._request = orig
 
 
+def test_charge_transport_ambiguity_reconciles():
+    def fake(method, path, payload=None):
+        raise square.SquareTransportError("timeout after send")
+    orig = _fake(fake)
+    try:
+        res = pp.get_provider("square_terminal").charge(
+            amount_cents=2000, currency="CAD", idempotency_key="k")
+        check(res.status == S.REQUIRES_RECONCILIATION,
+              "charge transport timeout -> reconciliation, never FAILED (#4)")
+    finally:
+        square._request = orig
+
+
+def test_charge_definitive_decline_fails():
+    def fake(method, path, payload=None):
+        raise square.SquareApiError("card declined", status_code=402)
+    orig = _fake(fake)
+    try:
+        res = pp.get_provider("square_terminal").charge(
+            amount_cents=2000, currency="CAD", idempotency_key="k")
+        check(res.status == S.FAILED, "definitive 4xx decline -> FAILED (#4)")
+    finally:
+        square._request = orig
+
+
+def test_poll_transient_stays_pending_definitive_reconciles():
+    def transient(method, path, payload=None):
+        raise square.SquareTransportError("503 from Square")
+
+    def definitive(method, path, payload=None):
+        raise square.SquareApiError("not found", status_code=404)
+
+    orig = _fake(transient)
+    try:
+        r = pp.get_provider("square_terminal").poll("chk_1")
+        check(r.status == S.PROCESSOR_PENDING, "transient poll error stays PENDING (#9)")
+    finally:
+        square._request = orig
+    orig = _fake(definitive)
+    try:
+        r = pp.get_provider("square_terminal").poll("chk_1")
+        check(r.status == S.REQUIRES_RECONCILIATION,
+              "definitive poll error -> reconciliation, not PENDING forever (#9)")
+    finally:
+        square._request = orig
+
+
+def test_cancel_status_mapping():
+    cases = {
+        "CANCELED": (True, False),
+        "COMPLETED": (False, True),   # cancel failed; payment likely exists
+        "PENDING": (False, True),     # ambiguous
+        "WEIRD": (False, True),       # unknown
+    }
+    for st, (ok, recon) in cases.items():
+        def fake(method, path, payload=None, _s=st):
+            return {"checkout": {"id": "chk_1", "status": _s}}
+        orig = _fake(fake)
+        try:
+            res = pp.get_provider("square_terminal").cancel(provider_checkout_id="chk_1")
+            check(res.ok == ok and res.requires_reconciliation == recon,
+                  f"cancel status {st} -> ok={ok}, reconcile={recon} (#11)")
+        finally:
+            square._request = orig
+
+
+def test_operationalerror_classification():
+    # Only a lock/deadlock is a transition conflict; infra failures propagate (#12).
+    class FakeOrig:
+        def __init__(self, sqlstate): self.sqlstate = sqlstate
+    class FakeOpErr(Exception):
+        def __init__(self, sqlstate): self.orig = FakeOrig(sqlstate)
+    check(pa.is_lock_conflict(FakeOpErr("40P01")), "deadlock (40P01) classified as lock conflict")
+    check(pa.is_lock_conflict(FakeOpErr("55P03")), "lock_not_available (55P03) is a conflict")
+    check(not pa.is_lock_conflict(FakeOpErr("08006")), "connection failure (08006) is NOT a conflict")
+
+
 def test_new_provider_plugs_in():
     class AcmePay(pp.PaymentProvider):
         key = "acme_pay"; label = "Acme"; is_external = True
@@ -171,6 +249,11 @@ if __name__ == "__main__":
         test_square_refund_state_mapping,
         test_square_refund_without_payment_id_reconciles,
         test_cancel_is_not_swallowed,
+        test_charge_transport_ambiguity_reconciles,
+        test_charge_definitive_decline_fails,
+        test_poll_transient_stays_pending_definitive_reconciles,
+        test_cancel_status_mapping,
+        test_operationalerror_classification,
         test_new_provider_plugs_in,
     ):
         print(f"- {fn.__name__}")
