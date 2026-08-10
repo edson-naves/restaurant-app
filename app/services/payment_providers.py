@@ -50,6 +50,13 @@ class Capability:
     LOOKUP = "lookup"                # provider-side reconciliation lookup
 
 
+# The complete, closed capability vocabulary. A provider advertising anything
+# outside this set (a typo, an unknown value) is rejected at registration (#7).
+ALL_CAPABILITIES = frozenset({
+    Capability.POLLING, Capability.WEBHOOKS, Capability.AUTHORIZE, Capability.CAPTURE,
+    Capability.PARTIAL_CAPTURE, Capability.REFUND, Capability.PARTIAL_REFUND, Capability.LOOKUP,
+})
+
 # A capability is only advertisable if its backing method is actually implemented
 # (finding #10). register() validates this — a provider may not claim behavior it
 # does not provide. REFUND/PARTIAL_REFUND share the abstract refund() (always
@@ -232,8 +239,16 @@ class SquareTerminalProvider(PaymentProvider):
                 currency_code=currency,            # finding #5: per-operation currency
             )
         except square.SquareApiError as exc:
-            # A definitive 4xx: Square rejected the request. No charge exists.
-            return ChargeResult(status=PaymentAttemptStatus.FAILED, error=str(exc))
+            # Classify the 4xx (finding #8). Only a definitive financial DECLINE is
+            # a safe "no charge, FAILED". A conflict may mean the charge exists; an
+            # auth/config/invalid-target/unexpected 4xx is not proof no charge
+            # happened and must not be treated as safe-to-retry -> reconcile.
+            category = square.classify_charge_error(exc)
+            if category == square.CHARGE_DECLINE:
+                return ChargeResult(status=PaymentAttemptStatus.FAILED,
+                                    error=f"declined: {exc}")
+            return ChargeResult(status=PaymentAttemptStatus.REQUIRES_RECONCILIATION,
+                                error=f"{category}: {exc}")
         except square.SquareError as exc:
             # Transport/unknown (timeout, dropped connection, 5xx). Square may have
             # accepted the checkout — must reconcile, never assume FAILED (#4).
@@ -363,7 +378,13 @@ _REGISTRY: dict[str, PaymentProvider] = {}
 
 
 def _validate_capabilities(provider: PaymentProvider) -> None:
-    """A provider may not advertise a capability it does not implement (#10)."""
+    """A provider may only advertise known capabilities (#7), each backed by an
+    implemented method (#10)."""
+    unknown = set(provider.capabilities) - ALL_CAPABILITIES
+    if unknown:
+        raise ValueError(
+            f"provider {provider.key!r} advertises unknown capabilities {sorted(unknown)}; "
+            f"allowed: {sorted(ALL_CAPABILITIES)}")
     for cap in provider.capabilities:
         method_name = _CAPABILITY_METHOD.get(cap)
         if method_name is None:

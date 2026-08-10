@@ -50,18 +50,54 @@ class SquareTransportError(SquareError):
 
 
 class SquareApiError(SquareError):
-    """Square returned a definitive error response (a 4xx). The operation did not
-    succeed; ``status_code`` lets the caller tell a decline from an auth/config
-    problem or a not-found."""
+    """Square returned a definitive error response (a 4xx). ``status_code``,
+    ``code`` (Square error code) and ``error_category`` let the caller classify a
+    genuine decline vs an auth/config problem, a request conflict, or a bad
+    device/location — see ``classify_charge_error``."""
 
-    def __init__(self, message: str, status_code: int):
+    def __init__(self, message: str, status_code: int,
+                 code: str | None = None, error_category: str | None = None):
         super().__init__(message)
         self.status_code = status_code
+        self.code = code
+        self.error_category = error_category
 
 
 # HTTP statuses whose outcome is ambiguous/retryable rather than a definitive
 # rejection (server errors + throttling + request timeout).
 _TRANSIENT_STATUS = frozenset({408, 425, 429})
+
+# Normalized create-charge error categories (finding #8). Only DECLINE is a
+# definitive "no charge, financial rejection"; everything else must NOT be
+# treated as safe-to-retry — the request may have conflicted, or config is broken.
+CHARGE_DECLINE = "decline"
+CHARGE_CONFLICT = "conflict"          # idempotency/request conflict — charge may exist
+CHARGE_AUTH_CONFIG = "auth_config"    # auth/permission/config failure
+CHARGE_INVALID_TARGET = "invalid_target"  # bad device/location/not-found
+CHARGE_UNEXPECTED = "unexpected"
+
+_DECLINE_CODES = frozenset({
+    "CARD_DECLINED", "GENERIC_DECLINE", "INSUFFICIENT_FUNDS", "CVV_FAILURE",
+    "ADDRESS_VERIFICATION_FAILURE", "CARD_EXPIRED", "INVALID_CARD",
+    "CARD_DECLINED_VERIFICATION_REQUIRED", "PAN_FAILURE",
+})
+
+
+def classify_charge_error(exc: SquareApiError) -> str:
+    """Map a definitive Square 4xx to a normalized charge-error category so the
+    core never infers a new charge is safe merely because the status was 4xx."""
+    code = (exc.code or "").upper()
+    cat = (exc.error_category or "").upper()
+    sc = exc.status_code
+    if sc == 409 or code in ("IDEMPOTENCY_KEY_REUSED", "CONFLICT"):
+        return CHARGE_CONFLICT
+    if cat == "PAYMENT_METHOD_ERROR" or sc == 402 or code in _DECLINE_CODES:
+        return CHARGE_DECLINE
+    if cat == "AUTHENTICATION_ERROR" or sc in (401, 403) or code in ("UNAUTHORIZED", "FORBIDDEN"):
+        return CHARGE_AUTH_CONFIG
+    if sc == 404 or code in ("NOT_FOUND", "DEVICE_UNAVAILABLE", "INVALID_LOCATION"):
+        return CHARGE_INVALID_TARGET
+    return CHARGE_UNEXPECTED
 
 
 # --------------------------------------------------------------------------
@@ -132,8 +168,15 @@ def _request(method: str, path: str, payload: dict | None = None) -> dict:
     if code >= 500 or code in _TRANSIENT_STATUS:
         # Server-side/throttle: the operation may have taken effect. Ambiguous.
         raise SquareTransportError(_error_message(resp))
-    # A definitive 4xx: decline, validation, auth/config, or not-found.
-    raise SquareApiError(_error_message(resp), status_code=code)
+    # A definitive 4xx: capture the Square error code/category for classification.
+    err = {}
+    try:
+        errs = resp.json().get("errors") or []
+        err = errs[0] if errs else {}
+    except Exception:  # noqa: BLE001
+        pass
+    raise SquareApiError(_error_message(resp), status_code=code,
+                         code=err.get("code"), error_category=err.get("category"))
 
 
 def _error_message(resp: httpx.Response) -> str:
