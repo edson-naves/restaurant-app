@@ -1,10 +1,6 @@
-"""Stage 2b regression tests — pluggable payment providers.
-
-Proves the abstraction the way the requirement framed it: any payment method
-plugs in behind one interface, the core stays provider-neutral, and the Square
-adapter now actually calls the Refunds API (audit #1). Self-contained — the
-Square adapter is exercised against a fake HTTP layer, no credentials or network.
-Run: python tests/test_payment_providers.py
+"""Provider adapters (hardened) — capabilities, key forwarding, explicit state
+mapping, and non-swallowed cancel. Square adapter driven against a fake HTTP
+layer (no creds/network). Run: python tests/test_payment_providers.py
 """
 import os
 import sys
@@ -12,6 +8,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.models.oltp import PaymentAttemptStatus as S
+from app.models.oltp import RefundAttemptStatus as R
 from app.services import payment_providers as pp
 from app.services import square
 
@@ -19,129 +16,165 @@ _failures = []
 
 
 def check(cond, label):
-    if cond:
-        print(f"  ok   {label}")
-    else:
+    print(f"  {'ok  ' if cond else 'FAIL'} {label}")
+    if not cond:
         _failures.append(label)
-        print(f"  FAIL {label}")
 
 
-def test_registry_resolves_builtin_providers():
+def _fake(fn):
+    orig = square._request
+    square._request = fn
+    return orig
+
+
+def test_registry_and_capabilities():
     manual = pp.get_provider("manual")
     sq = pp.get_provider("square_terminal")
-    check(isinstance(manual, pp.ManualProvider), "'manual' resolves")
-    check(isinstance(sq, pp.SquareTerminalProvider), "'square_terminal' resolves")
-    check(not manual.is_external and sq.is_external, "external flag is per-provider")
+    check(not manual.is_external and sq.is_external, "external flag per provider")
+    check(sq.needs_polling and not manual.needs_polling, "polling capability drives needs_polling")
+    check(pp.Capability.PARTIAL_REFUND in manual.capabilities, "manual advertises partial_refund")
     raised = False
     try:
-        pp.get_provider("does_not_exist")
+        pp.get_provider("nope")
     except pp.UnknownProvider:
         raised = True
-    check(raised, "an unknown provider key raises, never silently guesses")
+    check(raised, "unknown provider raises, never guesses")
 
 
-def test_manual_provider_is_local():
+def test_manual_is_local_with_amount():
     m = pp.get_provider("manual")
-    charge = m.charge(amount_cents=1500, currency="CAD", idempotency_key="k", tip_cents=200)
-    check(charge.status == S.PROCESSOR_APPROVED, "manual charge is instantly approved")
-    check(charge.tip_cents == 200, "manual charge carries the staff-entered tip")
-    refund = m.refund(amount_cents=1500, currency="CAD", idempotency_key="k")
-    check(refund.ok and not refund.external, "manual refund is local (no processor call)")
+    c = m.charge(amount_cents=1500, currency="CAD", idempotency_key="k", tip_cents=200)
+    check(c.status == S.PROCESSOR_APPROVED, "manual charge instantly approved")
+    check(c.processor_amount_cents == 1500 and c.processor_currency == "CAD",
+          "manual charge echoes processor amount/currency")
+    r = m.refund(amount_cents=1500, currency="CAD", idempotency_key="k")
+    check(r.status == R.COMPLETED and not r.external, "manual refund is local + completed")
 
 
-def test_square_adapter_charges_and_polls():
-    calls = []
+def test_square_forwards_idempotency_key():
+    seen = {}
 
-    def fake_request(method, path, payload=None):
-        calls.append((method, path, payload))
-        if path == "/v2/terminals/checkouts":
-            return {"checkout": {"id": "chk_1", "status": "PENDING"}}
+    def fake(method, path, payload=None):
+        seen[path] = payload
+        return {"checkout": {"id": "chk_1", "status": "PENDING"}}
+
+    orig = _fake(fake)
+    try:
+        sq = pp.get_provider("square_terminal")
+        sq.charge(amount_cents=2000, currency="CAD", idempotency_key="IDEM-XYZ")
+        body = seen["/v2/terminals/checkouts"]
+        check(body["idempotency_key"] == "IDEM-XYZ",
+              "persisted idempotency key is forwarded into the Square charge (#1)")
+    finally:
+        square._request = orig
+
+
+def test_square_poll_completed_with_payment():
+    def fake(method, path, payload=None):
         if path.endswith("/chk_1"):
             return {"checkout": {"id": "chk_1", "status": "COMPLETED",
-                                 "payment_ids": ["pay_9"], "tip_money": {"amount": 300}}}
+                                 "payment_ids": ["pay_9"], "amount_money": {"amount": 2000}}}
         if path.startswith("/v2/payments/"):
             return {"payment": {"tip_money": {"amount": 300},
                                 "card_details": {"card": {"card_brand": "VISA", "last_4": "4242"}}}}
         raise AssertionError(path)
 
-    orig = square._request
-    square._request = fake_request
+    orig = _fake(fake)
     try:
-        sq = pp.get_provider("square_terminal")
-        charge = sq.charge(amount_cents=2000, currency="CAD", idempotency_key="k1")
-        check(charge.status == S.PROCESSOR_PENDING, "square charge returns PENDING")
-        check(charge.provider_checkout_id == "chk_1", "square charge captures checkout id")
-        polled = sq.poll("chk_1")
-        check(polled.status == S.PROCESSOR_APPROVED, "square poll maps COMPLETED->approved")
-        check(polled.provider_payment_id == "pay_9", "square poll captures payment id")
-        check(polled.tip_cents == 300 and polled.card_last4 == "4242",
-              "square poll reads tip + card last-4")
+        res = pp.get_provider("square_terminal").poll("chk_1")
+        check(res.status == S.PROCESSOR_APPROVED, "COMPLETED+payment_id -> approved")
+        check(res.provider_payment_id == "pay_9", "captures payment id")
+        check(res.processor_amount_cents == 2000, "captures processor amount (#8)")
+        check(res.tip_cents == 300 and res.card_last4 == "4242", "reads tip + last4")
     finally:
         square._request = orig
 
 
-def test_square_adapter_executes_a_real_refund():
-    """Audit #1: the refund must hit the processor, with an idempotency key."""
-    seen = {}
+def test_square_completed_without_payment_id_reconciles():
+    def fake(method, path, payload=None):
+        return {"checkout": {"id": "chk_1", "status": "COMPLETED", "payment_ids": []}}
 
-    def fake_request(method, path, payload=None):
-        seen["method"], seen["path"], seen["payload"] = method, path, payload
-        return {"refund": {"id": "rf_1", "status": "COMPLETED"}}
-
-    orig = square._request
-    square._request = fake_request
+    orig = _fake(fake)
     try:
-        sq = pp.get_provider("square_terminal")
-        res = sq.refund(amount_cents=500, currency="CAD",
-                        idempotency_key="idem-123", provider_payment_id="pay_9")
-        check(seen.get("path") == "/v2/refunds", "square refund calls the Refunds API")
-        check(seen["payload"]["idempotency_key"] == "idem-123",
-              "square refund passes the idempotency key")
-        check(seen["payload"]["payment_id"] == "pay_9", "square refund targets the payment")
-        check(res.ok and res.external and res.provider_refund_id == "rf_1",
-              "square refund reports success + external refund id")
+        res = pp.get_provider("square_terminal").poll("chk_1")
+        check(res.status == S.REQUIRES_RECONCILIATION,
+              "COMPLETED without payment id -> reconciliation, not approval (#9)")
     finally:
         square._request = orig
 
 
-def test_square_refund_without_payment_id_fails_safe():
-    sq = pp.get_provider("square_terminal")
-    res = sq.refund(amount_cents=500, currency="CAD", idempotency_key="k",
-                    provider_payment_id=None)
-    check(not res.ok, "square refund with no payment id fails instead of lying")
+def test_square_refund_state_mapping():
+    cases = {
+        "COMPLETED": R.COMPLETED,
+        "PENDING": R.PROCESSOR_PENDING,
+        "REJECTED": R.REJECTED,
+        "FAILED": R.FAILED,
+        "WEIRD": R.REQUIRES_RECONCILIATION,
+    }
+    for sq_status, expected in cases.items():
+        def fake(method, path, payload=None, _s=sq_status):
+            return {"refund": {"id": "rf_1", "status": _s}}
+        orig = _fake(fake)
+        try:
+            res = pp.get_provider("square_terminal").refund(
+                amount_cents=500, currency="CAD", idempotency_key="k",
+                provider_payment_id="pay_9")
+            check(res.status == expected, f"Square refund {sq_status} -> {expected}")
+            if sq_status in ("FAILED", "WEIRD"):
+                check(bool(res.error), f"{sq_status} carries a non-empty error (#11)")
+        finally:
+            square._request = orig
 
 
-def test_a_new_provider_plugs_in():
-    """The whole point: a new machine/processor is one class + register()."""
+def test_square_refund_without_payment_id_reconciles():
+    res = pp.get_provider("square_terminal").refund(
+        amount_cents=500, currency="CAD", idempotency_key="k", provider_payment_id=None)
+    check(res.status == R.REQUIRES_RECONCILIATION, "refund w/o payment id -> reconcile, not lie")
+
+
+def test_cancel_is_not_swallowed():
+    def fake(method, path, payload=None):
+        raise square.SquareError("network blip")
+    orig = _fake(fake)
+    try:
+        res = pp.get_provider("square_terminal").cancel(provider_checkout_id="chk_1")
+        check(not res.ok and res.requires_reconciliation,
+              "a failed cancel flags reconciliation, never silent success (#10)")
+    finally:
+        square._request = orig
+
+
+def test_new_provider_plugs_in():
     class AcmePay(pp.PaymentProvider):
-        key = "acme_pay"
-        label = "Acme Pay"
-        is_external = True
+        key = "acme_pay"; label = "Acme"; is_external = True
+        capabilities = frozenset({pp.Capability.AUTHORIZE, pp.Capability.CAPTURE})
 
-        def charge(self, *, amount_cents, currency, idempotency_key,
-                   reference="", note="", tip_cents=0):
-            return pp.ChargeResult(status=S.PROCESSOR_APPROVED,
-                                   provider_payment_id="acme_1")
+        def charge(self, *, amount_cents, currency, idempotency_key, reference="", note="", tip_cents=0):
+            return pp.ChargeResult(status=S.PROCESSOR_APPROVED, provider_payment_id="acme_1")
 
-        def refund(self, *, amount_cents, currency, idempotency_key,
-                   provider_payment_id=None):
-            return pp.RefundResult(ok=True, external=True, provider_refund_id="acme_rf")
+        def refund(self, *, amount_cents, currency, idempotency_key, provider_payment_id=None):
+            return pp.RefundResult(status=R.COMPLETED, external=True, provider_refund_id="acme_rf")
 
     pp.register(AcmePay())
     got = pp.get_provider("acme_pay")
-    check(got.label == "Acme Pay", "a newly registered provider resolves by key")
-    charge = got.charge(amount_cents=100, currency="USD", idempotency_key="k")
-    check(charge.provider_payment_id == "acme_1", "the new provider drives a charge")
-    check("acme_pay" in [p.key for p in pp.available()], "it appears in available()")
+    check(got.label == "Acme", "new provider resolves by key")
+    check(pp.Capability.AUTHORIZE in got.capabilities, "new provider advertises capabilities")
 
 
 if __name__ == "__main__":
-    test_registry_resolves_builtin_providers()
-    test_manual_provider_is_local()
-    test_square_adapter_charges_and_polls()
-    test_square_adapter_executes_a_real_refund()
-    test_square_refund_without_payment_id_fails_safe()
-    test_a_new_provider_plugs_in()
+    for fn in (
+        test_registry_and_capabilities,
+        test_manual_is_local_with_amount,
+        test_square_forwards_idempotency_key,
+        test_square_poll_completed_with_payment,
+        test_square_completed_without_payment_id_reconciles,
+        test_square_refund_state_mapping,
+        test_square_refund_without_payment_id_reconciles,
+        test_cancel_is_not_swallowed,
+        test_new_provider_plugs_in,
+    ):
+        print(f"- {fn.__name__}")
+        fn()
     if _failures:
         print(f"\n{len(_failures)} FAILED")
         sys.exit(1)

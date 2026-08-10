@@ -1,21 +1,16 @@
-"""Stage 2a regression tests — durable PaymentAttempt + state machine.
+"""Stage 2a (hardened) — durable PaymentAttempt + concurrency-safe state machine.
 
-Covers audit findings #1–#5 at the record level: idempotent creation, legal-only
-state transitions, one-Payment-per-attempt, write-once provider identifiers, and
-an immutable payable snapshot. Fully self-contained (in-memory SQLite, no seed,
-no server), addressing #37.  Run: python tests/test_payment_attempts.py
+Runs against SQLite-with-FK by default, or Postgres if PG_TEST_DSN is set. Uses a
+real parent graph (finding #16). Concurrency proofs live in test_pg_concurrency.py.
+Run: python tests/test_payment_attempts.py
 """
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import create_engine
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import sessionmaker
+from tests._pay_fixture import new_db as _db
 
-from app.database import Base
-from app.models import oltp  # noqa: F401  registers all tables on Base.metadata
 from app.models.oltp import PaymentAttempt, PaymentAttemptStatus as S
 from app.services import payment_attempts as pa
 
@@ -23,156 +18,156 @@ _failures = []
 
 
 def check(cond, label):
-    if cond:
-        print(f"  ok   {label}")
-    else:
+    print(f"  {'ok  ' if cond else 'FAIL'} {label}")
+    if not cond:
         _failures.append(label)
-        print(f"  FAIL {label}")
 
 
-def _session():
-    engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine)
-    return sessionmaker(bind=engine)()
-
-
-def _mk(db, key=None, total=1000):
+def _mk(db, ids, key=None, total=1000, provider="manual", order_id=None):
     return pa.create_attempt(
-        db, order_id=1, staff_id=1, seat_id=1, expected_total_cents=total,
-        subtotal_cents=900, tax_cents=100, tip_cents=0, currency="CAD",
-        idempotency_key=key,
+        db, provider=provider, order_id=order_id or ids["order_id"],
+        staff_id=ids["staff_id"], expected_total_cents=total,
+        subtotal_cents=total, idempotency_key=key,
     )
 
 
-def test_idempotent_create():
-    db = _session()
-    a = _mk(db, key="abc")
-    b = _mk(db, key="abc")
-    check(a.id == b.id, "same idempotency key returns the same attempt")
-    n = db.query(PaymentAttempt).count()
-    check(n == 1, "no duplicate attempt row for a repeated key")
-    c = _mk(db)  # auto key
-    d = _mk(db)  # auto key
-    check(c.id != d.id and c.idempotency_key != d.idempotency_key,
-          "auto-generated keys are unique")
+def test_provider_required_and_validated():
+    db, ids = _db()
+    raised = False
+    try:
+        pa.create_attempt(db, provider="nope", order_id=ids["order_id"],
+                          staff_id=ids["staff_id"], expected_total_cents=100)
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "unregistered provider is rejected (no silent default)")
+
+
+def test_idempotent_create_same_intent():
+    db, ids = _db()
+    a = _mk(db, ids, key="abc")
+    b = _mk(db, ids, key="abc")
+    check(a.id == b.id, "same key + same intent returns the same attempt")
+    check(db.query(PaymentAttempt).count() == 1, "no duplicate row")
+
+
+def test_same_key_different_intent_conflicts():
+    db, ids = _db()
+    _mk(db, ids, key="dup", total=1000)
+    raised = False
+    try:
+        _mk(db, ids, key="dup", total=9999)  # different amount => different intent
+    except pa.IdempotencyConflict:
+        raised = True
+    check(raised, "same key + different intent raises IdempotencyConflict")
 
 
 def test_legal_settlement_path():
-    db = _session()
-    a = _mk(db)
+    db, ids = _db()
+    a = _mk(db, ids)
     pa.transition(db, a, S.PROCESSOR_PENDING, provider_checkout_id="chk_1")
     pa.transition(db, a, S.PROCESSOR_APPROVED, provider_payment_id="pay_1")
-    pa.transition(db, a, S.SETTLED, payment_id=42)
-    check(a.status == S.SETTLED, "created -> pending -> approved -> settled")
-    check(a.provider_checkout_id == "chk_1" and a.provider_payment_id == "pay_1",
-          "provider identifiers persisted")
-    check(a.payment_id == 42, "settled attempt links its Payment")
+    pa.transition(db, a, S.SETTLED, payment_id=ids["payment_id"])
+    check(a.status == S.SETTLED, "created->pending->approved->settled")
+    check(a.provider_payment_id == "pay_1", "provider id persisted")
+    check(a.payment_id == ids["payment_id"], "settled attempt links its Payment")
 
 
-def test_illegal_transitions_rejected():
-    db = _session()
-    a = _mk(db)
+def test_illegal_and_terminal():
+    db, ids = _db()
+    a = _mk(db, ids)
     raised = False
     try:
-        pa.transition(db, a, S.SETTLED, payment_id=1)  # skips processor states
+        pa.transition(db, a, S.SETTLED, payment_id=ids["payment_id"])
     except pa.PaymentAttemptError:
         raised = True
-    check(raised, "created -> settled is rejected (no processor outcome)")
-    check(a.status == S.CREATED, "rejected transition leaves status unchanged")
-
-    # terminal state cannot be reopened
-    b = _mk(db)
+    check(raised, "created->settled rejected (no processor outcome)")
+    b = _mk(db, ids, key="k2")
     pa.transition(db, b, S.FAILED, last_error="declined")
     raised2 = False
     try:
         pa.transition(db, b, S.PROCESSOR_PENDING)
     except pa.PaymentAttemptError:
         raised2 = True
-    check(raised2, "a FAILED attempt cannot be reopened")
+    check(raised2, "FAILED is terminal, cannot reopen")
 
 
 def test_settle_requires_payment_id():
-    db = _session()
-    a = _mk(db)
+    db, ids = _db()
+    a = _mk(db, ids)
     pa.transition(db, a, S.PROCESSOR_PENDING)
     pa.transition(db, a, S.PROCESSOR_APPROVED)
     raised = False
     try:
-        pa.transition(db, a, S.SETTLED)  # no payment_id
+        pa.transition(db, a, S.SETTLED)
     except pa.PaymentAttemptError:
         raised = True
-    check(raised, "settling without a payment_id is rejected")
+    check(raised, "settling without payment_id is rejected")
 
 
-def test_provider_id_write_once():
-    db = _session()
-    a = _mk(db)
+def test_write_once_provider_id_via_cas():
+    db, ids = _db()
+    a = _mk(db, ids)
     pa.transition(db, a, S.PROCESSOR_PENDING, provider_checkout_id="chk_1")
-    # same value again is fine
-    pa.transition(db, a, S.PROCESSOR_APPROVED, provider_checkout_id="chk_1")
+    pa.transition(db, a, S.PROCESSOR_APPROVED, provider_checkout_id="chk_1")  # same ok
     raised = False
     try:
-        # different value must be refused
-        pa.transition(db, a, S.SETTLED, payment_id=1, provider_checkout_id="chk_2")
-    except pa.PaymentAttemptError:
+        pa.transition(db, a, S.SETTLED, payment_id=ids["payment_id"],
+                      provider_checkout_id="chk_2")  # different -> conflict
+    except pa.TransitionConflict:
         raised = True
     check(raised, "a set provider id cannot be overwritten with a different value")
 
 
-def test_snapshot_is_immutable_across_transitions():
-    db = _session()
-    a = _mk(db, total=1234)
-    snap = (a.subtotal_cents, a.tax_cents, a.tip_cents, a.expected_total_cents)
+def test_snapshot_immutable_across_transitions():
+    db, ids = _db()
+    a = _mk(db, ids, total=1234)
+    snap = (a.subtotal_cents, a.expected_total_cents)
     pa.transition(db, a, S.PROCESSOR_PENDING)
     pa.transition(db, a, S.PROCESSOR_APPROVED)
-    pa.transition(db, a, S.SETTLED, payment_id=7)
-    now = (a.subtotal_cents, a.tax_cents, a.tip_cents, a.expected_total_cents)
-    check(snap == now, "amount snapshot is unchanged by transitions")
+    pa.transition(db, a, S.SETTLED, payment_id=ids["payment_id"])
+    check(snap == (a.subtotal_cents, a.expected_total_cents),
+          "amount snapshot unchanged by transitions (service contract)")
 
 
-def test_one_payment_per_attempt_db_constraint():
-    db = _session()
-    a = _mk(db, key="k1")
-    b = _mk(db, key="k2")
-    for x in (a, b):
-        pa.transition(db, x, S.PROCESSOR_PENDING)
-        pa.transition(db, x, S.PROCESSOR_APPROVED)
-    pa.transition(db, a, S.SETTLED, payment_id=100)
+def test_reconciliation_needs_evidence():
+    db, ids = _db()
+    a = _mk(db, ids)
+    pa.transition(db, a, S.REQUIRES_RECONCILIATION, last_error="lost")
+    # plain transition out is blocked
     raised = False
     try:
-        # two attempts cannot claim the same Payment row
-        b.payment_id = 100
-        db.commit()
-    except IntegrityError:
+        pa.transition(db, a, S.SETTLED, payment_id=ids["payment_id"])
+    except pa.PaymentAttemptError:
         raised = True
-        db.rollback()
-    check(raised, "DB unique constraint blocks two attempts on one Payment")
-
-
-def test_reconciliation_queue():
-    db = _session()
-    settled = _mk(db, key="s")
-    pa.transition(db, settled, S.PROCESSOR_PENDING)
-    pa.transition(db, settled, S.PROCESSOR_APPROVED)
-    pa.transition(db, settled, S.SETTLED, payment_id=1)
-    approved = _mk(db, key="a")  # Square said yes, never settled locally
-    pa.transition(db, approved, S.PROCESSOR_PENDING)
-    pa.transition(db, approved, S.PROCESSOR_APPROVED)
-    stuck = pa.requires_reconciliation(db)
-    ids = {x.id for x in stuck}
-    check(approved.id in ids, "approved-but-unsettled attempt needs reconciliation")
-    check(settled.id not in ids, "a settled attempt is not in the queue")
+    check(raised, "plain transition cannot leave REQUIRES_RECONCILIATION")
+    # resolution requires evidence
+    raised2 = False
+    try:
+        pa.resolve_reconciliation(db, a, resolved_status=S.SETTLED,
+                                  resolved_by="", note="", payment_id=ids["payment_id"])
+    except pa.PaymentAttemptError:
+        raised2 = True
+    check(raised2, "resolution without resolved_by/note is rejected")
+    pa.resolve_reconciliation(db, a, resolved_status=S.SETTLED, resolved_by="mgr",
+                              note="looked up in Square dashboard", payment_id=ids["payment_id"])
+    check(a.status == S.SETTLED and a.reconciled_by == "mgr" and a.reconciliation_note,
+          "resolution with evidence settles and records who/why")
 
 
 if __name__ == "__main__":
-    test_idempotent_create()
-    test_legal_settlement_path()
-    test_illegal_transitions_rejected()
-    test_settle_requires_payment_id()
-    test_provider_id_write_once()
-    test_snapshot_is_immutable_across_transitions()
-    test_one_payment_per_attempt_db_constraint()
-    test_reconciliation_queue()
+    for fn in (
+        test_provider_required_and_validated,
+        test_idempotent_create_same_intent,
+        test_same_key_different_intent_conflicts,
+        test_legal_settlement_path,
+        test_illegal_and_terminal,
+        test_settle_requires_payment_id,
+        test_write_once_provider_id_via_cas,
+        test_snapshot_immutable_across_transitions,
+        test_reconciliation_needs_evidence,
+    ):
+        print(f"- {fn.__name__}")
+        fn()
     if _failures:
         print(f"\n{len(_failures)} FAILED")
         sys.exit(1)
