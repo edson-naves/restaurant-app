@@ -9,7 +9,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests._pay_fixture import new_db as _db
 
-from app.models.oltp import PaymentAttemptStatus as PS, RefundAttempt, RefundAttemptStatus as R
+from app.models.oltp import (
+    Payment, PaymentAttemptStatus as PS, PaymentInstrument,
+    RefundAttempt, RefundAttemptStatus as R,
+)
 from app.services import payment_attempts as pa
 from app.services import refund_attempts as ra
 
@@ -33,10 +36,12 @@ def check(cond, label):
         _failures.append(label)
 
 
-def _mkref(db, ids, amount, provider="square_terminal", key=None):
+def _mkref(db, ids, amount, provider="manual", key=None, currency="CAD"):
+    # The seeded payment uses a cash/'manual' instrument, so a legacy refund
+    # defaults to provider='manual' to match it (#4).
     return ra.create_refund_attempt(
         db, payment_id=ids["payment_id"], staff_id=ids["staff_id"],
-        provider=provider, amount_cents=amount, idempotency_key=key,
+        provider=provider, amount_cents=amount, currency=currency, idempotency_key=key,
     )
 
 
@@ -83,14 +88,66 @@ def test_running_total_counts_inflight_and_completed():
 
 def test_same_key_different_amount_conflicts():
     db, ids = _db()
-    _settled_attempt(db, ids)
-    _mkref(db, ids, 1000, key="rk")
+    _settled_attempt(db, ids)  # square_terminal
+    _mkref(db, ids, 1000, key="rk", provider="square_terminal")
     raised = False
     try:
-        _mkref(db, ids, 2500, key="rk")  # same key, different amount
+        _mkref(db, ids, 2500, key="rk", provider="square_terminal")  # same key, diff amount
     except pa.IdempotencyConflict:
         raised = True
     check(raised, "same refund key + different amount raises IdempotencyConflict (#3)")
+
+
+def test_legacy_refund_provider_derivation():
+    db, ids = _db()  # seeded payment uses a 'manual' cash instrument, no attempt
+    # matching provider accepted
+    r = _mkref(db, ids, 500, provider="manual")
+    check(r.provider == "manual", "legacy manual payment refunded as manual is accepted (#4)")
+    # caller claiming square_terminal on a manual legacy payment is rejected
+    raised = False
+    try:
+        _mkref(db, ids, 500, provider="square_terminal", key="x")
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "legacy manual payment cannot be refunded as square_terminal (#4)")
+
+
+def test_legacy_square_payment_refunded_as_manual_rejected():
+    db, ids = _db()
+    inst = PaymentInstrument(code="card_terminal", name="Card (terminal)",
+                             instrument_type="card", provider="square_terminal")
+    db.add(inst); db.flush()
+    pay = Payment(order_id=ids["order_id"], instrument_id=inst.id,
+                  staff_id=ids["staff_id"], total_cents=5000)
+    db.add(pay); db.commit()
+    raised = False
+    try:
+        ra.create_refund_attempt(db, payment_id=pay.id, staff_id=ids["staff_id"],
+                                 provider="manual", amount_cents=500)
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "legacy square payment cannot be refunded as manual (#4)")
+
+
+def test_refund_currency_must_match():
+    db, ids = _db()
+    _settled_attempt(db, ids)  # CAD square_terminal charge
+    ok = _mkref(db, ids, 500, provider="square_terminal", currency="CAD")
+    check(ok.currency == "CAD", "CAD charge -> CAD refund accepted (#5)")
+    raised = False
+    try:
+        _mkref(db, ids, 500, provider="square_terminal", currency="USD", key="u")
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "CAD charge -> USD refund rejected (#5)")
+    # legacy payment: refund currency must equal the venue currency (CAD)
+    db2, ids2 = _db()
+    raised = False
+    try:
+        _mkref(db2, ids2, 500, provider="manual", currency="USD")
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "legacy refund in a non-venue currency rejected (#5)")
 
 
 def test_provider_mismatch_rejected():
@@ -141,6 +198,9 @@ if __name__ == "__main__":
         test_refund_amount_must_be_positive,
         test_running_total_counts_inflight_and_completed,
         test_same_key_different_amount_conflicts,
+        test_legacy_refund_provider_derivation,
+        test_legacy_square_payment_refunded_as_manual_rejected,
+        test_refund_currency_must_match,
         test_provider_mismatch_rejected,
         test_wrong_charge_attempt_rejected,
         test_refund_state_transitions,
