@@ -166,6 +166,39 @@ def test_evidence_semantic_validation():
             square._request = orig
 
 
+def test_evidence_parse_hardening():
+    """Untrusted processor payloads must not crash polling; malformed numeric
+    values map to reconciliation and currency is normalized (#4)."""
+    def poll_with(payment):
+        def fake(method, path, payload=None):
+            if path.endswith("/chk_1"):
+                return {"checkout": {"id": "chk_1", "status": "COMPLETED", "payment_ids": ["pay_9"]}}
+            if path.startswith("/v2/payments/"):
+                return {"payment": payment}
+            raise AssertionError(path)
+        return fake
+
+    cases = [
+        ({"total_money": {"amount": "NaN", "currency": "CAD"}, "tip_money": {"amount": 0}},
+         S.REQUIRES_RECONCILIATION, "non-numeric total -> reconcile"),
+        ({"total_money": {"amount": 1000, "currency": "CAD"}, "tip_money": {"amount": "xx"}},
+         S.REQUIRES_RECONCILIATION, "non-numeric tip -> reconcile"),
+        ({"total_money": {"amount": [1, 2], "currency": "CAD"}, "tip_money": {"amount": 0}},
+         S.REQUIRES_RECONCILIATION, "unexpected numeric type -> reconcile"),
+        ("garbage-not-a-dict",
+         S.REQUIRES_RECONCILIATION, "malformed payment object -> reconcile"),
+        ({"total_money": {"amount": 1000, "currency": "cad"}, "tip_money": {"amount": 0}},
+         S.PROCESSOR_APPROVED, "lowercase currency normalized -> approve"),
+    ]
+    for payment, expected, label in cases:
+        orig = _fake(poll_with(payment))
+        try:
+            res = pp.get_provider("square_terminal").poll("chk_1")
+            check(res.status == expected, label + " (#4)")
+        finally:
+            square._request = orig
+
+
 def test_charge_and_refund_forward_currency():
     seen = {}
 
@@ -452,6 +485,7 @@ if __name__ == "__main__":
         test_square_poll_reads_processor_evidence,
         test_approval_requires_complete_evidence,
         test_evidence_semantic_validation,
+        test_evidence_parse_hardening,
         test_charge_and_refund_forward_currency,
         test_square_completed_without_payment_id_reconciles,
         test_square_refund_state_mapping,
