@@ -26,6 +26,15 @@ def is_production() -> bool:
     return app_env() not in _DEV_ENVS
 
 
+def venue_currency() -> str:
+    """The venue's operating currency (ISO 4217). The app is single-currency;
+    this is the authoritative fallback for a legacy Payment that has no per-row
+    currency, e.g. when validating a refund currency. VENUE_CURRENCY wins, then
+    SQUARE_CURRENCY, else CAD."""
+    return (os.environ.get("VENUE_CURRENCY")
+            or os.environ.get("SQUARE_CURRENCY") or "CAD").strip().upper()
+
+
 class ConfigError(RuntimeError):
     """Raised at startup when required production configuration is missing."""
 

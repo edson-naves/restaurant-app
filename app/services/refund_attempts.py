@@ -19,8 +19,10 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
+from app.config import venue_currency
 from app.models.oltp import (
     REFUND_ATTEMPT_TRANSITIONS,
+    Payment,
     PaymentAttempt,
     PaymentAttemptStatus,
     RefundAttempt,
@@ -47,14 +49,15 @@ def refund_intent_fingerprint(
 
 def _resolve_charge_attempt(
     db: Session, *, payment_id: int, charge_attempt_id: int | None, provider: str,
-) -> int | None:
+) -> PaymentAttempt | None:
     """Tie the refund to its charge attempt and validate the relationship (#7).
 
     Prefers deriving the charge attempt from ``payment_id`` (a Payment backs at
     most one settled attempt) rather than trusting a caller-supplied id. When a
     charge attempt is found it must match on payment, be SETTLED, and share the
-    refund's provider. Returns the validated charge_attempt_id, or None for a
-    legacy payment with no attempt.
+    refund's provider. Returns the validated PaymentAttempt, or None for a legacy
+    payment with no attempt — in which case the provider is derived from the
+    Payment's instrument and a caller mismatch is rejected (#4).
     """
     derived = db.execute(
         select(PaymentAttempt).where(PaymentAttempt.payment_id == payment_id)
@@ -72,7 +75,18 @@ def _resolve_charge_attempt(
         attempt = derived
 
     if attempt is None:
-        return None  # legacy payment predating PaymentAttempt — provider is the caller's
+        # Legacy payment predating PaymentAttempt: derive the canonical provider
+        # from the original Payment's instrument and reject a caller mismatch —
+        # never trust the caller to say what a historical payment was (#4).
+        payment = db.get(Payment, payment_id)
+        if payment is None:
+            raise PaymentAttemptError(f"payment {payment_id} does not exist.")
+        inst_provider = payment.instrument.provider if payment.instrument else None
+        if inst_provider and inst_provider != provider:
+            raise PaymentAttemptError(
+                f"refund provider {provider!r} != payment instrument provider "
+                f"{inst_provider!r} (legacy payment {payment_id}).")
+        return None
 
     if attempt.payment_id != payment_id:
         raise PaymentAttemptError(
@@ -83,7 +97,28 @@ def _resolve_charge_attempt(
     if attempt.provider != provider:
         raise PaymentAttemptError(
             f"refund provider {provider!r} != charge provider {attempt.provider!r}.")
-    return attempt.id
+    return attempt
+
+
+def _validate_refund_currency(currency: str, charge: PaymentAttempt | None) -> None:
+    """A refund must be in the same currency as the money it reverses (#5).
+
+    Attempt-backed: match the charge attempt's currency and, when present, its
+    processor-confirmed currency. Legacy (no attempt): match the venue currency,
+    the best authoritative record when a Payment carries no per-row currency."""
+    want = currency.upper()
+    if charge is not None:
+        if want != charge.currency.upper():
+            raise PaymentAttemptError(
+                f"refund currency {want} != charge currency {charge.currency.upper()}.")
+        if charge.processor_currency and want != charge.processor_currency.upper():
+            raise PaymentAttemptError(
+                f"refund currency {want} != processor currency {charge.processor_currency.upper()}.")
+    else:
+        venue = venue_currency()
+        if want != venue:
+            raise PaymentAttemptError(
+                f"refund currency {want} != venue currency {venue} (legacy payment).")
 
 
 def new_idempotency_key() -> str:
@@ -130,8 +165,10 @@ def create_refund_attempt(
     if amount_cents <= 0:
         raise PaymentAttemptError("refund amount must be positive.")
 
-    charge_attempt_id = _resolve_charge_attempt(
+    charge = _resolve_charge_attempt(
         db, payment_id=payment_id, charge_attempt_id=charge_attempt_id, provider=provider)
+    _validate_refund_currency(currency, charge)
+    charge_attempt_id = charge.id if charge is not None else None
     fingerprint = refund_intent_fingerprint(
         payment_id=payment_id, charge_attempt_id=charge_attempt_id, provider=provider,
         amount_cents=amount_cents, currency=currency)
