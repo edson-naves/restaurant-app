@@ -300,6 +300,107 @@ def test_legacy_fingerprint_idempotency_survives_upgrade(engine):
     s2.close()
 
 
+_ATTEMPT_COLS = (
+    "order_id, staff_id, provider, idempotency_key, intent_fingerprint, line_selection, "
+    "subtotal_cents, tax_cents, tip_cents, service_charge_cents, discount_cents, surcharge_cents, "
+    "expected_total_cents, currency, status, last_error, reconciled_by, reconciliation_note, "
+    "created_at, updated_at")
+
+
+def _fields(ids, provider, expected, subtotal, line_selection):
+    return dict(provider=provider, order_id=ids["order_id"], seat_id=None, staff_id=ids["staff_id"],
+                currency="CAD", expected_total_cents=expected, subtotal_cents=subtotal, tax_cents=0,
+                tip_cents=0, service_charge_cents=0, discount_cents=0, surcharge_cents=0,
+                line_selection=line_selection)
+
+
+def _insert_intermediate(engine, ids, *, key, fp, ls, provider="manual", expected=1000, subtotal=1000):
+    with engine.begin() as c:
+        c.execute(text(
+            f"INSERT INTO payment_attempt ({_ATTEMPT_COLS}) VALUES "
+            "(:o,:s,:p,:k,:fp,:ls,:sub,0,0,0,0,0,:tot,'CAD','created','','','',now(),now())"),
+            {"o": ids["order_id"], "s": ids["staff_id"], "p": provider, "k": key, "fp": fp,
+             "ls": ls, "sub": subtotal, "tot": expected})
+
+
+def _version_of(engine, key):
+    with engine.connect() as c:
+        return c.execute(text("SELECT fingerprint_version, intent_fingerprint FROM payment_attempt "
+                              "WHERE idempotency_key=:k"), {"k": key}).one()
+
+
+def test_mixed_fingerprint_version_backfill(engine):
+    """A DB with BOTH pre-selection (v1) and intermediate (v2) rows plus an
+    empty-fingerprint row must be classified PER ROW, not by a blanket default
+    (slice-1-fix² #1)."""
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    s = Session(engine)()
+    ids = seed_parents(s)
+    s.close()
+    # Intermediate schema: fingerprint_version does not exist yet.
+    with engine.begin() as c:
+        c.execute(text("ALTER TABLE payment_attempt DROP COLUMN fingerprint_version"))
+
+    fpA = pa.intent_fingerprint(**_fields(ids, "manual", 1000, 1000, ""), version=1)   # v1
+    fpB = pa.intent_fingerprint(**_fields(ids, "manual", 2000, 2000, "1,2,3"), version=2)  # v2
+    _insert_intermediate(engine, ids, key="rowA", fp=fpA, ls="", expected=1000, subtotal=1000)
+    _insert_intermediate(engine, ids, key="rowB", fp=fpB, ls="1,2,3", expected=2000, subtotal=2000)
+    _insert_intermediate(engine, ids, key="rowC", fp="", ls="", expected=3000, subtotal=3000)  # empty fp
+
+    migrate.run(engine, strict=True)
+
+    check(_version_of(engine, "rowA")[0] == 1, "pre-selection row classified v1 (#1)")
+    check(_version_of(engine, "rowB")[0] == 2, "intermediate selection-aware row classified v2 (#1)")
+    vc = _version_of(engine, "rowC")
+    check(vc[0] == 1 and vc[1] != "", "empty-fingerprint row reconstructed to a v1 hash (#1)")
+
+    db = Session(engine)()
+
+    def attempt(key, expected, subtotal, item_ids=None):
+        return pa.create_attempt(db, provider="manual", order_id=ids["order_id"],
+                                 staff_id=ids["staff_id"], expected_total_cents=expected,
+                                 subtotal_cents=subtotal, currency="CAD", item_ids=item_ids,
+                                 idempotency_key=key)
+
+    def conflicts(fn):
+        try:
+            fn(); return False
+        except pa.IdempotencyConflict:
+            return True
+
+    check(attempt("rowA", 1000, 1000).idempotency_key == "rowA", "v1 legacy retry returns the row (#1)")
+    check(conflicts(lambda: attempt("rowA", 9999, 9999)), "v1 row: changed amount conflicts (#1)")
+    check(attempt("rowB", 2000, 2000, item_ids=[1, 2, 3]).idempotency_key == "rowB",
+          "v2 row: same selection retry returns the row (#1)")
+    check(conflicts(lambda: attempt("rowB", 2000, 2000, item_ids=[1, 2, 4])),
+          "v2 row: different selection conflicts (#1)")
+    check(attempt("rowC", 3000, 3000).idempotency_key == "rowC", "reconstructed row retry returns it (#1)")
+    check(conflicts(lambda: attempt("rowC", 1, 1)), "reconstructed row: changed intent does not silently pass (#1)")
+    db.close()
+
+    again = migrate.run(engine, strict=True)   # rerun is idempotent (no rows left at version 0)
+    check(not any("classified" in a for a in again), "fingerprint backfill re-run is a no-op (#1)")
+
+
+def test_unverifiable_fingerprint_fails_strict(engine):
+    """A stored hash matching neither v1 nor v2 must fail closed, not be guessed (#1)."""
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    s = Session(engine)()
+    ids = seed_parents(s)
+    s.close()
+    with engine.begin() as c:
+        c.execute(text("ALTER TABLE payment_attempt DROP COLUMN fingerprint_version"))
+    _insert_intermediate(engine, ids, key="bogus", fp="deadbeef" * 8, ls="", expected=1000, subtotal=1000)
+    raised = False
+    try:
+        migrate.run(engine, strict=True)
+    except migrate.MigrationError as exc:
+        raised = "neither v1 nor v2" in str(exc)
+    check(raised, "an unclassifiable stored fingerprint fails closed under strict (#1)")
+
+
 def test_line_selection_varchar_to_text_upgrade(engine):
     """A DB that ran the Slice-1 intermediate schema has line_selection VARCHAR(500);
     the migration must widen it to TEXT in place (slice-1-fix #2)."""
@@ -408,6 +509,8 @@ if __name__ == "__main__":
                test_card_terminal_instrument_backfilled, test_card_terminal_preserves_explicit_provider,
                test_hardening_is_idempotent, test_hardening_atomic_rollback,
                test_legacy_fingerprint_idempotency_survives_upgrade,
+               test_mixed_fingerprint_version_backfill,
+               test_unverifiable_fingerprint_fails_strict,
                test_line_selection_varchar_to_text_upgrade,
                test_nonnull_provider_refund_id_fails_strict,
                test_upgrade_blocks_on_duplicate_payment_id,

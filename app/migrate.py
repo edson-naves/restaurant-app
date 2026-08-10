@@ -99,9 +99,9 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # Stage 2c: the paid-item selection captured on the charge attempt (TEXT so a
     # large legitimate selection never overflows a fragile VARCHAR cap).
     ("payment_attempt", "line_selection", "TEXT NOT NULL DEFAULT ''"),
-    # Fingerprint algorithm version. Existing rows predate the selection-aware
-    # hash, so they are backfilled to v1; new rows are v2 (set by the ORM).
-    ("payment_attempt", "fingerprint_version", "INTEGER NOT NULL DEFAULT 1"),
+    # NOTE: fingerprint_version is NOT added here — a blanket default would
+    # misclassify rows created by the intermediate (v2, selection-aware) schema.
+    # It is added + classified PER ROW in _migrate_payment_hardening.
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW
@@ -352,16 +352,23 @@ def _migrate_payment_hardening(engine: Engine, strict: bool) -> list[str]:
                 conn.execute(text('ALTER TABLE payment_attempt ALTER COLUMN line_selection TYPE TEXT'))
                 applied.append("widened payment_attempt.line_selection -> TEXT")
 
-        # 1e. Drop the backfill default on fingerprint_version so new inserts rely
-        # on the ORM's v2, not a lingering v1 server default.
-        if pg and _column_exists(conn, "payment_attempt", "fingerprint_version"):
+        # 1e. fingerprint_version: add with a neutral sentinel (0 = unclassified),
+        # then classify EACH existing row by matching its stored hash against the
+        # v1 and v2 algorithms recomputed from that row's own snapshot — never a
+        # blanket default that would mislabel intermediate v2 rows (slice-1-fix² #1).
+        if not _column_exists(conn, "payment_attempt", "fingerprint_version"):
+            conn.execute(text(
+                "ALTER TABLE payment_attempt ADD COLUMN fingerprint_version INTEGER NOT NULL DEFAULT 0"))
+            applied.append("added payment_attempt.fingerprint_version (0=unclassified)")
+        applied.extend(_backfill_fingerprint_version(conn, strict))
+        if pg:
             fv_default = conn.execute(text(
                 "SELECT column_default FROM information_schema.columns "
                 "WHERE table_name='payment_attempt' AND column_name='fingerprint_version' "
                 "AND table_schema=current_schema()")).scalar_one_or_none()
             if fv_default is not None:
                 conn.execute(text('ALTER TABLE payment_attempt ALTER COLUMN fingerprint_version DROP DEFAULT'))
-                applied.append("dropped backfill default on payment_attempt.fingerprint_version")
+                applied.append("dropped sentinel default on payment_attempt.fingerprint_version")
 
         # 2. Retire the old provider_refund_id. Drop only when empty; non-null under
         # strict fails closed (rolling back the whole tx).
@@ -408,6 +415,58 @@ def _migrate_payment_hardening(engine: Engine, strict: bool) -> list[str]:
                                   f'ON {table} ({", ".join(cols)})'))
             applied.append(f"added {name} on {table}({', '.join(cols)})")
 
+    return applied
+
+
+def _backfill_fingerprint_version(conn, strict: bool) -> list[str]:
+    """Classify each not-yet-versioned payment_attempt row (fingerprint_version=0)
+    by recomputing v1 and v2 fingerprints from its own snapshot and matching the
+    stored hash — so intermediate v2 (selection-aware) rows are labelled v2, older
+    v1 rows v1, and pre-fingerprint ('' hash) rows get a reconstructed v1 hash. A
+    stored hash matching neither fails closed (strict) rather than being guessed
+    (slice-1-fix² #1)."""
+    from app.services.payment_attempts import intent_fingerprint  # lazy: avoids import cycle
+    applied: list[str] = []
+    rows = conn.execute(text(
+        "SELECT id, provider, order_id, seat_id, staff_id, currency, expected_total_cents, "
+        "subtotal_cents, tax_cents, tip_cents, service_charge_cents, discount_cents, "
+        "surcharge_cents, line_selection, intent_fingerprint FROM payment_attempt "
+        "WHERE fingerprint_version = 0")).mappings().all()
+    reconstructed = unverifiable = 0
+    for r in rows:
+        fields = dict(
+            provider=r["provider"], order_id=r["order_id"], seat_id=r["seat_id"],
+            staff_id=r["staff_id"], currency=r["currency"] or "CAD",
+            expected_total_cents=r["expected_total_cents"], subtotal_cents=r["subtotal_cents"],
+            tax_cents=r["tax_cents"], tip_cents=r["tip_cents"],
+            service_charge_cents=r["service_charge_cents"], discount_cents=r["discount_cents"],
+            surcharge_cents=r["surcharge_cents"], line_selection=r["line_selection"] or "",
+        )
+        stored = r["intent_fingerprint"] or ""
+        fp_v1 = intent_fingerprint(**fields, version=1)
+        fp_v2 = intent_fingerprint(**fields, version=2)
+        if stored == "":
+            # Predates fingerprinting; the immutable snapshot is present, so
+            # reconstruct the canonical v1 hash instead of leaving '' (which would
+            # otherwise let a DIFFERENT intent reuse the key).
+            conn.execute(text("UPDATE payment_attempt SET intent_fingerprint=:fp, "
+                              "fingerprint_version=1 WHERE id=:id"), {"fp": fp_v1, "id": r["id"]})
+            reconstructed += 1
+        elif stored == fp_v2:
+            conn.execute(text("UPDATE payment_attempt SET fingerprint_version=2 WHERE id=:id"),
+                         {"id": r["id"]})
+        elif stored == fp_v1:
+            conn.execute(text("UPDATE payment_attempt SET fingerprint_version=1 WHERE id=:id"),
+                         {"id": r["id"]})
+        else:
+            msg = (f"payment_attempt {r['id']} has an intent_fingerprint matching neither v1 nor "
+                   "v2 recomputed from its snapshot; cannot classify safely.")
+            if strict:
+                raise MigrationError(msg)
+            unverifiable += 1  # left at 0 -> _assert_same_intent fails closed on it
+    if rows:
+        applied.append(f"classified {len(rows)} fingerprint_version rows "
+                       f"({reconstructed} reconstructed, {unverifiable} unverifiable)")
     return applied
 
 

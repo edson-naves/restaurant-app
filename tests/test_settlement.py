@@ -138,7 +138,8 @@ def test_item_id_validation_is_strict():
     check(make(["2"], "b").line_selection == "2", "digit string accepted (#3)")
     for bad, label in ((True, "bool True"), (False, "bool False"), (1.9, "float"),
                        ("1.9", "decimal string"), (0, "zero"), (-1, "negative"),
-                       (object(), "object")):
+                       (object(), "object"), ("²", "unicode superscript-2"),
+                       ("٣", "arabic-indic digit")):
         raised = False
         try:
             make([bad], f"k_{label}")

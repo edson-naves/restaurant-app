@@ -163,6 +163,22 @@ def test_external_approval_requires_evidence():
     check(m.status == S.PROCESSOR_APPROVED, "manual provider approval remains valid (#2)")
 
 
+def test_unsupported_fingerprint_version_fails_closed():
+    from sqlalchemy import update as _upd
+    for bad in (0, 3, 99):
+        db, ids = _db()
+        a = _mk(db, ids, key="v")
+        db.execute(_upd(PaymentAttempt).where(PaymentAttempt.id == a.id)
+                   .values(fingerprint_version=bad))
+        db.commit()
+        raised = False
+        try:
+            _mk(db, ids, key="v")   # same key; _assert_same_intent sees the bad version
+        except pa.IdempotencyConflict:
+            raised = True
+        check(raised, f"stored fingerprint_version {bad} fails closed on idempotency (#2)")
+
+
 def test_currency_defaults_to_venue():
     db, ids = _db()
     old = os.environ.get("VENUE_CURRENCY")
@@ -280,6 +296,7 @@ if __name__ == "__main__":
         test_write_once_provider_id_via_cas,
         test_snapshot_immutable_across_transitions,
         test_external_approval_requires_evidence,
+        test_unsupported_fingerprint_version_fails_closed,
         test_currency_defaults_to_venue,
         test_processor_evidence_is_write_once,
         test_reconciliation_validation_and_automatic,

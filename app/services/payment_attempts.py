@@ -22,6 +22,7 @@ Concurrency/idempotency guarantees (Postgres and SQLite):
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from datetime import datetime
 
@@ -77,19 +78,28 @@ def new_idempotency_key() -> str:
     return secrets.token_hex(24)
 
 
-# Current fingerprint algorithm version (v2 = selection-aware).
+# Fingerprint algorithm versions. v1 = selection-unaware (pre-Stage-2c),
+# v2 = selection-aware. Current for new rows is v2. An attempt whose stored
+# version is outside this set is unverifiable and fails closed on idempotency.
 CURRENT_FP_VERSION = 2
+SUPPORTED_FP_VERSIONS = frozenset({1, 2})
+
+# A paid-item id is a run of ASCII digits — deliberately narrow, so a Unicode
+# digit-like character (accepted by str.isdigit) can't slip through and leak a
+# raw parser error (slice-1-fix² #3).
+_ITEM_ID_RE = re.compile(r"^[0-9]+$")
 
 
 def _strict_item_id(v) -> int:
     """A paid-item id is a positive integer. Reject bool/float/decimal-string/
-    zero/negative/objects rather than silently coercing (slice-1-fix review #3).
-    A digit-only string is accepted (form inputs arrive as strings)."""
+    non-ASCII-digit/zero/negative/objects with a domain error — never a silent
+    coercion or a raw parser exception (slice-1-fix review #3 / slice-1-fix² #3).
+    An ASCII digit-only string is accepted (form inputs arrive as strings)."""
     if isinstance(v, bool):
         raise PaymentAttemptError(f"invalid item id {v!r} (bool is not an id)")
     if isinstance(v, int):
         n = v
-    elif isinstance(v, str) and v.strip().isdigit():
+    elif isinstance(v, str) and _ITEM_ID_RE.match(v.strip()):
         n = int(v.strip())
     else:
         raise PaymentAttemptError(f"invalid item id {v!r} (expected a positive integer)")
@@ -126,12 +136,14 @@ def intent_fingerprint(
     selects the algorithm: v1 (pre-Stage-2c) excludes the paid-item selection, v2
     includes it. A durable attempt is always re-matched using its stored version,
     so introducing v2 never turns a legacy v1 intent into a false conflict."""
+    if version not in SUPPORTED_FP_VERSIONS:
+        raise PaymentAttemptError(f"unsupported fingerprint version {version!r}")
     fields = [
         provider, order_id, seat_id, staff_id, currency.upper(),
         expected_total_cents, subtotal_cents, tax_cents, tip_cents,
         service_charge_cents, discount_cents, surcharge_cents,
     ]
-    if version >= 2:
+    if version == 2:
         fields.append(line_selection)
     canonical = "|".join(str(x) for x in fields)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:64]
@@ -183,9 +195,15 @@ def _by_key(db: Session, key: str) -> PaymentAttempt | None:
 def _assert_same_intent(existing: PaymentAttempt, intent: dict) -> None:
     """Re-match the requested intent against a stored attempt using the stored
     row's own fingerprint version (slice-1-fix #1) — so a v1 legacy row is compared
-    with the v1 (selection-unaware) algorithm and a v2 row with v2."""
+    with the v1 (selection-unaware) algorithm and a v2 row with v2. An unsupported
+    stored version (e.g. an unclassified/corrupt row) fails closed (slice-1-fix² #2),
+    and an empty stored fingerprint is never treated as 'accept any intent'."""
+    if existing.fingerprint_version not in SUPPORTED_FP_VERSIONS:
+        raise IdempotencyConflict(
+            f"attempt {existing.id} has an unsupported/unverified fingerprint version "
+            f"{existing.fingerprint_version!r}; refusing to reuse its idempotency key.")
     expected = intent_fingerprint(**intent, version=existing.fingerprint_version)
-    if existing.intent_fingerprint and existing.intent_fingerprint != expected:
+    if existing.intent_fingerprint != expected:
         raise IdempotencyConflict(
             f"idempotency key {existing.idempotency_key!r} was already used for a "
             f"different payment intent (attempt {existing.id})."
