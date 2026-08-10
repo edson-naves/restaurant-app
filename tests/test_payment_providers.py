@@ -95,6 +95,42 @@ def test_square_poll_reads_processor_evidence():
         square._request = orig
 
 
+def test_approval_requires_complete_evidence():
+    """COMPLETED only settles with authoritative payment id + amount + currency;
+    anything missing -> reconciliation (finding #3)."""
+    def completed(payment_body):
+        def fake(method, path, payload=None):
+            if path.endswith("/chk_1"):
+                return {"checkout": {"id": "chk_1", "status": "COMPLETED", "payment_ids": ["pay_9"]}}
+            if path.startswith("/v2/payments/"):
+                if payment_body == "TRANSPORT":
+                    raise square.SquareTransportError("timeout reading payment")
+                if payment_body == "DEFINITIVE":
+                    raise square.SquareApiError("not found", status_code=404)
+                return {"payment": payment_body}
+            raise AssertionError(path)
+        return fake
+
+    good = {"total_money": {"amount": 2300, "currency": "CAD"}, "tip_money": {"amount": 300}}
+    no_amount = {"tip_money": {"amount": 300}}                       # no total_money
+    no_currency = {"total_money": {"amount": 2300}, "tip_money": {"amount": 300}}
+
+    cases = [
+        (good, S.PROCESSOR_APPROVED, "complete evidence -> APPROVED"),
+        ("TRANSPORT", S.REQUIRES_RECONCILIATION, "payment lookup transport failure -> reconcile"),
+        ("DEFINITIVE", S.REQUIRES_RECONCILIATION, "payment lookup definitive failure -> reconcile"),
+        (no_amount, S.REQUIRES_RECONCILIATION, "missing processor amount -> reconcile"),
+        (no_currency, S.REQUIRES_RECONCILIATION, "missing processor currency -> reconcile"),
+    ]
+    for body, expected, label in cases:
+        orig = _fake(completed(body))
+        try:
+            res = pp.get_provider("square_terminal").poll("chk_1")
+            check(res.status == expected, label + " (#3)")
+        finally:
+            square._request = orig
+
+
 def test_charge_and_refund_forward_currency():
     seen = {}
 
@@ -309,6 +345,7 @@ if __name__ == "__main__":
         test_manual_is_local_with_amount,
         test_square_forwards_idempotency_key,
         test_square_poll_reads_processor_evidence,
+        test_approval_requires_complete_evidence,
         test_charge_and_refund_forward_currency,
         test_square_completed_without_payment_id_reconciles,
         test_square_refund_state_mapping,

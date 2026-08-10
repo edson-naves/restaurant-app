@@ -273,6 +273,16 @@ class SquareTerminalProvider(PaymentProvider):
             # config (findings #6/#17). processor_amount_cents is the PRE-TIP base
             # so it compares to our pre-tip expected_total_cents.
             ev = square.completed_payment_evidence(checkout)
+            if ev["base_cents"] is None or not ev["currency"]:
+                # COMPLETED but we could not read authoritative amount/currency (the
+                # payment lookup failed or was incomplete). Do NOT approve on partial
+                # evidence — hand it to reconciliation (finding #3).
+                return ChargeResult(
+                    status=PaymentAttemptStatus.REQUIRES_RECONCILIATION,
+                    provider_checkout_id=provider_checkout_id,
+                    provider_payment_id=payment_ids[0],
+                    error="COMPLETED but processor amount/currency evidence is incomplete",
+                )
             return ChargeResult(
                 status=PaymentAttemptStatus.PROCESSOR_APPROVED,
                 provider_checkout_id=provider_checkout_id,
