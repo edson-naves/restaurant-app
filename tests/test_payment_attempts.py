@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests._pay_fixture import new_db as _db
 
-from app.models.oltp import PaymentAttempt, PaymentAttemptStatus as S
+from app.models.oltp import AuditEvent, PaymentAttempt, PaymentAttemptStatus as S, Staff
 from app.services import payment_attempts as pa
 
 _failures = []
@@ -154,29 +154,48 @@ def test_processor_evidence_is_write_once():
     check(raised, "processor amount evidence cannot be overwritten with a different value (#8)")
 
 
-def test_reconciliation_needs_evidence():
+def test_reconciliation_authority_and_audit():
     db, ids = _db()
     a = _mk(db, ids)
     pa.transition(db, a, S.REQUIRES_RECONCILIATION, last_error="lost")
-    # plain transition out is blocked
+
+    # plain transition cannot leave reconciliation
     raised = False
     try:
         pa.transition(db, a, S.SETTLED, payment_id=ids["payment_id"])
     except pa.PaymentAttemptError:
         raised = True
     check(raised, "plain transition cannot leave REQUIRES_RECONCILIATION")
-    # resolution requires evidence
-    raised2 = False
+
+    # a waiter (non-manager) cannot resolve
+    waiter = Staff(name="Wanda", role="waiter", pin_code="x")
+    db.add(waiter); db.commit()
+    raised = False
     try:
-        pa.resolve_reconciliation(db, a, resolved_status=S.SETTLED,
-                                  resolved_by="", note="", payment_id=ids["payment_id"])
-    except pa.PaymentAttemptError:
-        raised2 = True
-    check(raised2, "resolution without resolved_by/note is rejected")
-    pa.resolve_reconciliation(db, a, resolved_status=S.SETTLED, resolved_by="mgr",
-                              note="looked up in Square dashboard", payment_id=ids["payment_id"])
-    check(a.status == S.SETTLED and a.reconciled_by == "mgr" and a.reconciliation_note,
-          "resolution with evidence settles and records who/why")
+        pa.resolve_reconciliation(db, a, resolved_status=S.SETTLED, note="ok",
+                                  actor=waiter, payment_id=ids["payment_id"])
+    except pa.ReconciliationAuthorityError:
+        raised = True
+    check(raised, "a non-manager actor cannot resolve reconciliation (#13)")
+
+    # automatic resolution needs provider evidence, not a bare note
+    raised = False
+    try:
+        pa.resolve_reconciliation(db, a, resolved_status=S.SETTLED, note="just settle it",
+                                  automatic=True, payment_id=ids["payment_id"])
+    except pa.ReconciliationAuthorityError:
+        raised = True
+    check(raised, "automatic resolution needs provider evidence, not a note alone (#13)")
+
+    # an authorized owner resolves, with an audit event
+    owner = db.get(Staff, ids["staff_id"])  # seeded as owner
+    pa.resolve_reconciliation(db, a, resolved_status=S.SETTLED,
+                              note="verified in Square dashboard", actor=owner,
+                              provider_evidence="sq_txn_123", payment_id=ids["payment_id"])
+    check(a.status == S.SETTLED and a.reconciled_by == owner.name,
+          "authorized manager settles and records who/why")
+    n = db.query(AuditEvent).filter_by(action="reconcile_payment_attempt").count()
+    check(n == 1, "an audit event is written for the resolution (#13)")
 
 
 if __name__ == "__main__":
@@ -190,7 +209,7 @@ if __name__ == "__main__":
         test_write_once_provider_id_via_cas,
         test_snapshot_immutable_across_transitions,
         test_processor_evidence_is_write_once,
-        test_reconciliation_needs_evidence,
+        test_reconciliation_authority_and_audit,
     ):
         print(f"- {fn.__name__}")
         fn()

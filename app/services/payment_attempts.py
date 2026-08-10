@@ -31,9 +31,15 @@ from sqlalchemy.orm import Session
 
 from app.models.oltp import (
     PAYMENT_ATTEMPT_TRANSITIONS,
+    AuditEvent,
     PaymentAttempt,
     PaymentAttemptStatus,
+    Role,
+    Staff,
 )
+
+# Roles permitted to resolve an ambiguous payment by hand.
+_RECON_ROLES = frozenset({Role.OWNER, Role.MANAGER})
 
 
 class PaymentAttemptError(RuntimeError):
@@ -281,39 +287,70 @@ def transition(
     return attempt
 
 
+class ReconciliationAuthorityError(PaymentAttemptError):
+    """The caller lacks the authority/evidence to resolve an ambiguous attempt."""
+
+
 def resolve_reconciliation(
     db: Session,
     attempt: PaymentAttempt,
     *,
     resolved_status: str,
-    resolved_by: str,
     note: str,
+    actor: Staff | None = None,
+    automatic: bool = False,
+    provider_evidence: str | None = None,
     payment_id: int | None = None,
     provider_payment_id: str | None = None,
 ) -> PaymentAttempt:
-    """Resolve an ambiguous attempt with recorded evidence (finding #12).
+    """Resolve an ambiguous attempt under explicit authority, with an audit trail
+    (findings #12, #13). The only exit from REQUIRES_RECONCILIATION.
 
-    Only valid from REQUIRES_RECONCILIATION. Requires a non-empty ``resolved_by``
-    and ``note``; settling additionally requires a ``payment_id``. The evidence is
-    persisted alongside the state change so the resolution is auditable, never a
-    bare flip.
+    Two authorities, and nothing else settles an ambiguous payment:
+
+    * **Manual** — ``actor`` must be a Staff with an OWNER/MANAGER role. The
+      resolution records who, when, why, and (when present) provider evidence.
+    * **Automatic** — ``automatic=True`` (a recovery worker) MUST supply
+      ``provider_evidence`` (e.g. a processor lookup result / transaction id). A
+      free-text note is never enough for automated settlement.
+
+    Always writes an ``audit_event`` and persists the evidence on the attempt.
     """
     if attempt.status != PaymentAttemptStatus.REQUIRES_RECONCILIATION:
         raise PaymentAttemptError(
-            "resolve_reconciliation only applies to a REQUIRES_RECONCILIATION attempt."
-        )
+            "resolve_reconciliation only applies to a REQUIRES_RECONCILIATION attempt.")
     if resolved_status not in (
         PaymentAttemptStatus.SETTLED,
         PaymentAttemptStatus.FAILED,
         PaymentAttemptStatus.CANCELLED,
     ):
         raise PaymentAttemptError(f"cannot resolve reconciliation to {resolved_status!r}.")
-    if not (resolved_by or "").strip() or not (note or "").strip():
-        raise PaymentAttemptError("reconciliation resolution requires resolved_by and a note.")
+    if not (note or "").strip():
+        raise PaymentAttemptError("reconciliation resolution requires a note.")
+
+    if automatic:
+        if not (provider_evidence or "").strip():
+            raise ReconciliationAuthorityError(
+                "automatic reconciliation must supply provider_evidence — a note alone "
+                "cannot settle an ambiguous payment (#13).")
+        actor_id, resolved_by = None, "system:auto"
+    else:
+        if actor is None or actor.role not in _RECON_ROLES:
+            raise ReconciliationAuthorityError(
+                "manual reconciliation requires an OWNER/MANAGER actor (#13).")
+        actor_id, resolved_by = actor.id, actor.name
+
+    detail = f"attempt {attempt.id} -> {resolved_status}"
+    if provider_evidence:
+        detail += f" [evidence: {provider_evidence}]"
+    detail = f"{detail}: {note.strip()}"[:300]
+    db.add(AuditEvent(staff_id=actor_id, action="reconcile_payment_attempt",
+                      detail=detail, order_id=attempt.order_id))
 
     attempt.reconciled_at = datetime.now()
-    attempt.reconciled_by = resolved_by.strip()[:60]
-    attempt.reconciliation_note = note.strip()[:300]
+    attempt.reconciled_by = resolved_by[:60]
+    attempt.reconciliation_note = (
+        (note.strip() + (f" | evidence: {provider_evidence}" if provider_evidence else ""))[:300])
     return transition(
         db, attempt, resolved_status,
         payment_id=payment_id, provider_payment_id=provider_payment_id,

@@ -248,21 +248,59 @@ def test_operationalerror_classification():
     check(not pa.is_lock_conflict(FakeOpErr("08006")), "connection failure (08006) is NOT a conflict")
 
 
+class AcmePay(pp.PaymentProvider):
+    key = "acme_pay"; label = "Acme"; is_external = True
+    capabilities = frozenset({pp.Capability.REFUND, pp.Capability.PARTIAL_REFUND})
+
+    def charge(self, *, amount_cents, currency, idempotency_key, reference="", note="", tip_cents=0):
+        return pp.ChargeResult(status=S.PROCESSOR_APPROVED, provider_payment_id="acme_1")
+
+    def refund(self, *, amount_cents, currency, idempotency_key, provider_payment_id=None):
+        return pp.RefundResult(status=R.COMPLETED, external=True, provider_refund_id="acme_rf")
+
+
 def test_new_provider_plugs_in():
-    class AcmePay(pp.PaymentProvider):
-        key = "acme_pay"; label = "Acme"; is_external = True
-        capabilities = frozenset({pp.Capability.AUTHORIZE, pp.Capability.CAPTURE})
-
-        def charge(self, *, amount_cents, currency, idempotency_key, reference="", note="", tip_cents=0):
-            return pp.ChargeResult(status=S.PROCESSOR_APPROVED, provider_payment_id="acme_1")
-
-        def refund(self, *, amount_cents, currency, idempotency_key, provider_payment_id=None):
-            return pp.RefundResult(status=R.COMPLETED, external=True, provider_refund_id="acme_rf")
-
     pp.register(AcmePay())
     got = pp.get_provider("acme_pay")
     check(got.label == "Acme", "new provider resolves by key")
-    check(pp.Capability.AUTHORIZE in got.capabilities, "new provider advertises capabilities")
+    check(got.charge(amount_cents=100, currency="USD", idempotency_key="k").provider_payment_id == "acme_1",
+          "the new provider drives a charge")
+
+
+def test_unsupported_capability_rejected():
+    class LiarPay(pp.PaymentProvider):
+        key = "liar_pay"; is_external = True
+        capabilities = frozenset({pp.Capability.LOOKUP})  # never implements lookup()
+        def charge(self, *, amount_cents, currency, idempotency_key, reference="", note="", tip_cents=0):
+            return pp.ChargeResult(status=S.PROCESSOR_APPROVED)
+        def refund(self, *, amount_cents, currency, idempotency_key, provider_payment_id=None):
+            return pp.RefundResult(status=R.COMPLETED)
+    raised = False
+    try:
+        pp.register(LiarPay())
+    except ValueError:
+        raised = True
+    check(raised, "a provider advertising an unimplemented capability is rejected (#10)")
+
+
+def test_duplicate_registry_key_rejected():
+    raised = False
+    try:
+        pp.register(AcmePay())  # already registered above
+    except ValueError:
+        raised = True
+    check(raised, "duplicate provider registry key is rejected (#18)")
+    pp.register(AcmePay(), override=True)  # deliberate override is allowed
+    check(pp.get_provider("acme_pay") is not None, "override=True replaces deliberately")
+
+
+def test_builtin_capabilities_are_backed():
+    for prov in pp.available():
+        for cap, method in pp._CAPABILITY_METHOD.items():
+            if cap in prov.capabilities:
+                impl = getattr(type(prov), method, None)
+                check(impl is not None and impl is not getattr(pp.PaymentProvider, method),
+                      f"{prov.key} backs advertised {cap} with {method}()")
 
 
 if __name__ == "__main__":
@@ -282,6 +320,9 @@ if __name__ == "__main__":
         test_cancel_status_mapping,
         test_operationalerror_classification,
         test_new_provider_plugs_in,
+        test_unsupported_capability_rejected,
+        test_duplicate_registry_key_rejected,
+        test_builtin_capabilities_are_backed,
     ):
         print(f"- {fn.__name__}")
         fn()
