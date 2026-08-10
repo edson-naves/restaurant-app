@@ -17,8 +17,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests._pay_fixture import Session, fresh_schema, make_engine, pg_dsn, seed_parents
 
-from app.models.oltp import PaymentAttempt, PaymentAttemptStatus as S
+from app.models.oltp import PaymentAttempt, PaymentAttemptStatus as S, RefundAttempt
 from app.services import payment_attempts as pa
+from app.services import refund_attempts as ra
 
 _failures = []
 
@@ -116,6 +117,30 @@ def test_concurrent_conflicting_transition(engine, ids):
     check(final == wins[0], "the persisted status is exactly the one winner's target")
 
 
+def test_concurrent_refund_same_key(engine, ids):
+    Sess = Session(engine)
+
+    def make(_i):
+        db = Sess()
+        try:
+            r = ra.create_refund_attempt(db, payment_id=ids["payment_id"],
+                                         staff_id=ids["staff_id"], provider="manual",
+                                         amount_cents=1500, idempotency_key="refund-key")
+            return r.id
+        finally:
+            db.close()
+
+    results = _run_concurrently(make, 8)
+    ids_ret = {r[1] for r in results if r[0] == "ok"}
+    errs = [r[1] for r in results if r[0] == "err"]
+    check(not errs, f"no unhandled errors under concurrent same-key refund ({errs[:1]})")
+    check(len(ids_ret) == 1, "all concurrent refund callers resolve to one attempt")
+    verify = Sess()
+    n = verify.query(RefundAttempt).filter_by(idempotency_key="refund-key").count()
+    verify.close()
+    check(n == 1, "exactly one RefundAttempt row persisted (#16)")
+
+
 def test_provider_payment_id_unique(engine, ids):
     Sess = Session(engine)
     db = Sess()
@@ -182,6 +207,7 @@ if __name__ == "__main__":
     tests = [
         test_concurrent_same_key_create,
         test_concurrent_conflicting_transition,
+        test_concurrent_refund_same_key,
         test_provider_payment_id_unique,
         test_fk_enforced,
         test_one_settlement_per_attempt,

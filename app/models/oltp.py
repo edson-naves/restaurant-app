@@ -1158,6 +1158,9 @@ class RefundAttempt(Base):
     provider: Mapped[str] = mapped_column(String(PROVIDER_KEY_LEN), nullable=False)
     provider_refund_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Fingerprint of the immutable refund intent behind idempotency_key (#3), so
+    # reusing a key for a different payment/amount/currency is a conflict.
+    intent_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, default="")
 
     amount_cents: Mapped[int] = mapped_column(Integer, nullable=False)
     currency: Mapped[str] = mapped_column(String(3), nullable=False, default="CAD")

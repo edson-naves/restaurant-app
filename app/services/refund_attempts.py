@@ -11,6 +11,7 @@ Stage 2c; this module provides the durable records and the running total.
 """
 from __future__ import annotations
 
+import hashlib
 import secrets
 from datetime import datetime
 
@@ -20,14 +21,68 @@ from sqlalchemy.orm import Session
 
 from app.models.oltp import (
     REFUND_ATTEMPT_TRANSITIONS,
+    PaymentAttempt,
+    PaymentAttemptStatus,
     RefundAttempt,
     RefundAttemptStatus,
 )
 from app.services.payment_attempts import (
+    IdempotencyConflict,
     PaymentAttemptError,
     TransitionConflict,
     _validate_provider,
 )
+
+
+def refund_intent_fingerprint(
+    *, payment_id: int, charge_attempt_id: int | None, provider: str,
+    amount_cents: int, currency: str,
+) -> str:
+    """Stable hash of the immutable refund intent behind an idempotency key."""
+    canonical = "|".join(str(x) for x in (
+        payment_id, charge_attempt_id, provider, amount_cents, currency.upper()))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:64]
+
+
+def _resolve_charge_attempt(
+    db: Session, *, payment_id: int, charge_attempt_id: int | None, provider: str,
+) -> int | None:
+    """Tie the refund to its charge attempt and validate the relationship (#7).
+
+    Prefers deriving the charge attempt from ``payment_id`` (a Payment backs at
+    most one settled attempt) rather than trusting a caller-supplied id. When a
+    charge attempt is found it must match on payment, be SETTLED, and share the
+    refund's provider. Returns the validated charge_attempt_id, or None for a
+    legacy payment with no attempt.
+    """
+    derived = db.execute(
+        select(PaymentAttempt).where(PaymentAttempt.payment_id == payment_id)
+    ).scalar_one_or_none()
+
+    if charge_attempt_id is not None:
+        supplied = db.get(PaymentAttempt, charge_attempt_id)
+        if supplied is None:
+            raise PaymentAttemptError(f"charge attempt {charge_attempt_id} does not exist.")
+        if derived is not None and derived.id != supplied.id:
+            raise PaymentAttemptError(
+                f"charge attempt {charge_attempt_id} does not back payment {payment_id}.")
+        attempt = supplied
+    else:
+        attempt = derived
+
+    if attempt is None:
+        return None  # legacy payment predating PaymentAttempt — provider is the caller's
+
+    if attempt.payment_id != payment_id:
+        raise PaymentAttemptError(
+            f"charge attempt {attempt.id} is not for payment {payment_id}.")
+    if attempt.status != PaymentAttemptStatus.SETTLED:
+        raise PaymentAttemptError(
+            f"cannot refund against a non-settled charge attempt (status {attempt.status!r}).")
+    if attempt.provider != provider:
+        raise PaymentAttemptError(
+            f"refund provider {provider!r} != charge provider {attempt.provider!r}.")
+    return attempt.id
 
 
 def new_idempotency_key() -> str:
@@ -67,14 +122,23 @@ def create_refund_attempt(
     idempotency_key: str | None = None,
 ) -> RefundAttempt:
     """Persist a CREATED refund attempt. Commits. Idempotent and concurrency-safe
-    on the idempotency key (a repeat resolves to the same row)."""
+    on the idempotency key: a repeat with the same intent returns the same row; a
+    repeat with a *different* intent raises ``IdempotencyConflict`` (#3). The
+    charge-attempt linkage is validated (#7)."""
     _validate_provider(provider)
     if amount_cents <= 0:
         raise PaymentAttemptError("refund amount must be positive.")
 
+    charge_attempt_id = _resolve_charge_attempt(
+        db, payment_id=payment_id, charge_attempt_id=charge_attempt_id, provider=provider)
+    fingerprint = refund_intent_fingerprint(
+        payment_id=payment_id, charge_attempt_id=charge_attempt_id, provider=provider,
+        amount_cents=amount_cents, currency=currency)
+
     if idempotency_key:
         existing = _by_key(db, idempotency_key)
         if existing is not None:
+            _assert_same_intent(existing, fingerprint)
             return existing
     else:
         idempotency_key = new_idempotency_key()
@@ -83,7 +147,7 @@ def create_refund_attempt(
         payment_id=payment_id, charge_attempt_id=charge_attempt_id,
         staff_id=staff_id, provider=provider, amount_cents=amount_cents,
         currency=currency, idempotency_key=idempotency_key,
-        status=RefundAttemptStatus.CREATED,
+        intent_fingerprint=fingerprint, status=RefundAttemptStatus.CREATED,
     )
     db.add(refund)
     try:
@@ -93,9 +157,17 @@ def create_refund_attempt(
         existing = _by_key(db, idempotency_key)
         if existing is None:
             raise
+        _assert_same_intent(existing, fingerprint)
         return existing
     db.refresh(refund)
     return refund
+
+
+def _assert_same_intent(existing: RefundAttempt, fingerprint: str) -> None:
+    if existing.intent_fingerprint and existing.intent_fingerprint != fingerprint:
+        raise IdempotencyConflict(
+            f"refund idempotency key {existing.idempotency_key!r} was already used for a "
+            f"different refund intent (refund attempt {existing.id}).")
 
 
 def _by_key(db: Session, key: str) -> RefundAttempt | None:
