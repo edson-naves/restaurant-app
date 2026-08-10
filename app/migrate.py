@@ -288,14 +288,22 @@ def _migrate_payment_hardening(engine: Engine, strict: bool) -> list[str]:
     canonical provider backfill, retire the old provider_refund_id column, and
     add the provider-scoped UNIQUE constraints — duplicate-scanned and fail-closed
     so financial data is never silently rewritten. No-op on a fresh DB where
-    create_all already produced everything."""
+    create_all already produced everything.
+
+    **Atomicity (#2):** the whole hardening runs in a *single* transaction
+    (Postgres has transactional DDL), so a failure at any step — a duplicate
+    constraint, non-null legacy data under strict — rolls back every earlier step
+    (default drop, backfills). The database is never left partially hardened. It
+    is also idempotent: a second run finds everything already applied and changes
+    nothing.
+    """
     applied: list[str] = []
     pg = engine.dialect.name != "sqlite"
     q = (lambda s: f'"{s}"') if pg else (lambda s: s)
 
-    # 1. Canonical provider backfill (before the provider-scoped constraints).
-    for table, old, new in PROVIDER_BACKFILL:
-        with engine.begin() as conn:
+    with engine.begin() as conn:
+        # 1. Canonical provider backfill (before the provider-scoped constraints).
+        for table, old, new in PROVIDER_BACKFILL:
             if not _column_exists(conn, table, "provider"):
                 continue
             n = conn.execute(text(f"UPDATE {q(table)} SET provider=:new WHERE provider=:old"),
@@ -303,35 +311,31 @@ def _migrate_payment_hardening(engine: Engine, strict: bool) -> list[str]:
             if n:
                 applied.append(f"backfilled {table}.provider {old}->{new} ({n} rows)")
 
-    # 1b. An existing terminal-card instrument predates the provider column and
-    # would take the 'manual' default; map it to square_terminal by its stable
-    # business key (#2). Ordinary cash/manual instruments keep 'manual'.
-    with engine.begin() as conn:
+        # 1b. A terminal-card instrument that predates the provider column takes the
+        # 'manual' default; repair ONLY that legacy state (#1). Narrowing to
+        # provider='manual' means a deliberately-chosen provider (e.g. a future
+        # stripe_terminal) is never overwritten, and a re-run is a no-op.
         if _column_exists(conn, "payment_instrument", "provider"):
             n = conn.execute(text(
                 "UPDATE payment_instrument SET provider='square_terminal' "
-                "WHERE code='card_terminal' AND provider <> 'square_terminal'")).rowcount
+                "WHERE code='card_terminal' AND provider='manual'")).rowcount
             if n:
                 applied.append(f"backfilled payment_instrument card_terminal->square_terminal ({n})")
 
-    # 1c. Remove the retired legacy DEFAULT 'square' on payment_attempt.provider
-    # (widening the type does not drop it — #1). Postgres only; SQLite's model has
-    # no server default and cannot DROP DEFAULT without a table rebuild.
-    if pg:
-        with engine.begin() as conn:
-            if _column_exists(conn, "payment_attempt", "provider"):
-                has_default = conn.execute(text(
-                    "SELECT column_default FROM information_schema.columns "
-                    "WHERE table_name='payment_attempt' AND column_name='provider' "
-                    "AND table_schema=current_schema()")).scalar_one_or_none()
-                if has_default is not None:
-                    conn.execute(text('ALTER TABLE payment_attempt ALTER COLUMN provider DROP DEFAULT'))
-                    applied.append("dropped legacy default on payment_attempt.provider")
+        # 1c. Remove the retired legacy DEFAULT 'square' on payment_attempt.provider
+        # (widening the type does not drop it). Postgres only; SQLite's model has no
+        # server default and cannot DROP DEFAULT without a table rebuild.
+        if pg and _column_exists(conn, "payment_attempt", "provider"):
+            has_default = conn.execute(text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_name='payment_attempt' AND column_name='provider' "
+                "AND table_schema=current_schema()")).scalar_one_or_none()
+            if has_default is not None:
+                conn.execute(text('ALTER TABLE payment_attempt ALTER COLUMN provider DROP DEFAULT'))
+                applied.append("dropped legacy default on payment_attempt.provider")
 
-    # 2. Retire the old provider_refund_id (refunds now live on refund_attempt).
-    #    Drop only when it holds no data; otherwise report and keep it (never lose
-    #    financial evidence silently).
-    with engine.begin() as conn:
+        # 2. Retire the old provider_refund_id. Drop only when empty; non-null under
+        # strict fails closed (rolling back the whole tx).
         if _column_exists(conn, "payment_attempt", "provider_refund_id"):
             leftover = conn.execute(
                 text("SELECT COUNT(*) FROM payment_attempt WHERE provider_refund_id IS NOT NULL")
@@ -341,7 +345,7 @@ def _migrate_payment_hardening(engine: Engine, strict: bool) -> list[str]:
                        "row(s); migrate them into refund_attempt before upgrading. Financially "
                        "meaningful legacy data must not be left behind.")
                 if strict:
-                    raise MigrationError(msg)          # fail closed in production (#6)
+                    raise MigrationError(msg)          # fail closed (rolls back — #6)
                 applied.append(f"KEPT (non-strict): {msg}")
             else:
                 try:
@@ -349,38 +353,31 @@ def _migrate_payment_hardening(engine: Engine, strict: bool) -> list[str]:
                                       + ("IF EXISTS " if pg else "") + "provider_refund_id"))
                     applied.append("dropped retired payment_attempt.provider_refund_id")
                 except Exception as exc:  # noqa: BLE001 — SQLite <3.35 can't drop
-                    if strict and pg:
+                    if strict:
                         raise MigrationError(f"failed to drop provider_refund_id: {exc}") from exc
                     applied.append(f"SKIPPED drop provider_refund_id: {exc}")
 
-    # 3. Provider-scoped uniqueness — dup-scan, fail closed, then create.
-    for table, name, cols in UNIQUE_CONSTRAINTS:
-        with engine.connect() as conn:
+        # 3. Provider-scoped uniqueness — dup-scan, fail closed, then create.
+        for table, name, cols in UNIQUE_CONSTRAINTS:
             if not all(_column_exists(conn, table, c) for c in cols):
                 continue
             if _constraint_exists(conn, table, name):
                 continue
             dupes = _duplicates(conn, table, cols)
-        if dupes:
-            msg = (f"cannot add {name}: {len(dupes)} duplicate group(s) in "
-                   f"{table}({', '.join(cols)}) — e.g. {dupes[0]}. Resolve before upgrading.")
-            if strict:
-                raise MigrationError(msg)
-            applied.append(f"BLOCKED {msg}")
-            continue
-        try:
-            with engine.begin() as conn:
-                if pg:
-                    conn.execute(text(f'ALTER TABLE {q(table)} ADD CONSTRAINT {name} '
-                                      f'UNIQUE ({", ".join(cols)})'))
-                else:
-                    conn.execute(text(f'CREATE UNIQUE INDEX IF NOT EXISTS {name} '
-                                      f'ON {table} ({", ".join(cols)})'))
+            if dupes:
+                msg = (f"cannot add {name}: {len(dupes)} duplicate group(s) in "
+                       f"{table}({', '.join(cols)}) — e.g. {dupes[0]}. Resolve before upgrading.")
+                if strict:
+                    raise MigrationError(msg)          # fail closed (rolls back)
+                applied.append(f"BLOCKED {msg}")
+                continue
+            if pg:
+                conn.execute(text(f'ALTER TABLE {q(table)} ADD CONSTRAINT {name} '
+                                  f'UNIQUE ({", ".join(cols)})'))
+            else:
+                conn.execute(text(f'CREATE UNIQUE INDEX IF NOT EXISTS {name} '
+                                  f'ON {table} ({", ".join(cols)})'))
             applied.append(f"added {name} on {table}({', '.join(cols)})")
-        except Exception as exc:  # noqa: BLE001
-            if strict:
-                raise MigrationError(f"failed to add {name}: {exc}") from exc
-            applied.append(f"SKIPPED {name}: {exc}")
 
     return applied
 
