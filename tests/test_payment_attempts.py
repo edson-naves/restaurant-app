@@ -129,6 +129,19 @@ def test_snapshot_immutable_across_transitions():
           "amount snapshot unchanged by transitions (service contract)")
 
 
+def test_currency_defaults_to_venue():
+    db, ids = _db()
+    old = os.environ.get("VENUE_CURRENCY")
+    os.environ["VENUE_CURRENCY"] = "USD"
+    try:
+        a = pa.create_attempt(db, provider="manual", order_id=ids["order_id"],
+                              staff_id=ids["staff_id"], expected_total_cents=1000,
+                              subtotal_cents=1000)  # currency omitted
+        check(a.currency == "USD", "omitted currency defaults to venue currency, not CAD (#3)")
+    finally:
+        os.environ.pop("VENUE_CURRENCY", None) if old is None else os.environ.__setitem__("VENUE_CURRENCY", old)
+
+
 def test_processor_evidence_is_write_once():
     db, ids = _db()
     a = _mk(db, ids)
@@ -208,6 +221,7 @@ if __name__ == "__main__":
         test_settle_requires_payment_id,
         test_write_once_provider_id_via_cas,
         test_snapshot_immutable_across_transitions,
+        test_currency_defaults_to_venue,
         test_processor_evidence_is_write_once,
         test_reconciliation_authority_and_audit,
     ):
