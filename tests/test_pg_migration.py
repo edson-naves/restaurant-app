@@ -93,6 +93,36 @@ def _has_column(engine, col):
             "AND column_name=:c AND table_schema=current_schema()"), {"c": col}).first() is not None
 
 
+def _column_default(engine, table, col):
+    with engine.connect() as conn:
+        return conn.execute(text(
+            "SELECT column_default FROM information_schema.columns WHERE table_name=:t "
+            "AND column_name=:c AND table_schema=current_schema()"), {"t": table, "c": col}).scalar_one()
+
+
+# A legacy payment_instrument WITHOUT the provider column (predates it), so the
+# migration adds the column (DEFAULT 'manual') and must then backfill card_terminal.
+LEGACY_INSTRUMENT_DDL = """
+CREATE TABLE payment_instrument (
+  id SERIAL PRIMARY KEY,
+  code VARCHAR(30) UNIQUE NOT NULL,
+  name VARCHAR(60) NOT NULL,
+  instrument_type VARCHAR(20) NOT NULL,
+  is_third_party BOOLEAN DEFAULT FALSE,
+  delivery_only BOOLEAN DEFAULT FALSE
+);
+"""
+
+
+def _build_legacy_instruments(engine):
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS payment_instrument CASCADE"))
+        conn.execute(text(LEGACY_INSTRUMENT_DDL))
+        conn.execute(text("INSERT INTO payment_instrument (code, name, instrument_type) "
+                          "VALUES ('card_terminal','Card (terminal)','card'), "
+                          "('cash','Cash','cash')"))
+
+
 def test_clean_upgrade(engine):
     _build_legacy(engine, [
         {"o": 1, "s": 1, "p": "square", "pp": "PAY_A", "pc": "CHK_A", "k": "k1", "t": 4500, "st": "settled"},
@@ -117,6 +147,44 @@ def test_clean_upgrade(engine):
     check(n == 3, "all rows preserved through migration")
     check(sq == 3, "provider backfilled 'square' -> 'square_terminal'")
     check(keys == {"k1", "k2", "k3"}, "financial identifiers preserved")
+
+
+def test_provider_default_removed(engine):
+    _build_legacy(engine, [
+        {"o": 1, "s": 1, "p": "square", "pp": "PAY_A", "pc": "CHK_A", "k": "k1", "t": 100, "st": "created"},
+    ])
+    check(_column_default(engine, "payment_attempt", "provider") is not None,
+          "legacy default present before upgrade (sanity)")
+    migrate.run(engine, strict=True)
+    check(_column_default(engine, "payment_attempt", "provider") is None,
+          "legacy DEFAULT 'square' dropped after upgrade (#1)")
+
+
+def test_card_terminal_instrument_backfilled(engine):
+    _build_legacy(engine, [])            # payment_attempt present (migration touches it too)
+    _build_legacy_instruments(engine)
+    migrate.run(engine, strict=True)
+    with engine.connect() as conn:
+        rows = dict(conn.execute(text("SELECT code, provider FROM payment_instrument")).all())
+    check(rows.get("card_terminal") == "square_terminal",
+          "legacy card_terminal instrument backfilled to square_terminal (#2)")
+    check(rows.get("cash") == "manual", "ordinary cash instrument stays manual (#2)")
+
+
+def test_nonnull_provider_refund_id_fails_strict(engine):
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS refund_attempt CASCADE"))
+        conn.execute(text("DROP TABLE IF EXISTS payment_attempt CASCADE"))
+        conn.execute(text(LEGACY_DDL))
+        conn.execute(text("INSERT INTO payment_attempt (order_id, staff_id, provider, "
+                          "provider_refund_id, idempotency_key, expected_total_cents) "
+                          "VALUES (1,1,'square','RF_OLD','k1',100)"))
+    raised = False
+    try:
+        migrate.run(engine, strict=True)
+    except migrate.MigrationError as exc:
+        raised = "provider_refund_id" in str(exc)
+    check(raised, "non-null legacy provider_refund_id fails closed under strict (#6)")
 
 
 def test_upgrade_blocks_on_duplicate_payment_id(engine):
@@ -167,7 +235,9 @@ if __name__ == "__main__":
         print("SKIP: PG_TEST_DSN not set (migration-upgrade tests are Postgres-specific)")
         sys.exit(0)
     print(f"Postgres: {pg_dsn()}")
-    for fn in (test_clean_upgrade, test_upgrade_blocks_on_duplicate_payment_id,
+    for fn in (test_clean_upgrade, test_provider_default_removed,
+               test_card_terminal_instrument_backfilled, test_nonnull_provider_refund_id_fails_strict,
+               test_upgrade_blocks_on_duplicate_payment_id,
                test_upgrade_blocks_on_duplicate_checkout_id, test_duplicate_rejected_after_upgrade):
         print(f"- {fn.__name__}")
         eng = create_engine(pg_dsn(), future=True)
