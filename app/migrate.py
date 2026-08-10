@@ -99,6 +99,9 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # Stage 2c: the paid-item selection captured on the charge attempt (TEXT so a
     # large legitimate selection never overflows a fragile VARCHAR cap).
     ("payment_attempt", "line_selection", "TEXT NOT NULL DEFAULT ''"),
+    # Fingerprint algorithm version. Existing rows predate the selection-aware
+    # hash, so they are backfilled to v1; new rows are v2 (set by the ORM).
+    ("payment_attempt", "fingerprint_version", "INTEGER NOT NULL DEFAULT 1"),
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW
@@ -336,6 +339,29 @@ def _migrate_payment_hardening(engine: Engine, strict: bool) -> list[str]:
             if has_default is not None:
                 conn.execute(text('ALTER TABLE payment_attempt ALTER COLUMN provider DROP DEFAULT'))
                 applied.append("dropped legacy default on payment_attempt.provider")
+
+        # 1d. A database that already ran the Slice-1 intermediate schema has
+        # line_selection as VARCHAR(500); widen it to TEXT in place (an additive
+        # ADD COLUMN was skipped because the column already exists — slice-1-fix #2).
+        if pg and _column_exists(conn, "payment_attempt", "line_selection"):
+            maxlen = conn.execute(text(
+                "SELECT character_maximum_length FROM information_schema.columns "
+                "WHERE table_name='payment_attempt' AND column_name='line_selection' "
+                "AND table_schema=current_schema()")).scalar_one_or_none()
+            if maxlen is not None:      # currently a bounded VARCHAR -> retype to TEXT
+                conn.execute(text('ALTER TABLE payment_attempt ALTER COLUMN line_selection TYPE TEXT'))
+                applied.append("widened payment_attempt.line_selection -> TEXT")
+
+        # 1e. Drop the backfill default on fingerprint_version so new inserts rely
+        # on the ORM's v2, not a lingering v1 server default.
+        if pg and _column_exists(conn, "payment_attempt", "fingerprint_version"):
+            fv_default = conn.execute(text(
+                "SELECT column_default FROM information_schema.columns "
+                "WHERE table_name='payment_attempt' AND column_name='fingerprint_version' "
+                "AND table_schema=current_schema()")).scalar_one_or_none()
+            if fv_default is not None:
+                conn.execute(text('ALTER TABLE payment_attempt ALTER COLUMN fingerprint_version DROP DEFAULT'))
+                applied.append("dropped backfill default on payment_attempt.fingerprint_version")
 
         # 2. Retire the old provider_refund_id. Drop only when empty; non-null under
         # strict fails closed (rolling back the whole tx).

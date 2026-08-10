@@ -107,20 +107,44 @@ def test_currency_mismatch_reconciles_no_payment():
 
 
 def test_mismatch_reconciliation_durable_across_outer_tx():
-    """Slice-1 review #1: with commit=False inside the caller's transaction, a
-    mismatch must survive the caller's commit (no exception rolls it back)."""
-    SM, ids = _fresh_sessions()
-    db = SM()
-    a = _approved_ext(db, ids, expected=1000, pamt=9999)
-    aid = a.id
-    res = settle.settle_charge(db, a, payment_factory=_factory(db, ids, 1000), commit=False)
-    check(not res.is_settled, "mismatch reported as result, not exception (#1)")
-    db.commit()          # caller commits the transaction incl. the reconciliation transition
-    db.close()
-    db2 = SM()
-    fresh = db2.get(PaymentAttempt, aid)
-    check(fresh.status == S.REQUIRES_RECONCILIATION, "reconciliation durably committed (#1)")
-    db2.close()
+    """Slice-1 review #1 + slice-1-fix review #4: with commit=False inside the
+    caller's transaction, BOTH an amount and a currency mismatch must survive the
+    caller's commit (no exception rolls it back)."""
+    for label, kw in (("amount", {"pamt": 9999}), ("currency", {"pcur": "USD"})):
+        SM, ids = _fresh_sessions()
+        db = SM()
+        a = _approved_ext(db, ids, expected=1000, **kw)
+        aid = a.id
+        res = settle.settle_charge(db, a, payment_factory=_factory(db, ids, 1000), commit=False)
+        check(not res.is_settled, f"{label} mismatch reported as result, not exception (#1)")
+        db.commit()      # caller commits the transaction incl. the reconciliation transition
+        db.close()
+        db2 = SM()
+        fresh = db2.get(PaymentAttempt, aid)
+        check(fresh.status == S.REQUIRES_RECONCILIATION,
+              f"{label} mismatch reconciliation durably committed across outer tx (#1/#4)")
+        db2.close()
+
+
+def test_item_id_validation_is_strict():
+    db, ids = _db()
+
+    def make(item_ids, key):
+        return pa.create_attempt(db, provider="manual", order_id=ids["order_id"],
+                                 staff_id=ids["staff_id"], expected_total_cents=1000,
+                                 item_ids=item_ids, idempotency_key=key)
+
+    check(make([1], "a").line_selection == "1", "positive int accepted (#3)")
+    check(make(["2"], "b").line_selection == "2", "digit string accepted (#3)")
+    for bad, label in ((True, "bool True"), (False, "bool False"), (1.9, "float"),
+                       ("1.9", "decimal string"), (0, "zero"), (-1, "negative"),
+                       (object(), "object")):
+        raised = False
+        try:
+            make([bad], f"k_{label}")
+        except pa.PaymentAttemptError:
+            raised = True
+        check(raised, f"{label} item id rejected (#3)")
 
 
 def test_manual_settles_without_evidence():
@@ -175,6 +199,7 @@ if __name__ == "__main__":
         test_amount_mismatch_reconciles_no_payment,
         test_currency_mismatch_reconciles_no_payment,
         test_mismatch_reconciliation_durable_across_outer_tx,
+        test_item_id_validation_is_strict,
         test_manual_settles_without_evidence,
         test_selection_canonicalized_by_service,
         test_different_selection_conflicts,

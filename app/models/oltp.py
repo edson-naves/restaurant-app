@@ -1066,8 +1066,13 @@ class PaymentAttempt(Base):
     # reusing a key with different order/amount/currency/selection is a conflict,
     # not a silent wrong-attempt hit.
     intent_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    # Which fingerprint algorithm produced intent_fingerprint. v1 = pre-Stage-2c
+    # (selection-unaware); v2 = selection-aware. A durable attempt is re-matched
+    # using ITS OWN version, so adding line_selection to the hash never turns a
+    # legacy intent into a false IdempotencyConflict on retry (slice-1-fix review #1).
+    fingerprint_version: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
     # Canonical identity of WHAT is being paid — the sorted set of OrderItem ids
-    # this attempt settles (Stage 2c). Part of the intent fingerprint, and what
+    # this attempt settles (Stage 2c). Part of the v2 intent fingerprint, and what
     # settlement reconciles against. TEXT (not a fragile VARCHAR cap) so a large
     # legitimate selection never fails as a low-level DB error (slice-1 review #4).
     line_selection: Mapped[str] = mapped_column(Text, nullable=False, default="")

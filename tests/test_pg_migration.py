@@ -12,10 +12,14 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests._pay_fixture import pg_dsn
+from tests._pay_fixture import Session, pg_dsn, seed_parents
 
 from sqlalchemy import create_engine, text
 from app import migrate
+from app.database import Base
+from app.models import oltp  # noqa: F401
+from app.models.oltp import PaymentAttempt
+from app.services import payment_attempts as pa
 
 _failures = []
 
@@ -250,6 +254,92 @@ def test_hardening_atomic_rollback(engine):
     check(providers == {"square"}, "provider backfill rolled back too (rows still 'square')")
 
 
+def test_legacy_fingerprint_idempotency_survives_upgrade(engine):
+    """A pre-Stage-2c (v1, selection-unaware) attempt must still be re-matched by a
+    retry after the selection-aware v2 hash is introduced (slice-1-fix #1)."""
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    s = Session(engine)()
+    ids = seed_parents(s)
+    s.close()
+    # Simulate the pre-Slice-1 schema: remove the two Slice-1 columns.
+    with engine.begin() as c:
+        c.execute(text("ALTER TABLE payment_attempt DROP COLUMN line_selection"))
+        c.execute(text("ALTER TABLE payment_attempt DROP COLUMN fingerprint_version"))
+    intent = dict(provider="manual", order_id=ids["order_id"], seat_id=None,
+                  staff_id=ids["staff_id"], currency="CAD", expected_total_cents=1000,
+                  subtotal_cents=1000, tax_cents=0, tip_cents=0, service_charge_cents=0,
+                  discount_cents=0, surcharge_cents=0, line_selection="")
+    fp_v1 = pa.intent_fingerprint(**intent, version=1)
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO payment_attempt (order_id, staff_id, provider, idempotency_key, "
+            "intent_fingerprint, subtotal_cents, tax_cents, tip_cents, service_charge_cents, "
+            "discount_cents, surcharge_cents, expected_total_cents, currency, status, last_error, "
+            "reconciled_by, reconciliation_note, created_at, updated_at) "
+            "VALUES (:o,:s,'manual','legacy-key',:fp,1000,0,0,0,0,0,1000,'CAD','created','','','',"
+            "now(),now())"),
+            {"o": ids["order_id"], "s": ids["staff_id"], "fp": fp_v1})
+
+    migrate.run(engine, strict=True)   # re-adds line_selection (TEXT) + fingerprint_version (backfilled 1)
+
+    s2 = Session(engine)()
+    a = pa.create_attempt(s2, provider="manual", order_id=ids["order_id"],
+                          staff_id=ids["staff_id"], expected_total_cents=1000,
+                          subtotal_cents=1000, currency="CAD", idempotency_key="legacy-key")
+    check(a.idempotency_key == "legacy-key" and a.fingerprint_version == 1,
+          "legacy v1 attempt retried returns the existing row, not a false conflict (#1)")
+    raised = False
+    try:
+        pa.create_attempt(s2, provider="manual", order_id=ids["order_id"],
+                          staff_id=ids["staff_id"], expected_total_cents=2000,
+                          subtotal_cents=2000, currency="CAD", idempotency_key="legacy-key")
+    except pa.IdempotencyConflict:
+        raised = True
+    check(raised, "legacy row: same key + changed amount still conflicts (#1)")
+    s2.close()
+
+
+def test_line_selection_varchar_to_text_upgrade(engine):
+    """A DB that ran the Slice-1 intermediate schema has line_selection VARCHAR(500);
+    the migration must widen it to TEXT in place (slice-1-fix #2)."""
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+    s = Session(engine)()
+    ids = seed_parents(s)
+    s.close()
+    with engine.begin() as c:
+        c.execute(text("ALTER TABLE payment_attempt ALTER COLUMN line_selection TYPE VARCHAR(500)"))
+
+    migrate.run(engine, strict=True)
+
+    with engine.connect() as c:
+        dtype = c.execute(text(
+            "SELECT data_type FROM information_schema.columns WHERE table_name='payment_attempt' "
+            "AND column_name='line_selection' AND table_schema=current_schema()")).scalar_one()
+    check(dtype == "text", "line_selection widened VARCHAR(500) -> TEXT (#2)")
+
+    long_sel = ",".join(str(i) for i in range(1, 400))   # > 500 chars
+    with engine.begin() as c:
+        c.execute(text(
+            "INSERT INTO payment_attempt (order_id, staff_id, provider, idempotency_key, "
+            "line_selection, intent_fingerprint, subtotal_cents, tax_cents, tip_cents, "
+            "service_charge_cents, discount_cents, surcharge_cents, expected_total_cents, currency, "
+            "status, last_error, reconciled_by, reconciliation_note, fingerprint_version, "
+            "created_at, updated_at) "
+            "VALUES (:o,:s,'manual','long-sel',:ls,'',1000,0,0,0,0,0,1000,'CAD','created','','','',2,"
+            "now(),now())"),
+            {"o": ids["order_id"], "s": ids["staff_id"], "ls": long_sel})
+    with engine.connect() as c:
+        stored = c.execute(text(
+            "SELECT line_selection FROM payment_attempt WHERE idempotency_key='long-sel'")).scalar_one()
+    check(stored == long_sel and len(stored) > 500, "a >500-char selection persists after upgrade (#2)")
+
+    # rerun is a no-op for the retype
+    again = migrate.run(engine, strict=True)
+    check(not any("line_selection -> TEXT" in a for a in again), "TEXT retype re-run is a no-op (#2)")
+
+
 def test_nonnull_provider_refund_id_fails_strict(engine):
     with engine.begin() as conn:
         conn.execute(text("DROP TABLE IF EXISTS refund_attempt CASCADE"))
@@ -317,6 +407,8 @@ if __name__ == "__main__":
     for fn in (test_clean_upgrade, test_provider_default_removed,
                test_card_terminal_instrument_backfilled, test_card_terminal_preserves_explicit_provider,
                test_hardening_is_idempotent, test_hardening_atomic_rollback,
+               test_legacy_fingerprint_idempotency_survives_upgrade,
+               test_line_selection_varchar_to_text_upgrade,
                test_nonnull_provider_refund_id_fails_strict,
                test_upgrade_blocks_on_duplicate_payment_id,
                test_upgrade_blocks_on_duplicate_checkout_id, test_duplicate_rejected_after_upgrade):

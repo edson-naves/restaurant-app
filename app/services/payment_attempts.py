@@ -77,15 +77,32 @@ def new_idempotency_key() -> str:
     return secrets.token_hex(24)
 
 
+# Current fingerprint algorithm version (v2 = selection-aware).
+CURRENT_FP_VERSION = 2
+
+
+def _strict_item_id(v) -> int:
+    """A paid-item id is a positive integer. Reject bool/float/decimal-string/
+    zero/negative/objects rather than silently coercing (slice-1-fix review #3).
+    A digit-only string is accepted (form inputs arrive as strings)."""
+    if isinstance(v, bool):
+        raise PaymentAttemptError(f"invalid item id {v!r} (bool is not an id)")
+    if isinstance(v, int):
+        n = v
+    elif isinstance(v, str) and v.strip().isdigit():
+        n = int(v.strip())
+    else:
+        raise PaymentAttemptError(f"invalid item id {v!r} (expected a positive integer)")
+    if n <= 0:
+        raise PaymentAttemptError(f"invalid item id {n} (must be positive)")
+    return n
+
+
 def canonical_selection(item_ids) -> str:
     """Stable identity of the paid-item set: sorted, de-duplicated, comma-joined
-    (Stage 2c). '' means a whole-order/amount-only intent. Malformed ids raise an
-    explicit domain error rather than silently coercing (slice-1 review #4)."""
-    try:
-        ids = sorted({int(i) for i in (item_ids or [])})
-    except (TypeError, ValueError) as exc:
-        raise PaymentAttemptError(f"invalid item id in selection: {exc}") from exc
-    return ",".join(str(i) for i in ids)
+    (Stage 2c). '' means a whole-order/amount-only intent. Each id is strictly
+    validated (positive integer) — no lossy coercion (slice-1-fix review #3)."""
+    return ",".join(str(i) for i in sorted({_strict_item_id(i) for i in (item_ids or [])}))
 
 
 def intent_fingerprint(
@@ -103,15 +120,20 @@ def intent_fingerprint(
     discount_cents: int,
     surcharge_cents: int,
     line_selection: str = "",
+    version: int = CURRENT_FP_VERSION,
 ) -> str:
-    """Stable hash of the immutable intent behind an idempotency key. Reusing a
-    key with a different fingerprint — including a different paid-item selection —
-    is rejected as a conflict."""
-    canonical = "|".join(str(x) for x in (
+    """Stable hash of the immutable intent behind an idempotency key. ``version``
+    selects the algorithm: v1 (pre-Stage-2c) excludes the paid-item selection, v2
+    includes it. A durable attempt is always re-matched using its stored version,
+    so introducing v2 never turns a legacy v1 intent into a false conflict."""
+    fields = [
         provider, order_id, seat_id, staff_id, currency.upper(),
         expected_total_cents, subtotal_cents, tax_cents, tip_cents,
-        service_charge_cents, discount_cents, surcharge_cents, line_selection,
-    ))
+        service_charge_cents, discount_cents, surcharge_cents,
+    ]
+    if version >= 2:
+        fields.append(line_selection)
+    canonical = "|".join(str(x) for x in fields)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:64]
 
 
@@ -158,8 +180,12 @@ def _by_key(db: Session, key: str) -> PaymentAttempt | None:
     ).scalar_one_or_none()
 
 
-def _assert_same_intent(existing: PaymentAttempt, fingerprint: str) -> None:
-    if existing.intent_fingerprint and existing.intent_fingerprint != fingerprint:
+def _assert_same_intent(existing: PaymentAttempt, intent: dict) -> None:
+    """Re-match the requested intent against a stored attempt using the stored
+    row's own fingerprint version (slice-1-fix #1) — so a v1 legacy row is compared
+    with the v1 (selection-unaware) algorithm and a v2 row with v2."""
+    expected = intent_fingerprint(**intent, version=existing.fingerprint_version)
+    if existing.intent_fingerprint and existing.intent_fingerprint != expected:
         raise IdempotencyConflict(
             f"idempotency key {existing.idempotency_key!r} was already used for a "
             f"different payment intent (attempt {existing.id})."
@@ -200,18 +226,19 @@ def create_attempt(
     if expected_total_cents < 0:
         raise PaymentAttemptError("expected_total_cents cannot be negative.")
 
-    fingerprint = intent_fingerprint(
+    intent = dict(
         provider=provider, order_id=order_id, seat_id=seat_id, staff_id=staff_id,
         currency=currency, expected_total_cents=expected_total_cents,
         subtotal_cents=subtotal_cents, tax_cents=tax_cents, tip_cents=tip_cents,
         service_charge_cents=service_charge_cents, discount_cents=discount_cents,
         surcharge_cents=surcharge_cents, line_selection=line_selection,
     )
+    fingerprint = intent_fingerprint(**intent, version=CURRENT_FP_VERSION)
 
     if idempotency_key:
         existing = _by_key(db, idempotency_key)
         if existing is not None:
-            _assert_same_intent(existing, fingerprint)
+            _assert_same_intent(existing, intent)
             return existing
     else:
         idempotency_key = new_idempotency_key()
@@ -219,7 +246,7 @@ def create_attempt(
     attempt = PaymentAttempt(
         order_id=order_id, seat_id=seat_id, staff_id=staff_id, provider=provider,
         idempotency_key=idempotency_key, intent_fingerprint=fingerprint,
-        line_selection=line_selection,
+        fingerprint_version=CURRENT_FP_VERSION, line_selection=line_selection,
         subtotal_cents=subtotal_cents, tax_cents=tax_cents, tip_cents=tip_cents,
         service_charge_cents=service_charge_cents, discount_cents=discount_cents,
         surcharge_cents=surcharge_cents, expected_total_cents=expected_total_cents,
@@ -235,7 +262,7 @@ def create_attempt(
         existing = _by_key(db, idempotency_key)
         if existing is None:
             raise
-        _assert_same_intent(existing, fingerprint)
+        _assert_same_intent(existing, intent)
         return existing
     db.refresh(attempt)
     return attempt
