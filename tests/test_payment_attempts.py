@@ -129,6 +129,31 @@ def test_snapshot_immutable_across_transitions():
           "amount snapshot unchanged by transitions (service contract)")
 
 
+def test_processor_evidence_is_write_once():
+    db, ids = _db()
+    a = _mk(db, ids)
+    pa.transition(db, a, S.PROCESSOR_PENDING)
+    pa.transition(db, a, S.PROCESSOR_APPROVED, provider_payment_id="p1",
+                  processor_amount_cents=1000, processor_currency="CAD")
+    # Same value on the next transition is fine (idempotent).
+    pa.transition(db, a, S.SETTLED, payment_id=ids["payment_id"],
+                  processor_amount_cents=1000)
+    check(a.processor_amount_cents == 1000 and a.processor_currency == "CAD",
+          "processor evidence persisted")
+    # A *different* processor amount must not overwrite the evidence. Use a
+    # separate attempt and a payment_id-free transition so the conflict can only
+    # come from the write-once evidence guard, not the unique payment_id.
+    b = _mk(db, ids, key="k2")
+    pa.transition(db, b, S.PROCESSOR_PENDING)
+    pa.transition(db, b, S.PROCESSOR_APPROVED, processor_amount_cents=1000, processor_currency="CAD")
+    raised = False
+    try:
+        pa.transition(db, b, S.REQUIRES_RECONCILIATION, processor_amount_cents=9999)
+    except pa.TransitionConflict:
+        raised = True
+    check(raised, "processor amount evidence cannot be overwritten with a different value (#8)")
+
+
 def test_reconciliation_needs_evidence():
     db, ids = _db()
     a = _mk(db, ids)
@@ -164,6 +189,7 @@ if __name__ == "__main__":
         test_settle_requires_payment_id,
         test_write_once_provider_id_via_cas,
         test_snapshot_immutable_across_transitions,
+        test_processor_evidence_is_write_once,
         test_reconciliation_needs_evidence,
     ):
         print(f"- {fn.__name__}")

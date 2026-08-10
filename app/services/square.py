@@ -158,6 +158,7 @@ def create_checkout(
     allow_tip: bool = True,
     device_id: str | None = None,
     idempotency_key: str | None = None,
+    currency_code: str | None = None,
 ) -> dict:
     """Send an amount to the terminal for the customer to pay + tip on.
 
@@ -184,7 +185,8 @@ def create_checkout(
     body = {
         "idempotency_key": idempotency_key or str(uuid.uuid4()),
         "checkout": {
-            "amount_money": {"amount": int(amount_cents), "currency": currency()},
+            "amount_money": {"amount": int(amount_cents),
+                             "currency": (currency_code or currency()).upper()},
             "device_options": device_options,
             "deadline_duration": "PT5M",
         },
@@ -224,6 +226,7 @@ def create_refund(
     amount_cents: int,
     idempotency_key: str,
     reason: str = "",
+    currency_code: str | None = None,
 ) -> dict:
     """Reverse money to the card via the Square Refunds API (RefundPayment).
 
@@ -236,7 +239,8 @@ def create_refund(
     body = {
         "idempotency_key": idempotency_key,
         "payment_id": payment_id,
-        "amount_money": {"amount": int(amount_cents), "currency": currency()},
+        "amount_money": {"amount": int(amount_cents),
+                         "currency": (currency_code or currency()).upper()},
     }
     if reason:
         body["reason"] = reason[:192]
@@ -257,6 +261,43 @@ def wait_for_checkout(checkout_id: str, timeout_s: float = 120.0, interval_s: fl
         time.sleep(interval_s)
         checkout = get_checkout(checkout_id)
     return checkout
+
+
+def completed_payment_evidence(checkout: dict) -> dict:
+    """Authoritative amount/currency/tip evidence for a COMPLETED checkout, read
+    from the underlying Square Payment (not local config — finding #6).
+
+    Returns a dict with, when the payment is readable:
+      captured_total_cents  — what Square captured (base + tip)
+      tip_cents             — the tip the guest added on the terminal
+      base_cents            — captured_total - tip (comparable to our pre-tip
+                              expected_total_cents — finding #17)
+      currency              — the processor's currency (e.g. 'CAD')
+      brand, last4          — card details
+    Missing/unreadable fields are None so settlement never compares against
+    fabricated evidence.
+    """
+    ev = {"captured_total_cents": None, "tip_cents": 0, "base_cents": None,
+          "currency": None, "brand": None, "last4": None}
+    payment_ids = checkout.get("payment_ids") or []
+    if not payment_ids:
+        return ev
+    try:
+        pay = get_payment(payment_ids[0])
+    except SquareError:
+        return ev  # unreadable — leave evidence None, do not guess
+    total_money = pay.get("total_money") or {}
+    tip = int((pay.get("tip_money") or {}).get("amount") or 0)
+    total = total_money.get("amount")
+    total = int(total) if total is not None else None
+    card = (pay.get("card_details") or {}).get("card") or {}
+    ev.update(
+        captured_total_cents=total, tip_cents=tip,
+        base_cents=(total - tip) if total is not None else None,
+        currency=total_money.get("currency") or (pay.get("amount_money") or {}).get("currency"),
+        brand=card.get("card_brand"), last4=card.get("last_4"),
+    )
+    return ev
 
 
 def tip_and_card(checkout: dict) -> tuple[int, str | None, str | None]:

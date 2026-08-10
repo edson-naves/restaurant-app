@@ -70,13 +70,14 @@ def test_square_forwards_idempotency_key():
         square._request = orig
 
 
-def test_square_poll_completed_with_payment():
+def test_square_poll_reads_processor_evidence():
+    # Payment captured 2300 total = 2000 pre-tip base + 300 tip, in CAD.
     def fake(method, path, payload=None):
         if path.endswith("/chk_1"):
-            return {"checkout": {"id": "chk_1", "status": "COMPLETED",
-                                 "payment_ids": ["pay_9"], "amount_money": {"amount": 2000}}}
+            return {"checkout": {"id": "chk_1", "status": "COMPLETED", "payment_ids": ["pay_9"]}}
         if path.startswith("/v2/payments/"):
-            return {"payment": {"tip_money": {"amount": 300},
+            return {"payment": {"total_money": {"amount": 2300, "currency": "CAD"},
+                                "tip_money": {"amount": 300},
                                 "card_details": {"card": {"card_brand": "VISA", "last_4": "4242"}}}}
         raise AssertionError(path)
 
@@ -85,8 +86,33 @@ def test_square_poll_completed_with_payment():
         res = pp.get_provider("square_terminal").poll("chk_1")
         check(res.status == S.PROCESSOR_APPROVED, "COMPLETED+payment_id -> approved")
         check(res.provider_payment_id == "pay_9", "captures payment id")
-        check(res.processor_amount_cents == 2000, "captures processor amount (#8)")
+        check(res.processor_amount_cents == 2000,
+              "processor amount is the PRE-TIP base = total - tip (#17)")
+        check(res.processor_currency == "CAD",
+              "processor currency comes from the Payment object, not config (#6)")
         check(res.tip_cents == 300 and res.card_last4 == "4242", "reads tip + last4")
+    finally:
+        square._request = orig
+
+
+def test_charge_and_refund_forward_currency():
+    seen = {}
+
+    def fake(method, path, payload=None):
+        seen[path] = payload
+        if "checkouts" in path:
+            return {"checkout": {"id": "chk_1", "status": "PENDING"}}
+        return {"refund": {"id": "rf_1", "status": "COMPLETED"}}
+
+    orig = _fake(fake)
+    try:
+        sq = pp.get_provider("square_terminal")
+        sq.charge(amount_cents=1000, currency="USD", idempotency_key="k")
+        sq.refund(amount_cents=500, currency="USD", idempotency_key="k2", provider_payment_id="pay_9")
+        check(seen["/v2/terminals/checkouts"]["checkout"]["amount_money"]["currency"] == "USD",
+              "charge forwards per-operation currency to Square (#5)")
+        check(seen["/v2/refunds"]["amount_money"]["currency"] == "USD",
+              "refund forwards per-operation currency to Square (#5)")
     finally:
         square._request = orig
 
@@ -244,7 +270,8 @@ if __name__ == "__main__":
         test_registry_and_capabilities,
         test_manual_is_local_with_amount,
         test_square_forwards_idempotency_key,
-        test_square_poll_completed_with_payment,
+        test_square_poll_reads_processor_evidence,
+        test_charge_and_refund_forward_currency,
         test_square_completed_without_payment_id_reconciles,
         test_square_refund_state_mapping,
         test_square_refund_without_payment_id_reconciles,
