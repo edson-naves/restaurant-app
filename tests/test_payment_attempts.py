@@ -129,6 +129,40 @@ def test_snapshot_immutable_across_transitions():
           "amount snapshot unchanged by transitions (service contract)")
 
 
+def test_external_approval_requires_evidence():
+    """The state machine itself (not just the Square adapter) refuses external
+    PROCESSOR_APPROVED without payment id + amount + valid currency (#2)."""
+    def ext_attempt(key):
+        return pa.create_attempt(db, provider="square_terminal", order_id=ids["order_id"],
+                                 staff_id=ids["staff_id"], expected_total_cents=1000,
+                                 subtotal_cents=1000, idempotency_key=key)
+    db, ids = _db()
+    # payment id only -> reject
+    a = ext_attempt("e1"); pa.transition(db, a, S.PROCESSOR_PENDING)
+    for label, kw in [
+        ("payment id only", {"provider_payment_id": "p"}),
+        ("missing amount", {"provider_payment_id": "p", "processor_currency": "CAD"}),
+        ("missing currency", {"provider_payment_id": "p", "processor_amount_cents": 1000}),
+        ("missing payment id", {"processor_amount_cents": 1000, "processor_currency": "CAD"}),
+    ]:
+        raised = False
+        try:
+            pa.transition(db, a, S.PROCESSOR_APPROVED, **kw)
+        except pa.PaymentAttemptError:
+            raised = True
+        check(raised, f"external approval with {label} rejected (#2)")
+    # complete evidence -> approve
+    pa.transition(db, a, S.PROCESSOR_APPROVED, provider_payment_id="p",
+                  processor_amount_cents=1000, processor_currency="CAD")
+    check(a.status == S.PROCESSOR_APPROVED, "external approval with complete evidence succeeds (#2)")
+    # manual provider approves with no external evidence
+    m = pa.create_attempt(db, provider="manual", order_id=ids["order_id"],
+                          staff_id=ids["staff_id"], expected_total_cents=500, idempotency_key="m1")
+    pa.transition(db, m, S.PROCESSOR_PENDING)
+    pa.transition(db, m, S.PROCESSOR_APPROVED)
+    check(m.status == S.PROCESSOR_APPROVED, "manual provider approval remains valid (#2)")
+
+
 def test_currency_defaults_to_venue():
     db, ids = _db()
     old = os.environ.get("VENUE_CURRENCY")
@@ -221,6 +255,7 @@ if __name__ == "__main__":
         test_settle_requires_payment_id,
         test_write_once_provider_id_via_cas,
         test_snapshot_immutable_across_transitions,
+        test_external_approval_requires_evidence,
         test_currency_defaults_to_venue,
         test_processor_evidence_is_write_once,
         test_reconciliation_authority_and_audit,

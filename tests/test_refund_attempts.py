@@ -23,7 +23,8 @@ def _settled_attempt(db, ids, provider="square_terminal"):
                           staff_id=ids["staff_id"], expected_total_cents=10000,
                           subtotal_cents=10000)
     pa.transition(db, a, PS.PROCESSOR_PENDING)
-    pa.transition(db, a, PS.PROCESSOR_APPROVED, provider_payment_id="pay_seed")
+    pa.transition(db, a, PS.PROCESSOR_APPROVED, provider_payment_id="pay_seed",
+                  processor_amount_cents=10000, processor_currency="CAD")
     pa.transition(db, a, PS.SETTLED, payment_id=ids["payment_id"])
     return a
 
