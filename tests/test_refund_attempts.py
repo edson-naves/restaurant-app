@@ -9,9 +9,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tests._pay_fixture import new_db as _db
 
-from app.models.oltp import RefundAttempt, RefundAttemptStatus as R
+from app.models.oltp import PaymentAttemptStatus as PS, RefundAttempt, RefundAttemptStatus as R
 from app.services import payment_attempts as pa
 from app.services import refund_attempts as ra
+
+
+def _settled_attempt(db, ids, provider="square_terminal"):
+    """A charge attempt walked to SETTLED against the seeded payment."""
+    a = pa.create_attempt(db, provider=provider, order_id=ids["order_id"],
+                          staff_id=ids["staff_id"], expected_total_cents=10000,
+                          subtotal_cents=10000)
+    pa.transition(db, a, PS.PROCESSOR_PENDING)
+    pa.transition(db, a, PS.PROCESSOR_APPROVED, provider_payment_id="pay_seed")
+    pa.transition(db, a, PS.SETTLED, payment_id=ids["payment_id"])
+    return a
 
 _failures = []
 
@@ -70,6 +81,45 @@ def test_running_total_counts_inflight_and_completed():
     check(total2 == 1500, "a rejected refund frees its amount from the total")
 
 
+def test_same_key_different_amount_conflicts():
+    db, ids = _db()
+    _settled_attempt(db, ids)
+    _mkref(db, ids, 1000, key="rk")
+    raised = False
+    try:
+        _mkref(db, ids, 2500, key="rk")  # same key, different amount
+    except pa.IdempotencyConflict:
+        raised = True
+    check(raised, "same refund key + different amount raises IdempotencyConflict (#3)")
+
+
+def test_provider_mismatch_rejected():
+    db, ids = _db()
+    _settled_attempt(db, ids, provider="square_terminal")
+    raised = False
+    try:
+        _mkref(db, ids, 500, provider="manual")  # settled attempt is square_terminal
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "refund provider must match the charge attempt's provider (#7)")
+
+
+def test_wrong_charge_attempt_rejected():
+    db, ids = _db()
+    _settled_attempt(db, ids)
+    # A charge attempt that does NOT back this payment (still pending, no payment_id).
+    other = pa.create_attempt(db, provider="square_terminal", order_id=ids["order_id"],
+                              staff_id=ids["staff_id"], expected_total_cents=500)
+    raised = False
+    try:
+        ra.create_refund_attempt(db, payment_id=ids["payment_id"], staff_id=ids["staff_id"],
+                                 provider="square_terminal", amount_cents=500,
+                                 charge_attempt_id=other.id)
+    except pa.PaymentAttemptError:
+        raised = True
+    check(raised, "a charge attempt not backing this payment is rejected (#7)")
+
+
 def test_refund_state_transitions():
     db, ids = _db()
     r = _mkref(db, ids, 500)
@@ -90,6 +140,9 @@ if __name__ == "__main__":
         test_idempotent_refund_create,
         test_refund_amount_must_be_positive,
         test_running_total_counts_inflight_and_completed,
+        test_same_key_different_amount_conflicts,
+        test_provider_mismatch_rejected,
+        test_wrong_charge_attempt_rejected,
         test_refund_state_transitions,
     ):
         print(f"- {fn.__name__}")
