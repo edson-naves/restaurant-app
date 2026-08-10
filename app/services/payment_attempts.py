@@ -1,19 +1,32 @@
-"""Durable payment-attempt lifecycle (audit findings #1–#5, Stage 2a).
+"""Durable payment-attempt lifecycle (audit findings #1–#5, hardened per review).
 
-A ``PaymentAttempt`` is the crash-safe spine of a card charge: it is written and
-committed *before* Square is contacted, then walked through an explicit state
-machine as the processor responds. This module owns creation and every state
-transition; nothing else should mutate ``attempt.status`` directly.
+A ``PaymentAttempt`` is the crash-safe spine of a charge: written and committed
+*before* the processor is contacted, then walked through an explicit state machine
+via concurrency-safe transitions. This module owns creation and every transition;
+nothing else mutates ``attempt.status`` directly.
 
-Stage 2a provides the record and its guarantees (idempotent create, legal
-transitions, one-Payment-per-attempt). Wiring it into the live Square terminal
-flow and settlement is Stage 2b–2c.
+Concurrency/idempotency guarantees (Postgres and SQLite):
+
+* **Atomic create** — concurrent requests reusing one idempotency key resolve to
+  the *same* attempt; the DB unique constraint is caught and re-read, never
+  surfaced as an ``IntegrityError`` (finding #2).
+* **Intent fingerprint** — reusing a key with a *different* order/amount/currency
+  is an explicit conflict, not a silent wrong-attempt hit (finding #3).
+* **Compare-and-swap transitions** — a transition is a single guarded UPDATE
+  conditioned on the expected current status, so two conflicting transitions
+  cannot both win (finding #4).
+* **Reconciliation resolution** — leaving REQUIRES_RECONCILIATION demands
+  evidence and goes through ``resolve_reconciliation``, never a bare transition
+  (finding #12).
 """
 from __future__ import annotations
 
+import hashlib
 import secrets
+from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select, update
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.models.oltp import (
@@ -24,17 +37,75 @@ from app.models.oltp import (
 
 
 class PaymentAttemptError(RuntimeError):
-    """Raised on an illegal state transition or a settlement invariant breach."""
+    """Illegal transition or a settlement invariant breach."""
+
+
+class IdempotencyConflict(PaymentAttemptError):
+    """An idempotency key was reused for a materially different intent."""
+
+
+class TransitionConflict(PaymentAttemptError):
+    """A concurrent writer moved the attempt out from under this transition."""
 
 
 def new_idempotency_key() -> str:
-    """A fresh, unguessable idempotency key for a processor request."""
     return secrets.token_hex(24)
+
+
+def intent_fingerprint(
+    *,
+    provider: str,
+    order_id: int,
+    seat_id: int | None,
+    staff_id: int,
+    currency: str,
+    expected_total_cents: int,
+    subtotal_cents: int,
+    tax_cents: int,
+    tip_cents: int,
+    service_charge_cents: int,
+    discount_cents: int,
+    surcharge_cents: int,
+) -> str:
+    """Stable hash of the immutable intent behind an idempotency key. Reusing a
+    key with a different fingerprint is rejected as a conflict."""
+    canonical = "|".join(str(x) for x in (
+        provider, order_id, seat_id, staff_id, currency.upper(),
+        expected_total_cents, subtotal_cents, tax_cents, tip_cents,
+        service_charge_cents, discount_cents, surcharge_cents,
+    ))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:64]
+
+
+def _validate_provider(provider: str) -> None:
+    if not provider:
+        raise PaymentAttemptError("provider is required (no silent default).")
+    # Lazy import avoids any import-order coupling with the provider registry.
+    from app.services.payment_providers import UnknownProvider, get_provider
+    try:
+        get_provider(provider)
+    except UnknownProvider as exc:
+        raise PaymentAttemptError(str(exc)) from exc
+
+
+def _by_key(db: Session, key: str) -> PaymentAttempt | None:
+    return db.execute(
+        select(PaymentAttempt).where(PaymentAttempt.idempotency_key == key)
+    ).scalar_one_or_none()
+
+
+def _assert_same_intent(existing: PaymentAttempt, fingerprint: str) -> None:
+    if existing.intent_fingerprint and existing.intent_fingerprint != fingerprint:
+        raise IdempotencyConflict(
+            f"idempotency key {existing.idempotency_key!r} was already used for a "
+            f"different payment intent (attempt {existing.id})."
+        )
 
 
 def create_attempt(
     db: Session,
     *,
+    provider: str,
     order_id: int,
     staff_id: int,
     expected_total_cents: int,
@@ -46,47 +117,54 @@ def create_attempt(
     discount_cents: int = 0,
     surcharge_cents: int = 0,
     currency: str = "CAD",
-    provider: str = "square",
     idempotency_key: str | None = None,
 ) -> PaymentAttempt:
     """Persist a CREATED attempt from an already-locked payable snapshot. Commits.
 
-    Idempotent: if ``idempotency_key`` is given and an attempt with it already
-    exists, the existing row is returned unchanged — a retried request never
-    creates a second attempt (and therefore never a second charge).
+    Idempotent and concurrency-safe: a repeated key (sequential or concurrent)
+    returns the existing attempt; a repeated key with a different intent raises
+    ``IdempotencyConflict``; an unregistered provider is rejected.
     """
+    _validate_provider(provider)
+    if expected_total_cents < 0:
+        raise PaymentAttemptError("expected_total_cents cannot be negative.")
+
+    fingerprint = intent_fingerprint(
+        provider=provider, order_id=order_id, seat_id=seat_id, staff_id=staff_id,
+        currency=currency, expected_total_cents=expected_total_cents,
+        subtotal_cents=subtotal_cents, tax_cents=tax_cents, tip_cents=tip_cents,
+        service_charge_cents=service_charge_cents, discount_cents=discount_cents,
+        surcharge_cents=surcharge_cents,
+    )
+
     if idempotency_key:
-        existing = db.execute(
-            select(PaymentAttempt).where(
-                PaymentAttempt.idempotency_key == idempotency_key
-            )
-        ).scalar_one_or_none()
+        existing = _by_key(db, idempotency_key)
         if existing is not None:
+            _assert_same_intent(existing, fingerprint)
             return existing
     else:
         idempotency_key = new_idempotency_key()
 
-    if expected_total_cents < 0:
-        raise PaymentAttemptError("expected_total_cents cannot be negative.")
-
     attempt = PaymentAttempt(
-        order_id=order_id,
-        seat_id=seat_id,
-        staff_id=staff_id,
-        provider=provider,
-        idempotency_key=idempotency_key,
-        subtotal_cents=subtotal_cents,
-        tax_cents=tax_cents,
-        tip_cents=tip_cents,
-        service_charge_cents=service_charge_cents,
-        discount_cents=discount_cents,
-        surcharge_cents=surcharge_cents,
-        expected_total_cents=expected_total_cents,
-        currency=currency,
-        status=PaymentAttemptStatus.CREATED,
+        order_id=order_id, seat_id=seat_id, staff_id=staff_id, provider=provider,
+        idempotency_key=idempotency_key, intent_fingerprint=fingerprint,
+        subtotal_cents=subtotal_cents, tax_cents=tax_cents, tip_cents=tip_cents,
+        service_charge_cents=service_charge_cents, discount_cents=discount_cents,
+        surcharge_cents=surcharge_cents, expected_total_cents=expected_total_cents,
+        currency=currency, status=PaymentAttemptStatus.CREATED,
     )
     db.add(attempt)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent request inserted the same idempotency key first. Re-read
+        # and return that attempt instead of surfacing the uniqueness violation.
+        db.rollback()
+        existing = _by_key(db, idempotency_key)
+        if existing is None:
+            raise
+        _assert_same_intent(existing, fingerprint)
+        return existing
     db.refresh(attempt)
     return attempt
 
@@ -98,67 +176,131 @@ def transition(
     *,
     provider_checkout_id: str | None = None,
     provider_payment_id: str | None = None,
-    provider_refund_id: str | None = None,
     payment_id: int | None = None,
+    processor_amount_cents: int | None = None,
+    processor_currency: str | None = None,
     last_error: str | None = None,
     commit: bool = True,
+    _from_resolver: bool = False,
 ) -> PaymentAttempt:
-    """Move ``attempt`` to ``new_status`` if the transition is allowed.
+    """Concurrency-safe compare-and-swap transition.
 
-    Raises ``PaymentAttemptError`` on an illegal transition. Provider identifiers
-    are only ever set (write-once); an attempt to overwrite an existing, differing
-    identifier is rejected so processor traceability cannot be silently rewritten.
+    The move is a single UPDATE guarded on the expected current status, so a
+    racing writer cannot also succeed — the loser gets ``TransitionConflict``.
+    Provider identifiers and ``payment_id`` are write-once (guarded in the same
+    UPDATE). Leaving REQUIRES_RECONCILIATION must go through
+    ``resolve_reconciliation`` (finding #12).
     """
+    if attempt.status == PaymentAttemptStatus.REQUIRES_RECONCILIATION and not _from_resolver:
+        raise PaymentAttemptError(
+            "resolve REQUIRES_RECONCILIATION via resolve_reconciliation(), not transition()."
+        )
     allowed = PAYMENT_ATTEMPT_TRANSITIONS.get(attempt.status, set())
     if new_status not in allowed:
         raise PaymentAttemptError(
             f"illegal transition {attempt.status} -> {new_status} "
             f"(allowed: {sorted(allowed) or 'none — terminal state'})"
         )
+    if new_status == PaymentAttemptStatus.SETTLED and payment_id is None:
+        raise PaymentAttemptError("settling an attempt requires a payment_id.")
 
-    _set_once(attempt, "provider_checkout_id", provider_checkout_id)
-    _set_once(attempt, "provider_payment_id", provider_payment_id)
-    _set_once(attempt, "provider_refund_id", provider_refund_id)
-
-    if new_status == PaymentAttemptStatus.SETTLED:
-        if payment_id is None:
-            raise PaymentAttemptError("settling an attempt requires a payment_id.")
-        _set_once(attempt, "payment_id", payment_id)
-    elif payment_id is not None:
-        _set_once(attempt, "payment_id", payment_id)
-
+    expected = attempt.status
+    values: dict = {"status": new_status, "updated_at": datetime.now()}
     if last_error is not None:
-        attempt.last_error = last_error
+        values["last_error"] = last_error
+    if processor_amount_cents is not None:
+        values["processor_amount_cents"] = processor_amount_cents
+    if processor_currency is not None:
+        values["processor_currency"] = processor_currency
 
-    attempt.status = new_status
-    if commit:
-        db.commit()
-        db.refresh(attempt)
+    conds = [PaymentAttempt.id == attempt.id, PaymentAttempt.status == expected]
+    for field, val in (
+        ("provider_checkout_id", provider_checkout_id),
+        ("provider_payment_id", provider_payment_id),
+        ("payment_id", payment_id),
+    ):
+        if val is not None:
+            values[field] = val
+            col = getattr(PaymentAttempt, field)
+            conds.append(or_(col.is_(None), col == val))  # write-once
+
+    # A uniqueness violation (duplicate payment/provider id) or a lock/deadlock
+    # under concurrency both mean this transition did not win — surface either as
+    # an explicit TransitionConflict, never a leaked driver error.
+    try:
+        applied = db.execute(
+            update(PaymentAttempt).where(and_(*conds)).values(**values)
+        ).rowcount
+        if applied == 1 and commit:
+            db.commit()
+    except (IntegrityError, OperationalError) as exc:
+        db.rollback()
+        raise TransitionConflict(
+            f"transition {expected} -> {new_status} conflicted "
+            f"(uniqueness or lock): {getattr(exc, 'orig', exc)}"
+        ) from exc
+    if applied != 1:
+        db.rollback()
+        try:
+            fresh = db.get(PaymentAttempt, attempt.id)
+            actual = fresh.status if fresh else "<deleted>"
+        except Exception:  # noqa: BLE001 — never mask the conflict with a read error
+            actual = "<unknown>"
+        raise TransitionConflict(
+            f"transition {expected} -> {new_status} did not apply "
+            f"(current status is {actual!r}, or a write-once id differs)."
+        )
+    db.refresh(attempt)
     return attempt
 
 
-def _set_once(attempt: PaymentAttempt, field: str, value) -> None:
-    """Write ``value`` into a write-once field, or no-op if unchanged. Rejects an
-    attempt to change an already-set, differing value."""
-    if value is None:
-        return
-    current = getattr(attempt, field)
-    if current in (None, "", 0):
-        setattr(attempt, field, value)
-    elif current != value:
+def resolve_reconciliation(
+    db: Session,
+    attempt: PaymentAttempt,
+    *,
+    resolved_status: str,
+    resolved_by: str,
+    note: str,
+    payment_id: int | None = None,
+    provider_payment_id: str | None = None,
+) -> PaymentAttempt:
+    """Resolve an ambiguous attempt with recorded evidence (finding #12).
+
+    Only valid from REQUIRES_RECONCILIATION. Requires a non-empty ``resolved_by``
+    and ``note``; settling additionally requires a ``payment_id``. The evidence is
+    persisted alongside the state change so the resolution is auditable, never a
+    bare flip.
+    """
+    if attempt.status != PaymentAttemptStatus.REQUIRES_RECONCILIATION:
         raise PaymentAttemptError(
-            f"{field} is already set to {current!r}; refusing to overwrite with {value!r}."
+            "resolve_reconciliation only applies to a REQUIRES_RECONCILIATION attempt."
         )
+    if resolved_status not in (
+        PaymentAttemptStatus.SETTLED,
+        PaymentAttemptStatus.FAILED,
+        PaymentAttemptStatus.CANCELLED,
+    ):
+        raise PaymentAttemptError(f"cannot resolve reconciliation to {resolved_status!r}.")
+    if not (resolved_by or "").strip() or not (note or "").strip():
+        raise PaymentAttemptError("reconciliation resolution requires resolved_by and a note.")
+
+    attempt.reconciled_at = datetime.now()
+    attempt.reconciled_by = resolved_by.strip()[:60]
+    attempt.reconciliation_note = note.strip()[:300]
+    return transition(
+        db, attempt, resolved_status,
+        payment_id=payment_id, provider_payment_id=provider_payment_id,
+        _from_resolver=True,
+    )
 
 
 def requires_reconciliation(db: Session) -> list[PaymentAttempt]:
-    """Attempts a recovery worker/human must resolve — either explicitly flagged,
-    or approved by the processor but never settled locally (the classic
-    'Square charged, app lost it' case). Stage 2d consumes this."""
+    """Charge attempts a recovery worker/human must resolve — flagged, or
+    approved by the processor but never settled locally (the 'processor charged,
+    app lost it' case). Consumed by the Stage 2d recovery worker."""
     stuck = {
         PaymentAttemptStatus.REQUIRES_RECONCILIATION,
         PaymentAttemptStatus.PROCESSOR_APPROVED,
-        PaymentAttemptStatus.REFUND_PENDING,
     }
     return list(
         db.execute(
