@@ -584,6 +584,11 @@ class PaymentInstrument(Base):
     is_third_party: Mapped[bool] = mapped_column(Boolean, default=False)
     # UberEats/DoorDash are valid on delivery orders only (section 4.2.1).
     delivery_only: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Which payment provider settles this instrument (app/services/payment_providers.py).
+    # "manual" = staff records it, no external processor (cash, e-transfer, keyed
+    # card, platform tender). "square_terminal", "stripe", … = an external adapter.
+    # Default manual so every existing instrument keeps behaving exactly as before.
+    provider: Mapped[str] = mapped_column(String(30), nullable=False, default="manual")
 
 
 # --------------------------------------------------------------------------

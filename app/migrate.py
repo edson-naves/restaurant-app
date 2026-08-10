@@ -82,6 +82,9 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # on both Postgres and SQLite, so the ADD COLUMN succeeds on the live DB.
     ("swap_request", "new_starts_at", "TIMESTAMP"),
     ("swap_request", "new_ends_at", "TIMESTAMP"),
+    # Pluggable payment providers. Defaulting to 'manual' leaves every existing
+    # instrument settling exactly as before (staff-recorded, no processor).
+    ("payment_instrument", "provider", "VARCHAR(30) NOT NULL DEFAULT 'manual'"),
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW
