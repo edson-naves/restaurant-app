@@ -20,7 +20,7 @@
   --shadow: rgba(15, 23, 42, 0.08);
   /* Veil drawn over the site-wide background photo so content stays legible,
      and the photo itself — a lighter shot for light mode. */
-  --bg-veil: rgba(248, 250, 252, 0.80);
+  --bg-veil: rgba(248, 250, 252, 0);
   --bg-image: url("/static/img/light.jpg");
   --serif: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
