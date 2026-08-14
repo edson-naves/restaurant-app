@@ -8,6 +8,7 @@ Run the server first:
     uvicorn app.main:app --port 8077
 """
 import re
+import secrets
 import sys
 from pathlib import Path
 
@@ -35,6 +36,12 @@ from app.services.payments import balance_panel, build_ledgers  # noqa: E402
 
 BASE = "http://127.0.0.1:8079"
 ok = True
+
+
+def _tok() -> str:
+    """A fresh per-request idempotency token, as the pay screen now issues one per
+    seat form (Stage 2c slice-2a v4). Each distinct payment intent gets its own."""
+    return secrets.token_hex(8)
 
 
 def check(cond, label, detail=""):
@@ -395,7 +402,7 @@ ubereats = db.execute(select(PaymentInstrument).where(PaymentInstrument.code == 
 seat1 = db.execute(select(Seat).where(Seat.order_id == order_id, Seat.seat_number == 1)).scalar_one()
 r = client.post(
     f"/orders/{order_id}/seats/{seat1.id}/pay",
-    data={"instrument_id": ubereats.id, "tip_mode": "none"},
+    data={"instrument_id": ubereats.id, "tip_mode": "none", "pay_token": _tok()},
 )
 check(r.status_code == 400, "4.2.1: UberEats rejected on a dine-in order", f"{r.status_code}")
 
@@ -406,7 +413,7 @@ ledgers, _ = build_ledgers(db, order)
 seat1_owed = ledgers[seat1.id].outstanding_cents
 r = client.post(
     f"/orders/{order_id}/seats/{seat1.id}/pay",
-    data={"instrument_id": visa.id, "tip_mode": "18", "card_last4": "4242"},
+    data={"instrument_id": visa.id, "tip_mode": "18", "card_last4": "4242", "pay_token": _tok()},
 )
 check(r.status_code == 200, "step 8-9: seat 1 pays by Visa + 18% tip")
 
@@ -488,7 +495,7 @@ check(r.status_code == 200 and (OUTBOX / "sms").exists()
 
 # Seat 2 pays cash — different instrument, same order (4.2.2).
 seat2 = db.execute(select(Seat).where(Seat.order_id == order_id, Seat.seat_number == 2)).scalar_one()
-r = client.post(f"/orders/{order_id}/seats/{seat2.id}/pay", data={"instrument_id": cash.id, "tip_mode": "none"})
+r = client.post(f"/orders/{order_id}/seats/{seat2.id}/pay", data={"instrument_id": cash.id, "tip_mode": "none", "pay_token": _tok()})
 check(r.status_code == 200, "seat 2 pays Cash — a second instrument on the same order")
 
 # Live balance panel must reflect partial collection (4.2.4).
@@ -533,13 +540,13 @@ check(db.get(RestaurantTable, table_id).status == TableStatus.READY_TO_PAY,
 
 # Re-pay seat 2 so the flow can complete.
 seat2b = db.execute(select(Seat).where(Seat.order_id == order_id, Seat.seat_number == 2)).scalar_one()
-r = client.post(f"/orders/{order_id}/seats/{seat2b.id}/pay", data={"instrument_id": cash.id, "tip_mode": "none"})
+r = client.post(f"/orders/{order_id}/seats/{seat2b.id}/pay", data={"instrument_id": cash.id, "tip_mode": "none", "pay_token": _tok()})
 check(r.status_code == 200, "seat 2 can be re-paid after the void")
 client.cookies.set("staff_id", sign_session(waiter.id))
 
 # Seat 3 settles by e-transfer -> order closes, table frees (step 10).
 seat3 = db.execute(select(Seat).where(Seat.order_id == order_id, Seat.seat_number == 3)).scalar_one()
-r = client.post(f"/orders/{order_id}/seats/{seat3.id}/pay", data={"instrument_id": etransfer.id, "tip_mode": "20"})
+r = client.post(f"/orders/{order_id}/seats/{seat3.id}/pay", data={"instrument_id": etransfer.id, "tip_mode": "20", "pay_token": _tok()})
 check(r.status_code == 200, "seat 3 settles by E-transfer")
 
 db.expire_all()
@@ -802,7 +809,7 @@ pd_steak = next(i for i in pd_o.items if i.menu_item_id == steak.id)
 serve(pd_oid)
 client.post(f"/orders/{pd_oid}/seats/{pd_seat1.id}/pay",
             data={"instrument_id": visa.id, "tip_mode": "none",
-                  "partial": "1", "item_ids": pd_steak.id})
+                  "partial": "1", "item_ids": pd_steak.id, "pay_token": _tok()})
 db.expire_all()
 pd_o = db.get(Order, pd_oid)
 check(pd_o.status == "partially_paid", "destination table is partially paid", pd_o.status)
@@ -1078,7 +1085,7 @@ seat1 = next(s for s in sp_o.seats if s.seat_number == 1)
 client.post(f"/orders/{sp_oid}/items/{sp_o.items[0].id}/assign", data={"seat_number": 1})
 serve(sp_oid)
 client.post(f"/orders/{sp_oid}/seats/{seat1.id}/pay",
-            data={"instrument_id": visa.id, "tip_mode": "none", "partial": "1"})
+            data={"instrument_id": visa.id, "tip_mode": "none", "partial": "1", "pay_token": _tok()})
 r = client.post(f"/orders/{sp_oid}/reset-split")
 check(r.status_code == 400, "a split can't be reset once a payment has landed")
 # Tidy up: void then cancel.
@@ -1166,7 +1173,8 @@ bread_item = next(i for i in order2.items if i.menu_item_id == bread.id and i.se
 serve(order2_id)
 r = client.post(
     f"/orders/{order2_id}/seats/{seat_a.id}/pay",
-    data={"instrument_id": visa.id, "tip_mode": "15", "partial": "1", "item_ids": steak_item.id},
+    data={"instrument_id": visa.id, "tip_mode": "15", "partial": "1",
+          "item_ids": steak_item.id, "pay_token": _tok()},
 )
 check(r.status_code == 200, "departing guest pays only their ticked item")
 

@@ -59,9 +59,12 @@ def _approved_ext(db, ids, *, expected=1000, pamt=None, pcur="CAD", key=None, it
 
 
 def _factory(db, ids, amount):
+    # Build a Payment consistent with a zero-extras attempt snapshot (base == total,
+    # no tip/discount/service/tax/surcharge) so the local-snapshot invariant holds for
+    # manual settlements; external tests skip that check (evidence-based instead).
     def make():
         p = Payment(order_id=ids["order_id"], instrument_id=ids["instrument_id"],
-                    staff_id=ids["staff_id"], total_cents=amount)
+                    staff_id=ids["staff_id"], items_cents=amount, total_cents=amount)
         db.add(p)
         return p
     return make

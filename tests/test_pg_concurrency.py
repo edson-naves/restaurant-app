@@ -15,10 +15,15 @@ import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tests._pay_fixture import Session, fresh_schema, make_engine, pg_dsn, seed_parents
+from tests._pay_fixture import Session, fresh_schema, make_engine, pg_dsn, seed_charge, seed_parents
 
-from app.models.oltp import Payment, PaymentAttempt, PaymentAttemptStatus as S, RefundAttempt
+from app.models.oltp import (
+    Order, Payment, PaymentAllocation, PaymentAttempt, PaymentAttemptStatus as S,
+    RefundAttempt, Seat,
+)
+from app.services import charge
 from app.services import payment_attempts as pa
+from app.services import payments as pay_svc
 from app.services import refund_attempts as ra
 from app.services import settlement as settle
 
@@ -180,9 +185,12 @@ def _approved_ext(db, ids, key):
 
 
 def _pay_factory(db, ids):
+    # Snapshot-consistent with the _approved_ext attempts (expected_total 1000, no
+    # tax/tip/service/discount/surcharge) so the external local-booking check passes
+    # and the CAS/converge path is what these tests exercise.
     def make():
         p = Payment(order_id=ids["order_id"], instrument_id=ids["instrument_id"],
-                    staff_id=ids["staff_id"], total_cents=1000)
+                    staff_id=ids["staff_id"], items_cents=1000, total_cents=1000)
         db.add(p)
         return p
     return make
@@ -280,6 +288,49 @@ def test_one_settlement_per_attempt(engine, ids):
     check(raised, "one Payment can back at most one settled attempt")
 
 
+def test_concurrent_duplicate_token_one_payment(engine, _ids):
+    """Slice-2a review P1: N concurrent POSTs of the SAME seat form (same request
+    idempotency token) settle at most one Payment. The UNIQUE(idempotency_key)
+    collapses them to one durable attempt; pay_seat's order-row lock + the settle CAS
+    collapse them to one Payment. Losers either converge on that Payment or refuse
+    with an explicit typed error — never a second charge, never an unhandled error."""
+    Sess = Session(engine)
+    s = Sess()
+    sc = seed_charge(s)
+    s.close()
+
+    def submit(_i):
+        db = Sess()
+        try:
+            order = db.get(Order, sc.order_id)
+            seat = db.get(Seat, sc.seat_id)
+
+            def factory():
+                return pay_svc.pay_seat(db, order, seat, instrument_id=sc.instrument_id,
+                                        staff_id=sc.staff_id, item_ids=[sc.item_id])
+            res, _a = charge.settle_manual_charge(
+                db, order, seat, staff_id=sc.staff_id, instrument_id=sc.instrument_id,
+                base_cents=1000, selected_item_ids=[sc.item_id], payment_factory=factory,
+                idempotency_key="same-token")
+            return res.payment.id
+        finally:
+            db.close()
+
+    results = _run_concurrently(submit, 8)
+    settled = {r[1] for r in results if r[0] == "ok"}
+    bad = [r[1] for r in results
+           if r[0] == "err" and not isinstance(r[1], (pay_svc.PaymentError, pa.PaymentAttemptError))]
+    check(not bad, f"no unhandled errors under concurrent duplicate token ({bad[:1]})")
+    check(len(settled) <= 1, "all successful duplicate submits resolve to one Payment")
+    verify = Sess()
+    check(verify.query(Payment).filter_by(order_id=sc.order_id).count() == 1,
+          "exactly one Payment persisted across 8 duplicate POSTs")
+    check(verify.query(PaymentAttempt).filter_by(idempotency_key="same-token").count() == 1,
+          "exactly one durable attempt for the shared token")
+    check(verify.query(PaymentAllocation).count() == 1, "exactly one allocation (no double-charge)")
+    verify.close()
+
+
 if __name__ == "__main__":
     if not pg_dsn():
         print("SKIP: PG_TEST_DSN not set (Postgres concurrency tests not run)")
@@ -295,6 +346,7 @@ if __name__ == "__main__":
         test_one_settlement_per_attempt,
         test_settlement_cas_converges_on_winner,
         test_settlement_cas_reraises_on_non_winner,
+        test_concurrent_duplicate_token_one_payment,
     ]
     for fn in tests:
         print(f"- {fn.__name__}")

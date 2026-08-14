@@ -301,6 +301,61 @@ def _card_surcharge(instrument: PaymentInstrument, rate: float, base_cents: int)
     return 0
 
 
+@dataclass(frozen=True)
+class ChargeBreakdown:
+    """The full money breakdown of one charge, from a payable subtotal. Single
+    source of truth shared by ``pay_seat`` (which books it) and the attempt
+    snapshot (which captures it), so the durable intent and the booked Payment are
+    computed by identical arithmetic — any divergence is a real state/config drift,
+    never a formula skew.
+
+    ``expected_total_cents`` is the **pre-tip** amount (what a processor authorizes);
+    ``total_cents`` adds the tip (the final charged amount)."""
+    items_cents: int          # payable subtotal, pre-discount / pre-tip
+    discount_cents: int       # clamped to items_cents
+    tax_cents: int
+    service_charge_cents: int
+    card_surcharge_cents: int
+    tip_cents: int
+
+    @property
+    def expected_total_cents(self) -> int:
+        return (self.items_cents - self.discount_cents + self.tax_cents
+                + self.service_charge_cents + self.card_surcharge_cents)
+
+    @property
+    def total_cents(self) -> int:
+        return self.expected_total_cents + self.tip_cents
+
+
+def compute_breakdown(
+    db: Session,
+    instrument: PaymentInstrument,
+    *,
+    items_cents: int,
+    tip_cents: int = 0,
+    service_charge_cents: int = 0,
+    card_surcharge_rate: float = 0.0,
+    discount_cents: int = 0,
+) -> ChargeBreakdown:
+    """Derive the full charge breakdown from a payable subtotal, applying the venue
+    tax config and the card-surcharge rule exactly as ``pay_seat`` books it (4.2.6).
+    Discount is clamped to the subtotal. Pure w.r.t. the DB except reading tax config."""
+    if discount_cents:
+        discount_cents = min(discount_cents, items_cents)
+    gst_cents, pst_cents = _taxes(db, items_cents - discount_cents)
+    tax_cents = gst_cents + pst_cents
+    card_surcharge_cents = _card_surcharge(
+        instrument, card_surcharge_rate,
+        items_cents - discount_cents + tax_cents + service_charge_cents,
+    )
+    return ChargeBreakdown(
+        items_cents=items_cents, discount_cents=discount_cents, tax_cents=tax_cents,
+        service_charge_cents=service_charge_cents, card_surcharge_cents=card_surcharge_cents,
+        tip_cents=tip_cents,
+    )
+
+
 def active_payments(order: Order) -> list[Payment]:
     """Payments that still count — voided ones are kept for the record only."""
     return [p for p in order.payments if not p.voided]
@@ -329,6 +384,34 @@ def _lock_order(db: Session, order: Order) -> None:
     the guarantee holds there too.
     """
     db.execute(select(Order.id).where(Order.id == order.id).with_for_update()).first()
+
+
+def locked_seat_payable(
+    db: Session, order: Order, seat: Seat, *, item_ids: list[int] | None = None
+) -> tuple[list[int], int]:
+    """Take the order-row lock and return the seat's authoritative payable —
+    ``(selected_item_ids, base_cents)`` over served, still-outstanding lines
+    (optionally restricted to ``item_ids``) — from freshly locked state.
+
+    Used to snapshot a terminal charge intent under a short phase-1 lock
+    (slice-2b v-fix #1), so two tablets can't price the same seat from stale reads.
+    The CALLER must commit/rollback to release the lock. Raises ``PaymentError`` if
+    the seat has nothing served to charge."""
+    _lock_order(db, order)
+    ledgers, _ = build_ledgers(db, order)
+    ledger = ledgers.get(seat.id)
+    if ledger is None:
+        raise PaymentError(f"Seat {seat.seat_number} is not part of this order.")
+    served_ids = {i.id for i in order.items if i.kitchen_status == KitchenStatus.SERVED}
+    wanted = set(item_ids) if item_ids else None
+    lines = [
+        l for l in ledger.lines
+        if l.item.id in served_ids and l.outstanding_cents > 0
+        and (wanted is None or l.item.id in wanted)
+    ]
+    if not lines:
+        raise PaymentError("No served items to charge on this seat yet.")
+    return [l.item.id for l in lines], sum(l.outstanding_cents for l in lines)
 
 
 def pay_seat(
@@ -379,22 +462,22 @@ def pay_seat(
 
     items_cents = sum(l.outstanding_cents for l in lines)
 
-    if discount_cents:
-        if discount_approved_by_id is None:
-            # Section 4.2.6 — discounts require manager approval.
-            raise PaymentError("A discount requires manager approval.")
-        discount_cents = min(discount_cents, items_cents)
+    if discount_cents and discount_approved_by_id is None:
+        # Section 4.2.6 — discounts require manager approval.
+        raise PaymentError("A discount requires manager approval.")
 
-    gst_cents, pst_cents = _taxes(db, items_cents - discount_cents)
-    tax_cents = gst_cents + pst_cents
-    # 4.2.6 — a card surcharge is charged only on card tenders, on the pre-tip
-    # bill (items - discount + tax + service charge). Cash is never surcharged.
-    card_surcharge_cents = _card_surcharge(
-        instrument, card_surcharge_rate,
-        items_cents - discount_cents + tax_cents + service_charge_cents,
+    # 4.2.6 — one breakdown formula (items - discount + tax + tip + service +
+    # surcharge), shared with the durable-attempt snapshot so intent and booked
+    # Payment agree by construction. Cash is never surcharged.
+    bd = compute_breakdown(
+        db, instrument, items_cents=items_cents, tip_cents=tip_cents,
+        service_charge_cents=service_charge_cents, card_surcharge_rate=card_surcharge_rate,
+        discount_cents=discount_cents,
     )
-    total_cents = (items_cents - discount_cents + tax_cents + tip_cents
-                   + service_charge_cents + card_surcharge_cents)
+    discount_cents = bd.discount_cents
+    tax_cents = bd.tax_cents
+    card_surcharge_cents = bd.card_surcharge_cents
+    total_cents = bd.total_cents
     if total_cents < 0:
         raise PaymentError("Payment total cannot be negative.")
 

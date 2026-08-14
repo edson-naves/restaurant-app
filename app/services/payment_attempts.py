@@ -296,6 +296,7 @@ def transition(
     payment_id: int | None = None,
     processor_amount_cents: int | None = None,
     processor_currency: str | None = None,
+    processor_tip_cents: int | None = None,
     last_error: str | None = None,
     commit: bool = True,
     _from_resolver: bool = False,
@@ -339,6 +340,7 @@ def transition(
         ("payment_id", payment_id),
         ("processor_amount_cents", processor_amount_cents),
         ("processor_currency", processor_currency),
+        ("processor_tip_cents", processor_tip_cents),
     ):
         if val is not None:
             values[field] = val

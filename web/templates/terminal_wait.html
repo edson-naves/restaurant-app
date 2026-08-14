@@ -84,6 +84,10 @@
         } else if (d.state === "canceled") {
           stopped = true;
           fail("Payment canceled", "The customer canceled on the terminal. Nothing was charged.");
+        } else if (d.state === "reconciling") {
+          stopped = true;
+          fail("Payment is being verified", d.message ||
+               "Do not charge again — check the payments list.");
         } else if (d.state === "error") {
           stopped = true;
           fail("Terminal error", d.message || "Something went wrong. Try again.");

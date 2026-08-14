@@ -19,7 +19,10 @@ from sqlalchemy.orm import sessionmaker
 
 from app.database import Base
 from app.models import oltp  # noqa: F401  register tables
-from app.models.oltp import Channel, Order, Payment, PaymentInstrument, Staff
+from app.models.oltp import (
+    Channel, KitchenStatus, MenuCategory, MenuItem, Order, OrderItem, Payment,
+    PaymentInstrument, Seat, Staff,
+)
 
 
 def pg_dsn() -> str | None:
@@ -95,3 +98,46 @@ def seed_parents(session) -> dict:
     session.commit()
     return {"staff_id": staff.id, "order_id": order.id,
             "payment_id": payment.id, "instrument_id": inst.id}
+
+
+class ChargeScenario:
+    """A minimal live-charge scenario: one order, one seat, `n_items` SERVED items
+    (each priced `price_cents`), a cash/manual instrument and an owner. Objects are
+    re-fetched per test session as needed. `item_id`/`item` are the first item, for
+    the common single-item case; `item_ids` lists them all."""
+    def __init__(self, order, seat, items, instrument_id, staff_id):
+        self.order = order
+        self.seat = seat
+        self.item = items[0]
+        self.order_id = order.id
+        self.seat_id = seat.id
+        self.item_id = items[0].id
+        self.item_ids = [i.id for i in items]
+        self.instrument_id = instrument_id
+        self.staff_id = staff_id
+
+
+def seed_charge(session, *, price_cents: int = 1000, n_items: int = 1) -> ChargeScenario:
+    staff = Staff(name="Owner", role="owner", pin_code="pbkdf2_sha256$1$x$y")
+    channel = Channel(code=f"ch_{uuid.uuid4().hex[:6]}", name="Dine", channel_type="dine_in")
+    cat = MenuCategory(name=f"Cat_{uuid.uuid4().hex[:6]}")
+    session.add_all([staff, channel, cat])
+    session.flush()
+    mi = MenuItem(category_id=cat.id, name="Burger", price_cents=price_cents)
+    inst = PaymentInstrument(code=f"cash_{uuid.uuid4().hex[:6]}", name="Cash",
+                             instrument_type="cash", provider="manual")
+    order = Order(code=f"O{uuid.uuid4().hex[:8]}", channel_id=channel.id)
+    session.add_all([mi, inst, order])
+    session.flush()
+    seat = Seat(order_id=order.id, seat_number=1)
+    session.add(seat)
+    session.flush()
+    items = [
+        OrderItem(order_id=order.id, menu_item_id=mi.id, seat_id=seat.id,
+                  unit_price_cents=price_cents, quantity=1, kitchen_status=KitchenStatus.SERVED)
+        for _ in range(n_items)
+    ]
+    session.add_all(items)
+    session.flush()
+    session.commit()
+    return ChargeScenario(order, seat, items, inst.id, staff.id)

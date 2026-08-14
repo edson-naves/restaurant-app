@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -16,6 +17,8 @@ from app.models.oltp import (
     OrderItem,
     OrderStatus,
     Payment,
+    PaymentAttempt,
+    PaymentAttemptStatus,
     PaymentInstrument,
     Receipt,
     ReceiptDelivery,
@@ -23,8 +26,13 @@ from app.models.oltp import (
     Seat,
     Staff,
 )
+from app.services import charge
+from app.services import payment_attempts as pa
 from app.services import receipt_delivery
 from app.services import refunds
+from app.services.charge import settle_manual_charge
+from app.services.payment_providers import get_provider
+from app.services.settlement import SettlementDrift
 from app.services import settings as settings_svc
 from app.services import square
 from app.services.money import money, pct
@@ -190,6 +198,14 @@ def payment_screen(
         "unassigned": unassigned, "panel": panel, "instruments": usable,
         "cash_instruments": cash_instruments, "card_instruments": card_instruments,
         "managers": managers,
+        # 4.2.4 — one server-issued idempotency token per seat pay-form (bound to the
+        # intent by the attempt fingerprint on submit). Fresh per render, so a PRG
+        # after a successful settle rotates it; a double-submit reuses it.
+        "pay_tokens": {s.id: secrets.token_urlsafe(16) for s in order.seats},
+        # A separate token per seat for the card-terminal form — a terminal charge is
+        # a distinct payment intent (different provider) from the manual form, so it
+        # must not share the manual token (Stage 2c slice-2b).
+        "pay_tokens_terminal": {s.id: secrets.token_urlsafe(16) for s in order.seats},
         "settled": settled, "refundable": refundable, "refunded": refunded,
         "tax_cfg": settings_svc.tax_config(db),
         # 4.2.6 — auto-gratuity for large parties; the template pre-selects it.
@@ -325,10 +341,18 @@ def take_seat_payment(
     discount_pct: int = Form(0),
     approved_by_id: int = Form(None),
     card_last4: str = Form(""),
+    pay_token: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("payments.take")),
 ):
     """4.2.4 / 4.2.5 — settle a seat, optionally only the ticked items."""
+    # v4 review #3: a live money endpoint must carry a real per-request idempotency
+    # token — no blank-token bypass. The pay screen always renders one; a missing,
+    # blank, or oversized token (idempotency_key is VARCHAR(64)) is a bad request.
+    pay_token = (pay_token or "").strip()
+    if not pay_token or len(pay_token) > 64:
+        raise HTTPException(422, "A valid payment idempotency token is required.")
+
     order = _load(db, order_id)
     _require_served(order)
     seat = db.get(Seat, seat_id)
@@ -361,15 +385,21 @@ def take_seat_payment(
     # 4.2.6 — mandatory service charge on the net items being paid.
     service_charge_cents = pct(base - discount_cents, settings_svc.service_charge_rate(db))
     approver_id = _discount_approver_id(db, staff, approved_by_id, discount_cents > 0)
+    card_surcharge_rate = settings_svc.card_surcharge_rate(db)
 
-    try:
-        payment = pay_seat(
+    # Stage 2c slice 2a: the manual/cash charge now runs through the durable
+    # PaymentAttempt lifecycle + settlement, with pay_seat as the no-commit core
+    # (it locks the order row and mutates Payment + allocations + seat with flush
+    # only). settle_manual_charge commits the attempt first, then settles Payment +
+    # allocations + seat state + attempt->SETTLED atomically in one outer commit.
+    def _factory():
+        return pay_seat(
             db, order, seat,
             instrument_id=instrument_id,
             staff_id=staff.id,
             tip_cents=max(0, tip_cents),
             service_charge_cents=max(0, service_charge_cents),
-            card_surcharge_rate=settings_svc.card_surcharge_rate(db),
+            card_surcharge_rate=card_surcharge_rate,
             item_ids=selected,
             discount_cents=discount_cents,
             discount_approved_by_id=approver_id,
@@ -377,10 +407,30 @@ def take_seat_payment(
             card_last4=(card_last4.strip()[-4:] or None) if card_last4.strip() else None,
             is_partial_close=bool(partial),
         )
+
+    try:
+        result, _attempt = settle_manual_charge(
+            db, order, seat,
+            staff_id=staff.id,
+            instrument_id=instrument_id,
+            base_cents=base,
+            selected_item_ids=selected,
+            payment_factory=_factory,
+            tip_cents=max(0, tip_cents),
+            service_charge_cents=max(0, service_charge_cents),
+            discount_cents=discount_cents,
+            card_surcharge_rate=card_surcharge_rate,
+            idempotency_key=pay_token,
+        )
+    except SettlementDrift:
+        # The bill changed under the order lock between rendering the pay screen and
+        # this submit — re-check the items and retry (409, no money moved).
+        raise HTTPException(409, "The bill changed while you were paying; "
+                                 "please re-check the items and settle again.")
     except PaymentError as e:
         raise HTTPException(400, str(e))
 
-    db.commit()
+    payment = result.payment
     # Pop the receipt as a modal over the pay screen (closing it returns here
     # for the next seat), rather than a full-page redirect away.
     return RedirectResponse(
@@ -420,58 +470,60 @@ def start_terminal_payment(
     seat_id: int,
     item_ids: list[int] = Form(default=[]),
     partial: str = Form(""),
+    pay_token: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("payments.take")),
 ):
-    """Send the seat's served balance to the card terminal for the customer to
-    pay + tip on. Returns a waiting page that polls for the result."""
+    """Send the seat's served balance to the card terminal for the customer to pay +
+    tip on, through the durable PaymentAttempt lifecycle (Stage 2c slice-2b): the
+    attempt is committed BEFORE the Square call and keyed by the request token so a
+    double-submit reuses one attempt and cannot double-charge. Returns a waiting page
+    that polls for the result."""
     if not square.is_configured():
         raise HTTPException(400, "No card terminal is set up.")
+    pay_token = (pay_token or "").strip()
+    if not pay_token or len(pay_token) > 64:
+        raise HTTPException(422, "A valid payment idempotency token is required.")
+
     order = _load(db, order_id)
     _require_served(order)
     seat = db.get(Seat, seat_id)
     if seat is None or seat.order_id != order.id:
         raise HTTPException(404, "Seat not found")
 
-    ledgers, _ = build_ledgers(db, order)
-    ledger = ledgers.get(seat.id)
-    if ledger is None:
-        raise HTTPException(404, "Seat has no ledger")
-
-    served_ids = {i.id for i in order.items if i.kitchen_status == KitchenStatus.SERVED}
-    wanted = set(item_ids) if item_ids else None
-    lines = [
-        l for l in ledger.lines
-        if l.item.id in served_ids and l.outstanding_cents > 0
-        and (wanted is None or l.item.id in wanted)
-    ]
-    if not lines:
-        raise HTTPException(400, "No served items to charge on this seat yet.")
-
-    base = sum(l.outstanding_cents for l in lines)
-    svc_cents = pct(base, settings_svc.service_charge_rate(db))
-    cfg = settings_svc.tax_config(db)
-    tax_cents = pct(base, cfg.gst_rate) + pct(base, cfg.pst_rate)
-    # A terminal payment is a card tender, so the card surcharge applies (on the
-    # pre-tip bill). The terminal adds the customer's tip on top of all this.
-    surcharge_cents = pct(base + tax_cents + svc_cents, settings_svc.card_surcharge_rate(db))
-    amount = base + tax_cents + svc_cents + surcharge_cents
-
-    selected = [l.item.id for l in lines]
     table = order.table.number if order.table else "—"
+    inst = _terminal_instrument(db)
+    # The authoritative payable snapshot is recomputed under a short phase-1 order
+    # lock inside start_terminal_attempt (slice-2b v-fix #1), so we pass the raw
+    # item filter + the service-charge rate rather than a pre-locked amount.
     try:
-        checkout = square.create_checkout(
-            amount,
-            reference_id=f"O{order.id}S{seat.id}",
+        attempt, result = charge.start_terminal_attempt(
+            db, order, seat,
+            staff_id=staff.id, instrument_id=inst.id,
+            item_ids=(item_ids or None),
+            service_charge_rate=settings_svc.service_charge_rate(db),
+            card_surcharge_rate=settings_svc.card_surcharge_rate(db),
+            idempotency_key=pay_token,
+            reference=f"O{order.id}S{seat.id}",
             note=f"Table {table} · Seat {seat.seat_number} · {order.code}",
         )
-    except square.SquareError as e:
-        raise HTTPException(502, f"Card terminal error: {e}")
+    except pa.IdempotencyConflict:
+        raise HTTPException(409, "This card payment was already started with different "
+                                 "items — reload the pay screen and try again.")
+    except PaymentError as e:
+        raise HTTPException(400, str(e))
 
-    items_q = ",".join(str(i) for i in selected)
+    if result.status == PaymentAttemptStatus.FAILED:
+        raise HTTPException(402, f"Card declined: {result.error}")
+    if attempt.provider_checkout_id is None:
+        # Ambiguous submission (transport/config) — parked for reconciliation; do not
+        # pretend a terminal is waiting.
+        raise HTTPException(502, "The card terminal could not be reached; the payment "
+                                 "is being verified — check the payments list before retrying.")
+
     url = (
-        f"/orders/{order.id}/seats/{seat.id}/terminal/{checkout['id']}"
-        f"?items={items_q}&partial={'1' if partial else ''}"
+        f"/orders/{order.id}/seats/{seat.id}/terminal/{attempt.provider_checkout_id}"
+        f"?partial={'1' if partial else ''}"
     )
     return RedirectResponse(url, status_code=303)
 
@@ -499,6 +551,20 @@ def terminal_wait(
     })
 
 
+def _terminal_attempt(db: Session, checkout_id: str, order_id: int, seat_id: int) -> PaymentAttempt | None:
+    """The square_terminal attempt for this checkout, scoped to the URL's order + seat
+    + provider, so a poll/cancel can never reach another order's or seat's attempt
+    (slice-2b v-fix #4)."""
+    return db.execute(
+        select(PaymentAttempt).where(
+            PaymentAttempt.provider == "square_terminal",
+            PaymentAttempt.provider_checkout_id == checkout_id,
+            PaymentAttempt.order_id == order_id,
+            PaymentAttempt.seat_id == seat_id,
+        )
+    ).scalars().first()
+
+
 @router.get("/orders/{order_id}/seats/{seat_id}/terminal/{checkout_id}/status")
 def terminal_status(
     order_id: int,
@@ -509,72 +575,48 @@ def terminal_status(
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("payments.take")),
 ):
-    """Polled by the waiting page. Reports the terminal's progress and, on
-    completion, records the payment with the real tip and card last-4.
-
-    Idempotent: once the seat's chosen items are settled, a repeat poll finds
-    nothing outstanding and simply reports done — no second payment.
+    """Polled by the waiting page. Drives the durable attempt forward from a fresh
+    Square poll (Stage 2c slice-2b): on completion it records the processor evidence
+    and settles into one Payment with the terminal-confirmed tip; ambiguous or drifted
+    outcomes park for reconciliation. Idempotent — a repeat poll after settlement just
+    reports done.
     """
     order = _load(db, order_id)
     seat = db.get(Seat, seat_id)
     if seat is None or seat.order_id != order.id:
         raise HTTPException(404, "Seat not found")
 
-    try:
-        checkout = square.get_checkout(checkout_id)
-    except square.SquareError as e:
-        return JSONResponse({"state": "error", "message": str(e)})
+    attempt = _terminal_attempt(db, checkout_id, order.id, seat.id)
+    if attempt is None:
+        return JSONResponse({"state": "error", "message": "Unknown terminal checkout."})
 
-    status = checkout.get("status")
-    if status == square.CANCELED:
-        return JSONResponse({"state": "canceled"})
-    if status != square.COMPLETED:
-        return JSONResponse({"state": "pending", "status": status})
+    if attempt.status == PaymentAttemptStatus.SETTLED:
+        return JSONResponse({"state": "done",
+                             "receipt_url": f"/orders/{order.id}/pay?receipt={attempt.payment_id}"})
 
-    # Completed on the machine — settle the chosen served items on our side.
-    wanted = {int(x) for x in items.split(",") if x.strip().isdigit()}
-    served_ids = {i.id for i in order.items if i.kitchen_status == KitchenStatus.SERVED}
-    payable = [
-        i.id for i in order.items
-        if i.id in served_ids and i.id in wanted
-        and i.line_total_cents - sum(a.amount_cents for a in i.allocations) > 0
-    ]
-    if not payable:
-        # Already recorded by an earlier poll — find that receipt to hand back.
-        pay = _latest_terminal_payment(order, seat)
-        rid = pay.id if pay else ""
-        return JSONResponse({"state": "done", "receipt_url":
-                             f"/orders/{order.id}/pay?receipt={rid}" if rid
-                             else f"/orders/{order.id}/pay"})
-
-    tip_cents, brand, last4 = square.tip_and_card(checkout)
-    svc_cents = pct(
-        sum(i.line_total_cents - sum(a.amount_cents for a in i.allocations)
-            for i in order.items if i.id in set(payable)),
-        settings_svc.service_charge_rate(db),
-    )
+    result = get_provider("square_terminal").poll(checkout_id)
     inst = _terminal_instrument(db)
-    try:
-        payment = pay_seat(
-            db, order, seat,
-            instrument_id=inst.id,
-            staff_id=staff.id,
-            tip_cents=tip_cents,
-            service_charge_cents=svc_cents,
-            card_surcharge_rate=settings_svc.card_surcharge_rate(db),
-            item_ids=payable,
-            card_last4=last4,
-            card_brand=brand,
-            is_partial_close=bool(partial),
-        )
-    except PaymentError as e:
-        return JSONResponse({"state": "error", "message": str(e)})
-    db.commit()
-    return JSONResponse({
-        "state": "done",
-        "tip_cents": tip_cents,
-        "receipt_url": f"/orders/{order.id}/pay?receipt={payment.id}",
-    })
+    outcome = charge.advance_terminal_attempt(
+        db, order, seat, attempt, result,
+        staff_id=staff.id, instrument_id=inst.id,
+        card_surcharge_rate=settings_svc.card_surcharge_rate(db),
+        is_partial=bool(partial),
+    )
+
+    state = outcome["state"]
+    if state == "done":
+        return JSONResponse({
+            "state": "done",
+            "tip_cents": outcome.get("tip_cents"),
+            "receipt_url": f"/orders/{order.id}/pay?receipt={outcome['payment_id']}",
+        })
+    if state == "reconciling":
+        return JSONResponse({"state": "reconciling", "message":
+                             "The payment is being verified — check the payments list "
+                             "before charging again."})
+    if state == "canceled":
+        return JSONResponse({"state": "canceled"})
+    return JSONResponse({"state": "pending", "status": outcome.get("status", "")})
 
 
 def _latest_terminal_payment(order: Order, seat: Seat) -> Payment | None:
@@ -596,11 +638,25 @@ def terminal_cancel(
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("payments.take")),
 ):
-    """Cancel a still-pending terminal checkout and return to the pay screen."""
-    try:
-        square.cancel_checkout(checkout_id)
-    except square.SquareError:
-        pass  # already terminal (completed/canceled) — nothing to undo
+    """Cancel a still-pending terminal checkout and return to the pay screen. The
+    durable attempt follows the cancel: a confirmed CANCELED moves it to CANCELLED; an
+    ambiguous cancel (Square may have completed) parks it for reconciliation (#9/#10)."""
+    attempt = _terminal_attempt(db, checkout_id, order_id, seat_id)
+    outcome = get_provider("square_terminal").cancel(provider_checkout_id=checkout_id)
+    if attempt is not None:
+        db.refresh(attempt)  # react to current DB truth, not a stale read
+        if attempt.status in (PaymentAttemptStatus.CREATED, PaymentAttemptStatus.PROCESSOR_PENDING):
+            try:
+                if outcome.ok:
+                    pa.transition(db, attempt, PaymentAttemptStatus.CANCELLED,
+                                  last_error="canceled on the terminal")
+                elif outcome.requires_reconciliation:
+                    pa.transition(db, attempt, PaymentAttemptStatus.REQUIRES_RECONCILIATION,
+                                  last_error=f"ambiguous cancel: {outcome.error}")
+            except pa.TransitionConflict:
+                # A concurrent poll approved/settled it first — the cancel lost the
+                # CAS race and must NOT overwrite the approval evidence (v-fix #5).
+                pass
     return RedirectResponse(f"/orders/{order_id}/pay", status_code=303)
 
 

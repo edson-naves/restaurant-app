@@ -1091,6 +1091,11 @@ class PaymentAttempt(Base):
     # the processor charged what the local snapshot expected.
     processor_amount_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
     processor_currency: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    # Processor-confirmed tip (slice-2b v-fix #2). Unlike the pre-tip snapshot, the
+    # tip is added by the guest ON the terminal, so it is authoritative processor
+    # evidence — persisted write-once with the PROCESSOR_APPROVED transition so a
+    # crash/restart after approval recovers the real tip rather than inferring zero.
+    processor_tip_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     status: Mapped[str] = mapped_column(
         String(30), nullable=False, default=PaymentAttemptStatus.CREATED

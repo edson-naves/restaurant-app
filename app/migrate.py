@@ -92,6 +92,7 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("payment_attempt", "intent_fingerprint", "VARCHAR(64) NOT NULL DEFAULT ''"),
     ("payment_attempt", "processor_amount_cents", "INTEGER"),
     ("payment_attempt", "processor_currency", "VARCHAR(3)"),
+    ("payment_attempt", "processor_tip_cents", "INTEGER"),
     ("payment_attempt", "reconciled_at", "TIMESTAMP"),
     ("payment_attempt", "reconciled_by", "VARCHAR(60) NOT NULL DEFAULT ''"),
     ("payment_attempt", "reconciliation_note", "VARCHAR(300) NOT NULL DEFAULT ''"),
