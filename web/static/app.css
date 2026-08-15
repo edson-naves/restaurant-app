@@ -3,7 +3,7 @@
   /* Bright & modern — a clean light palette (blue / cyan / green). Every
      surface, text and status colour reads from these tokens. */
   --bg: #f8fafc;        /* app background */
-  --panel: #f0e9d8;     /* cards */
+  --panel: #faf7f0;     /* cards */
   --panel-2: #f1f5f9;   /* inputs, chips, secondary surfaces */
   --line: #e5e7eb;      /* borders */
   --ink: #0f172a;       /* primary text */
