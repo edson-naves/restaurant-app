@@ -70,23 +70,25 @@ def suggest_upsells(db: Session, order: Order, limit: int = 2) -> list[MenuItem]
     current_ids = {i.menu_item_id for i in order.items}
     have_cats = {i.menu_item.category_id for i in order.items if i.menu_item}
 
-    ranked: list[int] = []
-    seen: set[int] = set()
-    for source in (_cooccurrence_ids(db, order, current_ids, limit * 5),
-                   _popular_ids(db, limit * 10)):
-        for mid in source:
-            if mid not in seen and mid not in current_ids:
-                seen.add(mid)
-                ranked.append(mid)
+    def _orderable_items(ids: list[int], exclude: set[int]) -> list[MenuItem]:
+        ids = [i for i in ids if i not in exclude]
+        if not ids:
+            return []
+        by_id = {mi.id: mi for mi in db.execute(
+            select(MenuItem).where(MenuItem.id.in_(ids))
+        ).scalars()}
+        return [by_id[i] for i in ids if i in by_id and _orderable(by_id[i])]
+
+    # Co-occurrence first — the smart signal. Only fall back to the whole-table
+    # "popular" query when it doesn't fill up (keeps the hot order screen cheap).
+    ranked = _orderable_items(_cooccurrence_ids(db, order, current_ids, limit * 5), current_ids)
+    if len(ranked) < limit:
+        have = current_ids | {mi.id for mi in ranked}
+        ranked += _orderable_items(_popular_ids(db, limit * 10), have)
     if not ranked:
         return []
 
-    by_id = {mi.id: mi for mi in db.execute(
-        select(MenuItem).where(MenuItem.id.in_(ranked))
-    ).scalars()}
-    orderable = [by_id[mid] for mid in ranked if mid in by_id and _orderable(by_id[mid])]
-
     # Prefer a suggestion that fills a course/category the table doesn't have yet.
-    gap = [mi for mi in orderable if mi.category_id not in have_cats]
-    rest = [mi for mi in orderable if mi.category_id in have_cats]
+    gap = [mi for mi in ranked if mi.category_id not in have_cats]
+    rest = [mi for mi in ranked if mi.category_id in have_cats]
     return (gap + rest)[:limit]
