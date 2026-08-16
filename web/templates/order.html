@@ -277,12 +277,21 @@ document.addEventListener('click', function(e){
   {# Column 2 — item list #}
   <div class="card pos-list">
     <h2>Menu</h2>
-    {# Data-driven upsell: 1-2 add-ons learned from this venue's order history.
-       One tap adds the item (only simple, in-stock items are ever suggested). #}
+    {# Data-driven upsell: 1-2 add-ons learned from this venue's order history,
+       scoped to the browsed category. Simple items add in one tap; items that
+       need a choice (size, etc.) open the configurator, just like the menu row. #}
     {% if upsells and can('orders.manage') %}
     <div class="upsell-strip">
       <span class="upsell-lead">✨ {% if active_cat_name %}Top in {{ active_cat_name }}{% else %}Suggested{% endif %}</span>
       {% for mi in upsells %}
+      {% if mi.requires_choice %}
+      <a class="upsell-chip" title="Customize {{ mi.name }}"
+         href="/orders/{{ order.id }}?item={{ mi.id }}&seat={{ active_seat }}&category={{ active_cat }}&src=upsell">
+        <span class="upsell-emoji">{{ mi.thumb_emoji }}</span>
+        <span class="upsell-name">{{ mi.name }}</span>
+        <span class="upsell-price">from ${{ mi.price_cents|money }}</span>
+      </a>
+      {% else %}
       <form method="post" action="/orders/{{ order.id }}/items" class="upsell-form">
         <input type="hidden" name="menu_item_id" value="{{ mi.id }}">
         <input type="hidden" name="seat_number" value="{{ active_seat }}">
@@ -294,6 +303,7 @@ document.addEventListener('click', function(e){
           <span class="upsell-price">+${{ mi.price_cents|money }}</span>
         </button>
       </form>
+      {% endif %}
       {% endfor %}
     </div>
     {% endif %}

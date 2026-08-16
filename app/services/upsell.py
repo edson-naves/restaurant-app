@@ -12,7 +12,9 @@ currently browsing, it shows "the top add-on in THIS section for this table"
 Passing ``category_id=None`` gives an order-level suggestion across the menu.
 
 Suggestions are a nudge only: never auto-added, and always filtered to items on
-the menu, in stock, and addable in one tap (no required configurator choice).
+the menu and in stock. Items that need a choice (a pizza size, a scoop flavour)
+are suggested too — the order screen opens the configurator for them instead of
+a one-tap add, so configurator-only categories aren't left blank.
 """
 from __future__ import annotations
 
@@ -23,8 +25,11 @@ from app.models.oltp import MenuItem, Order, OrderItem
 
 
 def _orderable(mi: MenuItem) -> bool:
-    """Addable in one tap: on the menu, in stock, and needs no required choice."""
-    return bool(mi.is_active and mi.available and not mi.requires_choice)
+    """Suggestable: on the menu and in stock. Items that need a choice (size,
+    etc.) are fine — the order screen routes them to the configurator rather
+    than adding in one tap, so whole configurator-only categories (Pizza, Ice
+    Cream) still get suggestions instead of showing nothing."""
+    return bool(mi.is_active and mi.available)
 
 
 def _in_category(category_id: int | None):

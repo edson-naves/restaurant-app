@@ -84,7 +84,7 @@ def test_cooccurrence_learned_from_history():
     db.close()
 
 
-def test_excludes_86_and_required_choice():
+def test_excludes_86_but_offers_configurable():
     db = _db()
     ch, it = _menu(db)
     for _ in range(5):
@@ -96,7 +96,8 @@ def test_excludes_86_and_required_choice():
     db.commit()
     names = [m.name for m in upsell.suggest_upsells(db, cur, limit=4)]
     check("Cola" not in names, "an 86'd item is never suggested")
-    check("Cake" not in names, "an item needing a configurator choice is not one-tap suggested")
+    check("Cake" in names, "a configurator item is still suggested (chip opens the configurator, so a "
+                           "Pizza-like section is never blank)")
     db.close()
 
 
@@ -142,7 +143,7 @@ def test_no_suggestions_on_settled_order():
 
 if __name__ == "__main__":
     for fn in (test_cooccurrence_learned_from_history,
-               test_excludes_86_and_required_choice,
+               test_excludes_86_but_offers_configurable,
                test_cold_start_falls_back_to_popular,
                test_category_scoped_suggestions,
                test_no_suggestions_on_settled_order):
