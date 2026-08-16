@@ -281,7 +281,7 @@ document.addEventListener('click', function(e){
        One tap adds the item (only simple, in-stock items are ever suggested). #}
     {% if upsells and can('orders.manage') %}
     <div class="upsell-strip">
-      <span class="upsell-lead">✨ Suggested</span>
+      <span class="upsell-lead">✨ {% if active_cat_name %}Top in {{ active_cat_name }}{% else %}Suggested{% endif %}</span>
       {% for mi in upsells %}
       <form method="post" action="/orders/{{ order.id }}/items" class="upsell-form">
         <input type="hidden" name="menu_item_id" value="{{ mi.id }}">

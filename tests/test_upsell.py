@@ -113,6 +113,24 @@ def test_cold_start_falls_back_to_popular():
     db.close()
 
 
+def test_category_scoped_suggestions():
+    db = _db()
+    ch, it = _menu(db)
+    # Burger is co-ordered with a drink (Cola) AND a dessert (Cake).
+    for _ in range(5):
+        _order(db, ch, [it["Burger"].id, it["Cola"].id, it["Cake"].id], status="closed")
+    db.commit()
+    cur = _order(db, ch, [it["Burger"].id])
+    db.commit()
+    desserts = it["Cake"].category_id
+    drinks = it["Cola"].category_id
+    d_names = [m.name for m in upsell.suggest_upsells(db, cur, limit=2, category_id=desserts)]
+    check(d_names == ["Cake"], "in the Desserts section only a dessert is suggested (Cake, not Cola)")
+    k_names = [m.name for m in upsell.suggest_upsells(db, cur, limit=2, category_id=drinks)]
+    check("Cola" in k_names and "Cake" not in k_names, "in the Drinks section only a drink is suggested")
+    db.close()
+
+
 def test_no_suggestions_on_settled_order():
     db = _db()
     ch, it = _menu(db)
@@ -126,6 +144,7 @@ if __name__ == "__main__":
     for fn in (test_cooccurrence_learned_from_history,
                test_excludes_86_and_required_choice,
                test_cold_start_falls_back_to_popular,
+               test_category_scoped_suggestions,
                test_no_suggestions_on_settled_order):
         print(f"- {fn.__name__}")
         fn()

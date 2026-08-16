@@ -811,8 +811,10 @@ def order_screen(
         "line_groups": line_groups,
         "day_menus": day_menus, "dm_mods": dm_mods,
         "configuring": configuring,
-        # Data-driven upsell: 1-2 add-ons learned from this venue's order history.
-        "upsells": upsell.suggest_upsells(db, order, limit=2),
+        # Data-driven upsell: 1-2 add-ons learned from this venue's order history,
+        # scoped to the category the waiter is browsing.
+        "upsells": upsell.suggest_upsells(db, order, limit=2, category_id=active_cat),
+        "active_cat_name": next((c.name for c in categories if c.id == active_cat), None),
         "title": f"Order {order.code}",
     })
 

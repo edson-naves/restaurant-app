@@ -2,14 +2,17 @@
 
 Given what's already on an order, surface 1-2 menu items to offer the guest,
 learned from THIS restaurant's own order history (items frequently ordered
-together), with a category-gap fallback for cold-start (a new venue, or a still
-mostly-empty order). No LLM: deterministic, fast, offline, and grounded in real
-sales — the differentiator is that it learns from what actually sells here.
+together), with a popular/category-gap fallback for cold-start. No LLM:
+deterministic, fast, offline, and grounded in real sales — the differentiator is
+that it learns from what actually sells here.
 
-Suggestions are a nudge only: never auto-added, and always filtered to items
-that are on the menu, in stock, and addable in one tap (no required configurator
-choice), so tapping the suggestion just adds it. Allergen-aware filtering is a
-later enhancement — the menu has no per-item allergen tags yet.
+The suggestion is **category-aware**: scoped to the category the waiter is
+currently browsing, it shows "the top add-on in THIS section for this table"
+(e.g. in Desserts, the dessert most often ordered alongside the current items).
+Passing ``category_id=None`` gives an order-level suggestion across the menu.
+
+Suggestions are a nudge only: never auto-added, and always filtered to items on
+the menu, in stock, and addable in one tap (no required configurator choice).
 """
 from __future__ import annotations
 
@@ -24,10 +27,18 @@ def _orderable(mi: MenuItem) -> bool:
     return bool(mi.is_active and mi.available and not mi.requires_choice)
 
 
-def _cooccurrence_ids(db: Session, order: Order, current_ids: set[int], fetch: int) -> list[int]:
+def _in_category(category_id: int | None):
+    """A subquery of menu-item ids in ``category_id``, or None to not filter."""
+    if category_id is None:
+        return None
+    return select(MenuItem.id).where(MenuItem.category_id == category_id).scalar_subquery()
+
+
+def _cooccurrence_ids(db: Session, order: Order, current_ids: set[int], fetch: int,
+                      category_id: int | None = None) -> list[int]:
     """Menu-item ids most often ordered ALONGSIDE the current items, across past
-    orders (this order excluded), best first. Empty for an empty order or no
-    history."""
+    orders (this order excluded), best first — optionally restricted to one
+    category. Empty for an empty order or no history."""
     if not current_ids:
         return []
     past_orders = (
@@ -36,39 +47,41 @@ def _cooccurrence_ids(db: Session, order: Order, current_ids: set[int], fetch: i
         .scalar_subquery()
     )
     together = func.count(distinct(OrderItem.order_id))
-    rows = db.execute(
+    q = (
         select(OrderItem.menu_item_id)
         .where(OrderItem.order_id.in_(past_orders), OrderItem.menu_item_id.not_in(current_ids))
-        .group_by(OrderItem.menu_item_id)
-        .order_by(together.desc())
-        .limit(fetch)
-    ).all()
-    return [r[0] for r in rows]
+    )
+    cat = _in_category(category_id)
+    if cat is not None:
+        q = q.where(OrderItem.menu_item_id.in_(cat))
+    q = q.group_by(OrderItem.menu_item_id).order_by(together.desc()).limit(fetch)
+    return [r[0] for r in db.execute(q).all()]
 
 
-def _popular_ids(db: Session, fetch: int) -> list[int]:
-    """Most-ordered items overall (cold-start / backfill), best first."""
+def _popular_ids(db: Session, fetch: int, category_id: int | None = None) -> list[int]:
+    """Most-ordered items overall (cold-start / backfill), optionally within one
+    category, best first."""
     n = func.count()
-    rows = db.execute(
-        select(OrderItem.menu_item_id)
-        .group_by(OrderItem.menu_item_id)
-        .order_by(n.desc())
-        .limit(fetch)
-    ).all()
-    return [r[0] for r in rows]
+    q = select(OrderItem.menu_item_id)
+    cat = _in_category(category_id)
+    if cat is not None:
+        q = q.where(OrderItem.menu_item_id.in_(cat))
+    q = q.group_by(OrderItem.menu_item_id).order_by(n.desc()).limit(fetch)
+    return [r[0] for r in db.execute(q).all()]
 
 
-def suggest_upsells(db: Session, order: Order, limit: int = 2) -> list[MenuItem]:
+def suggest_upsells(db: Session, order: Order, limit: int = 2,
+                    category_id: int | None = None) -> list[MenuItem]:
     """Up to ``limit`` menu items to offer as add-ons for this order.
 
-    Ranking: co-occurrence (what pairs with the current items here) first, then
-    popular items as backfill; suggestions that fill a *category the order doesn't
-    have yet* (a drink, a dessert, a side) are preferred, to nudge a complete meal.
+    With ``category_id`` set, suggestions are scoped to that category (the section
+    the waiter is browsing). Without it, they span the menu and a suggestion that
+    fills a course/category the order lacks is preferred. Ranking: co-occurrence
+    (what pairs with the current items here) first, then popular as backfill.
     """
     if order.status in ("paid", "closed", "cancelled"):
         return []
     current_ids = {i.menu_item_id for i in order.items}
-    have_cats = {i.menu_item.category_id for i in order.items if i.menu_item}
 
     def _orderable_items(ids: list[int], exclude: set[int]) -> list[MenuItem]:
         ids = [i for i in ids if i not in exclude]
@@ -81,14 +94,19 @@ def suggest_upsells(db: Session, order: Order, limit: int = 2) -> list[MenuItem]
 
     # Co-occurrence first — the smart signal. Only fall back to the whole-table
     # "popular" query when it doesn't fill up (keeps the hot order screen cheap).
-    ranked = _orderable_items(_cooccurrence_ids(db, order, current_ids, limit * 5), current_ids)
+    ranked = _orderable_items(
+        _cooccurrence_ids(db, order, current_ids, limit * 5, category_id), current_ids)
     if len(ranked) < limit:
         have = current_ids | {mi.id for mi in ranked}
-        ranked += _orderable_items(_popular_ids(db, limit * 10), have)
+        ranked += _orderable_items(_popular_ids(db, limit * 10, category_id), have)
     if not ranked:
         return []
 
-    # Prefer a suggestion that fills a course/category the table doesn't have yet.
+    if category_id is not None:
+        return ranked[:limit]        # already scoped to the browsed category
+
+    # Order-level: prefer a suggestion that fills a course the table doesn't have yet.
+    have_cats = {i.menu_item.category_id for i in order.items if i.menu_item}
     gap = [mi for mi in ranked if mi.category_id not in have_cats]
     rest = [mi for mi in ranked if mi.category_id in have_cats]
     return (gap + rest)[:limit]
