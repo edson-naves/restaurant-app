@@ -44,6 +44,7 @@ from app.models.oltp import (
     Zone,
 )
 from app.services import daymenu
+from app.services import upsell
 from app.services.payments import balance_panel, ensure_seats, set_shared_item_shares
 
 router = APIRouter()
@@ -810,6 +811,8 @@ def order_screen(
         "line_groups": line_groups,
         "day_menus": day_menus, "dm_mods": dm_mods,
         "configuring": configuring,
+        # Data-driven upsell: 1-2 add-ons learned from this venue's order history.
+        "upsells": upsell.suggest_upsells(db, order, limit=2),
         "title": f"Order {order.code}",
     })
 

@@ -277,6 +277,26 @@ document.addEventListener('click', function(e){
   {# Column 2 — item list #}
   <div class="card pos-list">
     <h2>Menu</h2>
+    {# Data-driven upsell: 1-2 add-ons learned from this venue's order history.
+       One tap adds the item (only simple, in-stock items are ever suggested). #}
+    {% if upsells and can('orders.manage') %}
+    <div class="upsell-strip">
+      <span class="upsell-lead">✨ Suggested</span>
+      {% for mi in upsells %}
+      <form method="post" action="/orders/{{ order.id }}/items" class="upsell-form">
+        <input type="hidden" name="menu_item_id" value="{{ mi.id }}">
+        <input type="hidden" name="seat_number" value="{{ active_seat }}">
+        <input type="hidden" name="category" value="{{ active_cat }}">
+        <input type="hidden" name="src" value="upsell">
+        <button class="upsell-chip" title="Add {{ mi.name }}">
+          <span class="upsell-emoji">{{ mi.thumb_emoji }}</span>
+          <span class="upsell-name">{{ mi.name }}</span>
+          <span class="upsell-price">+${{ mi.price_cents|money }}</span>
+        </button>
+      </form>
+      {% endfor %}
+    </div>
+    {% endif %}
     <div class="menu-list">
       {% for mi in menu_items %}
       {# The configurator is always open, so tapping a row just loads it there

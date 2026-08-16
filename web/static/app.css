@@ -613,6 +613,26 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 .menu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
 /* Item list rows (4.1.2): thumbnail · name/description · price · add. */
+/* Upsell suggestions — data-driven add-ons above the menu list. Accent-tinted so
+   it reads as a nudge; each chip adds its item in one tap. */
+.upsell-strip {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin: 0 0 12px; padding: 8px 10px;
+  background: var(--panel-2); border: 1px dashed var(--accent); border-radius: 10px;
+}
+.upsell-lead { font-size: 12px; font-weight: 700; color: var(--accent); }
+.upsell-form { margin: 0; }
+.upsell-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--panel); border: 1px solid var(--accent); border-radius: 999px;
+  padding: 6px 12px; color: var(--ink); font: inherit; font-size: 13px; cursor: pointer;
+}
+.upsell-chip:hover { background: var(--accent); color: #fff; }
+.upsell-chip:hover .upsell-price { color: #fff; }
+.upsell-emoji { font-size: 15px; line-height: 1; }
+.upsell-name { font-weight: 600; }
+.upsell-price { color: var(--accent); font-weight: 700; }
+
 .menu-list { display: flex; flex-direction: column; gap: 8px; }
 .mi-row {
   display: flex; align-items: center; gap: 12px;
