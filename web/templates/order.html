@@ -586,7 +586,9 @@ document.addEventListener('click', function(e){
                   <label>Special instructions</label>
                   <input type="text" name="notes" value="{{ i.notes }}">
                 </div>
-                <button class="btn sm primary">Save changes</button>
+                {# No Save button — changes autosave; the panel closes on click-away.
+                   (see rmsSaveEditPop in base.html) #}
+                <p class="sub" style="margin:2px 0 0;font-size:11px;opacity:.7">Saved automatically</p>
               </form>
             </details>
             <form method="post" action="/orders/{{ order.id }}/items/{{ i.id }}/remove" style="display:inline">
@@ -667,7 +669,8 @@ function stepQty(d) {
 }
 
 // Seat chips now navigate (server-authoritative active seat), so no JS here.
-// (Outside-click / Escape close for .edit-menu popovers lives in base.html.)
+// (Outside-click / Escape close + edit-pop autosave for .edit-menu popovers
+//  live in base.html.)
 
 // Seat header: an OPEN seat collapses in place; a CLOSED seat is selected
 // (navigates so new items go to it and it opens). So you can both switch seats

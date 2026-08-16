@@ -107,22 +107,52 @@
     try { localStorage.setItem('rms-theme', next); } catch (e) {}
   }
 
+  // The item-line edit popover (<form class="edit-pop">) autosaves — no Save
+  // button. Every change persists at once (keepalive, so it lands even if the
+  // waiter navigates on), and the panel just closes when they click away.
+  function rmsSaveEditPop(form) {
+    if (!form || form.dataset.dirty !== '1') return;
+    form.dataset.dirty = '0';
+    form.dataset.saved = '1';
+    try { fetch(form.action, { method: 'POST', body: new FormData(form), keepalive: true }); } catch (e) {}
+  }
+  document.addEventListener('change', function (e) {
+    var form = e.target.closest && e.target.closest('.edit-pop');
+    if (form) { form.dataset.dirty = '1'; rmsSaveEditPop(form); }
+  });
+
   // Any <details class="edit-menu"> popover (seat/move/merge/split/edit menus)
   // closes when you click outside it or press Escape — a native <details> only
-  // toggles from its own summary. Shared here so every page gets it.
+  // toggles from its own summary. Shared here so every page gets it. An open
+  // edit-pop flushes any pending change first.
   document.addEventListener('click', function (e) {
+    var refresh = false;
     document.querySelectorAll('details.edit-menu[open]').forEach(function (d) {
-      if (!d.contains(e.target)) d.removeAttribute('open');
+      if (!d.contains(e.target)) {
+        var form = d.querySelector('.edit-pop');
+        if (form) { rmsSaveEditPop(form); if (form.dataset.saved === '1') refresh = true; }
+        d.removeAttribute('open');
+      }
     });
+    // If an edited line's popover just closed onto inert space, reload so the
+    // line shows the saved change. Clicks on a link/button/field navigate (and
+    // reload) on their own, so don't steal those.
+    if (refresh && !e.target.closest('a,button,input,select,textarea,summary,label')) {
+      location.reload();
+    }
   });
   document.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
+      var refresh = false;
       document.querySelectorAll('details.edit-menu[open]').forEach(function (d) {
+        var form = d.querySelector('.edit-pop');
+        if (form) { rmsSaveEditPop(form); if (form.dataset.saved === '1') refresh = true; }
         d.removeAttribute('open');
       });
       // Escape also closes an open modal (e.g. the receipt) via its backdrop.
       var backdrop = document.querySelector('.modal-backdrop');
-      if (backdrop && backdrop.href) window.location.href = backdrop.href;
+      if (backdrop && backdrop.href) { window.location.href = backdrop.href; return; }
+      if (refresh) location.reload();
     }
   });
 
