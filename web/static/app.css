@@ -653,6 +653,22 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .mi-desc { color: var(--muted); font-size: 11px; line-height: 1.3; }
 .mi-price { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 14px; }
 
+/* Happy-hour nudge (feat/happy-hour-nudge): a passive amber badge on menu rows
+   in an active window, plus a one-tap deal-price add in the configurator.
+   Amber (--warn) reads on either theme; the chips are filled so they hold on any
+   row background. The add posts to the existing /day-menu route — no new pricing. */
+.hh-tag { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .3px;
+  color: #3a2600; background: var(--warn); border-radius: 999px; padding: 1px 7px;
+  vertical-align: middle; white-space: nowrap; }
+.hh-nudge { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px;
+  padding: 10px 12px; border: 1px solid var(--warn); border-radius: 10px;
+  background: rgba(245, 158, 11, .10); }
+.hh-nudge-lead { font-size: 12px; font-weight: 700; letter-spacing: .2px; }
+.hh-add { background: var(--warn); border-color: var(--warn); color: #3a2600; width: 100%;
+  display: flex; align-items: center; justify-content: center; gap: 8px; }
+.hh-add:hover { background: #e08c07; border-color: #e08c07; }
+.hh-was { opacity: .75; font-weight: 600; }
+
 .mi { display: block; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; text-align: left; cursor: pointer; color: var(--ink); font: inherit; text-decoration: none; }
 .mi:hover { border-color: var(--accent); text-decoration: none; }
 .mi.on { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }

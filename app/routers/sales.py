@@ -750,6 +750,7 @@ def order_screen(
     # choices grouped by course for the picker.
     day_menus = []
     dm_mods: dict[int, list] = {}
+    hh_deals: dict[int, dict] = {}
     if order.status not in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
         _now = datetime.now()
         for dm in daymenu.resolve_all_for(db, _now.date(), _now):
@@ -780,6 +781,27 @@ def order_screen(
                                 groups.append({"name": g.name, "single": g.single, "options": free})
                         dm_mods[mi.id] = groups
 
+        # Happy-hour nudge: which visible items are covered by an active percent
+        # deal right now, and the price they'd get — powers the menu-row badge
+        # and the one-tap "add at happy-hour price" in the configurator. The add
+        # itself goes through the existing /day-menu combo route (which re-checks
+        # the window), so no new pricing logic touches the money path.
+        _hh = daymenu.active_percent_deals(db, _now.date(), _now)
+        if _hh:
+            _mis = db.execute(
+                select(MenuItem).where(MenuItem.id.in_(_hh.keys()))
+            ).scalars().all()
+            _mi_by = {mi.id: mi for mi in _mis}
+            for iid, m in _hh.items():
+                mi = _mi_by.get(iid)
+                if mi is not None and mi.is_active and mi.available:
+                    hh_deals[iid] = {
+                        "pct": m.discount_percent or 0,
+                        "menu_id": m.id,
+                        "name": m.name,
+                        "price": daymenu.effective_price_cents(m, [mi]),
+                    }
+
     # Collapse each combo's component lines into a single display unit carrying
     # the menu name and its fixed total; ordinary lines pass through unchanged.
     ctotals = daymenu.combo_totals(order)
@@ -809,7 +831,7 @@ def order_screen(
         "active_seat": active_seat,
         "seat_cards": seat_cards, "table_card": table_card,
         "line_groups": line_groups,
-        "day_menus": day_menus, "dm_mods": dm_mods,
+        "day_menus": day_menus, "dm_mods": dm_mods, "hh_deals": hh_deals,
         "configuring": configuring,
         # Data-driven upsell: 1-2 add-ons learned from this venue's order history,
         # scoped to the category the waiter is browsing.

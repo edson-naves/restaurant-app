@@ -82,6 +82,27 @@ def resolve_all_for(db: Session, d: date, now: datetime | None = None) -> list[D
     return out
 
 
+def active_percent_deals(
+    db: Session, d: date, now: datetime | None = None
+) -> dict[int, DayMenu]:
+    """{menu_item_id: DayMenu} for items covered by a *percent* (happy-hour) day
+    menu that is orderable right now — the signal the order screen uses to badge
+    a menu row and to offer the deal price when that item is added. Fixed-price
+    combos are excluded on purpose (they only make sense as a full combo, never
+    per item). If several active deals cover one item, the bigger discount wins.
+    """
+    best: dict[int, DayMenu] = {}
+    for m in resolve_all_for(db, d, now):
+        if not m.is_percent:
+            continue
+        pct = m.discount_percent or 0
+        for c in m.choices:
+            cur = best.get(c.menu_item_id)
+            if cur is None or (cur.discount_percent or 0) < pct:
+                best[c.menu_item_id] = m
+    return best
+
+
 def effective_price_cents(day_menu: DayMenu, items: list[MenuItem]) -> int:
     """What the guest pays for this combo of chosen dishes: the menu's fixed
     price, or the discounted à-la-carte total for a percent (happy-hour) deal."""

@@ -315,7 +315,7 @@ document.addEventListener('click', function(e){
          href="/orders/{{ order.id }}?item={{ mi.id }}&seat={{ active_seat }}&category={{ active_cat }}">
         <span class="mi-thumb">{% if mi.image_url %}<img src="{{ mi.image_url }}" alt="" width="42" height="42" loading="lazy" decoding="async">{% else %}{{ mi.thumb_emoji }}{% endif %}</span>
         <span class="mi-body">
-          <span class="mi-name">{{ mi.name }}{% if mi.modifier_groups %} <span class="spec">options</span>{% endif %}{% if mi.is_shareable %} <span class="spec">shareable</span>{% endif %}</span>
+          <span class="mi-name">{{ mi.name }}{% if mi.modifier_groups %} <span class="spec">options</span>{% endif %}{% if mi.is_shareable %} <span class="spec">shareable</span>{% endif %}{% if mi.id in hh_deals %} <span class="hh-tag" title="Happy hour ativo — {{ hh_deals[mi.id].name }}">⏰ HH −{{ hh_deals[mi.id].pct }}%</span>{% endif %}</span>
           {% if mi.description %}<span class="mi-desc">{{ mi.description }}</span>{% endif %}
         </span>
         <span class="mi-price">${{ mi.price_cents|money }}</span>
@@ -327,6 +327,24 @@ document.addEventListener('click', function(e){
   {# Column 3 — item configurator (accent echoes the active seat) #}
   <div class="card pos-cfg" id="menucard" style="border-left:4px solid {{ active_seat|seat_color }}">
     <h2>{{ configuring.name if configuring else 'Customize' }}</h2>
+    {# Happy-hour nudge: if this item is covered by an active percent deal, offer
+       a one-tap add at the deal price. It posts to the existing /day-menu combo
+       route (re-checks the window, reuses the tested pricing), so the waiter
+       never has to remember the happy-hour button. The full-price add below
+       stays for quantity/modifiers. #}
+    {% if configuring and can('orders.manage') and configuring.id in hh_deals %}
+    {% set hh = hh_deals[configuring.id] %}
+    <div class="hh-nudge">
+      <div class="hh-nudge-lead">⏰ Happy hour ativo · {{ hh.name }} · {{ hh.pct }}% off</div>
+      <form method="post" action="/orders/{{ order.id }}/day-menu" style="margin:0">
+        <input type="hidden" name="day_menu_id" value="{{ hh.menu_id }}">
+        <input type="hidden" name="item_ids" value="{{ configuring.id }}">
+        <input type="hidden" name="seat_number" value="{{ active_seat }}">
+        <button class="btn primary hh-add">Add · Happy hour ${{ hh.price|money }}
+          <s class="hh-was">${{ configuring.price_cents|money }}</s></button>
+      </form>
+    </div>
+    {% endif %}
     {% if can('orders.manage') %}
     <form method="post" action="/orders/{{ order.id }}/items" id="addf">
       <input type="hidden" name="category" value="{{ active_cat }}">
