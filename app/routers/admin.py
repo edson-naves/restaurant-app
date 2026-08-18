@@ -1943,34 +1943,34 @@ def delete_happy_hour(
 @router.post("/happy-hours/{hh_id}/targets/add")
 def add_happy_hour_target(
     hh_id: int,
-    kind: str = Form(...),           # "item" or "category"
-    target_id: int = Form(...),
+    category_id: int = Form(...),
+    item_id: int = Form(0),          # 0 = discount the whole category
     percent: int = Form(...),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
+    """One flow: pick a category, then discount all of it (item_id=0) or a single
+    item in it (an item target overrides its category)."""
     h = db.get(HappyHour, hh_id)
     if h is None:
         raise HTTPException(404, "Happy hour not found.")
     pct = max(1, min(100, percent))
-    if kind == "item":
-        if db.get(MenuItem, target_id) is None:
+    if item_id:
+        if db.get(MenuItem, item_id) is None:
             raise HTTPException(404, "Menu item not found.")
-        existing = next((t for t in h.items if t.menu_item_id == target_id), None)
+        existing = next((t for t in h.items if t.menu_item_id == item_id), None)
         if existing:
             existing.discount_percent = pct
         else:
-            db.add(HappyHourItem(happy_hour_id=h.id, menu_item_id=target_id, discount_percent=pct))
-    elif kind == "category":
-        if db.get(MenuCategory, target_id) is None:
-            raise HTTPException(404, "Category not found.")
-        existing = next((t for t in h.categories if t.category_id == target_id), None)
-        if existing:
-            existing.discount_percent = pct
-        else:
-            db.add(HappyHourCategory(happy_hour_id=h.id, category_id=target_id, discount_percent=pct))
+            db.add(HappyHourItem(happy_hour_id=h.id, menu_item_id=item_id, discount_percent=pct))
     else:
-        raise HTTPException(400, "Unknown target kind.")
+        if db.get(MenuCategory, category_id) is None:
+            raise HTTPException(404, "Category not found.")
+        existing = next((t for t in h.categories if t.category_id == category_id), None)
+        if existing:
+            existing.discount_percent = pct
+        else:
+            db.add(HappyHourCategory(happy_hour_id=h.id, category_id=category_id, discount_percent=pct))
     db.commit()
     return RedirectResponse("/admin/happy-hours", status_code=303)
 

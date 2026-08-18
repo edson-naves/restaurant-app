@@ -95,34 +95,22 @@
       </span>
       {% endfor %}
     </div>
-    <div style="display:flex;flex-wrap:wrap;gap:16px">
-      <form method="post" action="/admin/happy-hours/{{ h.id }}/targets/add" style="display:flex;gap:6px;align-items:flex-end">
-        <input type="hidden" name="kind" value="category">
-        <div class="field" style="margin:0"><label>Category</label>
-          <select name="target_id" required>
-            {% for c in categories %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
-          </select>
-        </div>
-        <div class="field" style="margin:0;max-width:90px"><label>%</label><input type="number" name="percent" min="1" max="100" placeholder="10" required></div>
-        <button class="btn sm">Add category</button>
-      </form>
-      <form method="post" action="/admin/happy-hours/{{ h.id }}/targets/add" style="display:flex;gap:6px;align-items:flex-end;flex-wrap:wrap">
-        <input type="hidden" name="kind" value="item">
-        <div class="field" style="margin:0"><label>Filter by category</label>
-          <select class="hh-catfilter" onchange="hhFilterItems(this)">
-            <option value="">All categories</option>
-            {% for c in categories %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
-          </select>
-        </div>
-        <div class="field" style="margin:0"><label>Item (overrides its category)</label>
-          <select name="target_id" class="hh-itemsel" required>
-            {% for it in menu_items %}<option value="{{ it.id }}" data-cat="{{ it.category_id }}">{{ it.name }}</option>{% endfor %}
-          </select>
-        </div>
-        <div class="field" style="margin:0;max-width:90px"><label>%</label><input type="number" name="percent" min="1" max="100" placeholder="20" required></div>
-        <button class="btn sm">Add item</button>
-      </form>
-    </div>
+    <form method="post" action="/admin/happy-hours/{{ h.id }}/targets/add" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+      <div class="field" style="margin:0"><label>Category</label>
+        <select name="category_id" class="hh-catsel" onchange="hhFilterItems(this)" required>
+          {% for c in categories %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field" style="margin:0"><label>Apply to</label>
+        <select name="item_id" class="hh-itemsel">
+          <option value="0">— Whole category —</option>
+          {% for it in menu_items %}<option value="{{ it.id }}" data-cat="{{ it.category_id }}">{{ it.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="field" style="margin:0;max-width:90px"><label>%</label><input type="number" name="percent" min="1" max="100" placeholder="20" required></div>
+      <button class="btn sm">Add discount</button>
+    </form>
+    <p class="sub" style="font-size:12px;margin:6px 0 0">Pick a category to discount the whole category, or choose one item in it — an item's % overrides its category's.</p>
   </div>
 </div>
 {% endfor %}
@@ -137,21 +125,22 @@
 .hh-x:hover { color:#ef4444; }
 </style>
 <script>
-// When a category is picked, narrow the item dropdown to that category's items.
-function hhFilterItems(sel) {
-  var form = sel.closest('form');
+// Pick a category → the "Apply to" dropdown narrows to that category's items,
+// keeping "— Whole category —" so the manager can discount the whole thing.
+function hhFilterItems(catSel) {
+  var form = catSel.closest('form');
   var items = form.querySelector('.hh-itemsel');
-  var cat = sel.value;
-  var firstVisible = null;
+  var cat = catSel.value;
   Array.prototype.forEach.call(items.options, function (o) {
-    var show = !cat || o.getAttribute('data-cat') === cat;
+    if (o.value === '0') return;               // keep "— Whole category —"
+    var show = o.getAttribute('data-cat') === cat;
     o.hidden = !show;
     o.disabled = !show;
-    if (show && firstVisible === null) firstVisible = o;
   });
-  if (!items.selectedOptions.length || items.selectedOptions[0].hidden) {
-    if (firstVisible) items.value = firstVisible.value;
-  }
+  items.value = '0';                           // default to the whole category
 }
+document.addEventListener('DOMContentLoaded', function () {
+  document.querySelectorAll('.hh-catsel').forEach(hhFilterItems);
+});
 </script>
 {% endblock %}
