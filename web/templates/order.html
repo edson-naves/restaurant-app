@@ -1,5 +1,9 @@
 {% extends "base.html" %}
 {% block body %}
+{# In happy-hour filter mode active_cat is None; cat_val keeps a valid int for
+   forms/links and nav_qs preserves the current view (hh filter vs a category). #}
+{% set cat_val = active_cat or 0 %}
+{% set nav_qs = 'hh=1' if hh_mode else 'category=' ~ cat_val %}
 {% if hh_ended %}
 <div class="hh-ended-pop" role="alert">
   <span>⏰ <b>Happy hour acabou.</b> {{ hh_ended.count }} item{{ '' if hh_ended.count == 1 else 's' }}
@@ -136,7 +140,7 @@
   {# Seat chips navigate (reload) so the chosen seat is server-authoritative:
      it then flows into the item links and the Add form. Keeps the configured
      item and category. #}
-  {% set seat_qs = '&category=' ~ active_cat ~ ('&item=' ~ configuring.id if configuring else '') %}
+  {% set seat_qs = '&' ~ nav_qs ~ ('&item=' ~ configuring.id if configuring else '') %}
   <div class="seatcards">
     {% for c in seat_cards %}
     <a class="seatcard status-{{ c.status }} {{ 'on' if active_seat == c.seat.seat_number else '' }}"
@@ -275,8 +279,11 @@ document.addEventListener('click', function(e){
   <div class="card pos-cats">
     <h2>Categories</h2>
     <div class="catrail">
+      {% if hh_cats %}
+      <a class="catrail-item catrail-hh {{ 'on' if hh_mode else '' }}" href="/orders/{{ order.id }}?hh=1&seat={{ active_seat }}" title="Show every item on happy hour right now">⭐ Happy hour</a>
+      {% endif %}
       {% for c in categories %}
-      <a class="catrail-item {{ 'on' if c.id == active_cat else '' }}" href="/orders/{{ order.id }}?category={{ c.id }}&seat={{ active_seat }}">{{ c.name }}</a>
+      <a class="catrail-item {{ 'on' if c.id == active_cat else '' }}" href="/orders/{{ order.id }}?category={{ c.id }}&seat={{ active_seat }}">{{ c.name }}{% if c.id in hh_cats %} <span class="catrail-star" title="On happy hour now">⭐</span>{% endif %}</a>
       {% endfor %}
     </div>
   </div>
@@ -293,7 +300,7 @@ document.addEventListener('click', function(e){
       {% for mi in upsells %}
       {% if mi.requires_choice %}
       <a class="upsell-chip" title="Customize {{ mi.name }}"
-         href="/orders/{{ order.id }}?item={{ mi.id }}&seat={{ active_seat }}&category={{ active_cat }}&src=upsell">
+         href="/orders/{{ order.id }}?item={{ mi.id }}&seat={{ active_seat }}&{{ nav_qs }}&src=upsell">
         <span class="upsell-emoji">{{ mi.thumb_emoji }}</span>
         <span class="upsell-name">{{ mi.name }}</span>
         <span class="upsell-price">from ${{ mi.price_cents|money }}</span>
@@ -302,7 +309,8 @@ document.addEventListener('click', function(e){
       <form method="post" action="/orders/{{ order.id }}/items" class="upsell-form">
         <input type="hidden" name="menu_item_id" value="{{ mi.id }}">
         <input type="hidden" name="seat_number" value="{{ active_seat }}">
-        <input type="hidden" name="category" value="{{ active_cat }}">
+        <input type="hidden" name="category" value="{{ cat_val }}">
+        {% if hh_mode %}<input type="hidden" name="hh" value="1">{% endif %}
         <input type="hidden" name="src" value="upsell">
         <button class="upsell-chip" title="Add {{ mi.name }}">
           <span class="upsell-emoji">{{ mi.thumb_emoji }}</span>
@@ -319,7 +327,7 @@ document.addEventListener('click', function(e){
       {# The configurator is always open, so tapping a row just loads it there
          — no separate + needed. #}
       <a class="mi-row {{ 'on' if configuring and configuring.id == mi.id else '' }}"
-         href="/orders/{{ order.id }}?item={{ mi.id }}&seat={{ active_seat }}&category={{ active_cat }}">
+         href="/orders/{{ order.id }}?item={{ mi.id }}&seat={{ active_seat }}&{{ nav_qs }}">
         <span class="mi-thumb">{% if mi.image_url %}<img src="{{ mi.image_url }}" alt="" width="42" height="42" loading="lazy" decoding="async">{% else %}{{ mi.thumb_emoji }}{% endif %}</span>
         <span class="mi-body">
           <span class="mi-name">{{ mi.name }}{% if mi.modifier_groups %} <span class="spec">options</span>{% endif %}{% if mi.is_shareable %} <span class="spec">shareable</span>{% endif %}{% if mi.id in hh_deals %} <span class="hh-star" title="Happy hour: {{ hh_deals[mi.id].name }} (−{{ hh_deals[mi.id].pct }}%)">⭐ −{{ hh_deals[mi.id].pct }}%</span>{% endif %}</span>
@@ -336,7 +344,8 @@ document.addEventListener('click', function(e){
     <h2>{{ configuring.name if configuring else 'Customize' }}</h2>
     {% if can('orders.manage') %}
     <form method="post" action="/orders/{{ order.id }}/items" id="addf">
-      <input type="hidden" name="category" value="{{ active_cat }}">
+      <input type="hidden" name="category" value="{{ cat_val }}">
+      {% if hh_mode %}<input type="hidden" name="hh" value="1">{% endif %}
       <input type="hidden" name="seat_number" id="seatf" value="{{ active_seat }}">
       {% if configuring %}
       <input type="hidden" name="menu_item_id" value="{{ configuring.id }}">
@@ -538,6 +547,7 @@ document.addEventListener('click', function(e){
             <div class="ordline-main">
               <div>
                 {{ i.quantity }}× {{ i.menu_item.name }}
+                {% if i.hh_id and not i.hh_reverted %}<span class="hh-star" title="Happy hour price ({{ i.hh_percent }}% off)">⭐ HH −{{ i.hh_percent }}%</span>{% endif %}
                 <span class="pill {{ 'os-served' if i.kitchen_status == 'served' else ('os-ready' if i.kitchen_status == 'ready' else ('os-preparing' if i.kitchen_status == 'preparing' else 'open')) }}">{{ i.kitchen_status }}</span>
                 <span class="sub" style="font-size:11px">· {{ i.course|course }}</span>
                 {% if i.allocations %}<span class="pill paid" title="Already paid — can't be changed or removed">paid ✓</span>{% endif %}

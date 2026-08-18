@@ -610,6 +610,7 @@ def order_screen(
     category: int | None = None,
     seat: int | None = None,
     item: int | None = None,
+    hh: int = 0,
     db: Session = Depends(get_db),
     staff: Staff = Depends(current_staff),
 ):
@@ -645,7 +646,21 @@ def order_screen(
     categories = db.execute(
         select(MenuCategory).order_by(MenuCategory.sort_order)
     ).scalars().all()
-    active_cat = category or (categories[0].id if categories else None)
+
+    # Happy hour in force right now (services/happyhour) — drives the category-rail
+    # stars, the optional "Happy hour" filter view, and the per-item pricing below.
+    _now = datetime.now()
+    _hh_open = order.status not in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED)
+    _ad = happyhour.load_active(db, _now) if _hh_open else happyhour.ActiveDiscounts()
+    hh_cats = set(_ad.cat_pct)
+    if _ad.item_pct:
+        for (cid,) in db.execute(
+            select(MenuItem.category_id).where(MenuItem.id.in_(_ad.item_pct.keys()))
+        ):
+            hh_cats.add(cid)
+
+    hh_mode = bool(hh) and _ad.any()
+    active_cat = None if hh_mode else (category or (categories[0].id if categories else None))
     # Which seat new items are being added for. The waiter takes the order seat
     # by seat, so it defaults to the first seat and auto-advances after each add
     # (see add_item); 0 means the table / unassigned.
@@ -656,15 +671,33 @@ def order_screen(
         active_seat = seat_numbers[0] if seat_numbers else 0
     # 86'd items (available=False) drop off the order screen alongside items the
     # owner has taken off the menu (is_active=False).
-    items = db.execute(
-        select(MenuItem).where(
-            MenuItem.category_id == active_cat,
-            MenuItem.is_active.is_(True), MenuItem.available.is_(True),
-        ).order_by(MenuItem.name)
-        # The grid shows an "options" badge per item (mi.modifier_groups), which
-        # otherwise lazy-loads groups (and their options) one item at a time.
-        .options(selectinload(MenuItem.modifier_groups))
-    ).scalars().all()
+    if hh_mode:
+        # "Happy hour" filter: every item on an active window right now, across
+        # categories (a covered category's items plus any item-level targets).
+        covered_ids = set(_ad.item_pct)
+        if _ad.cat_pct:
+            for (iid,) in db.execute(
+                select(MenuItem.id).where(
+                    MenuItem.category_id.in_(_ad.cat_pct.keys()),
+                    MenuItem.is_active.is_(True), MenuItem.available.is_(True))
+            ):
+                covered_ids.add(iid)
+        items = db.execute(
+            select(MenuItem).where(
+                MenuItem.id.in_(covered_ids),
+                MenuItem.is_active.is_(True), MenuItem.available.is_(True),
+            ).order_by(MenuItem.name).options(selectinload(MenuItem.modifier_groups))
+        ).scalars().all() if covered_ids else []
+    else:
+        items = db.execute(
+            select(MenuItem).where(
+                MenuItem.category_id == active_cat,
+                MenuItem.is_active.is_(True), MenuItem.available.is_(True),
+            ).order_by(MenuItem.name)
+            # The grid shows an "options" badge per item (mi.modifier_groups), which
+            # otherwise lazy-loads groups (and their options) one item at a time.
+            .options(selectinload(MenuItem.modifier_groups))
+        ).scalars().all()
 
     modifiers = db.execute(select(Modifier).order_by(Modifier.name)).scalars().all()
     panel = balance_panel(db, order)
@@ -752,8 +785,7 @@ def order_screen(
     dm_mods: dict[int, list] = {}
     hh_deals: dict[int, dict] = {}
     hh_ended: dict | None = None
-    if order.status not in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
-        _now = datetime.now()
+    if _hh_open:
         for dm in daymenu.resolve_all_for(db, _now.date(), _now):
             by_slot: dict[int, list] = {}
             for c in dm.choices:
@@ -791,7 +823,6 @@ def order_screen(
             db.commit()
             hh_ended = {"count": len(_reverted),
                         "names": ", ".join(sorted({r.menu_item.name for r in _reverted}))}
-        _ad = happyhour.load_active(db, _now)
         if _ad.any():
             _covered = list(items) + ([configuring] if configuring is not None else [])
             for mi in _covered:
@@ -830,6 +861,7 @@ def order_screen(
     return render(request, "order.html", {
         "db": db, "staff": staff, "order": order, "categories": categories,
         "active_cat": active_cat, "menu_items": items, "modifiers": modifiers,
+        "hh_mode": hh_mode, "hh_cats": hh_cats,
         "panel": panel, "subtotal": sum(i.line_total_cents for i in order.items),
         "free_tables": free_tables, "mergeable_tables": mergeable_tables,
         "active_seat": active_seat,
@@ -890,6 +922,7 @@ def add_item(
     notes: str = Form(""),
     course: int = Form(0),
     category: int = Form(0),
+    hh: int = Form(0),
     modifier_ids: list[int] = Form(default=[]),
     option_ids: list[int] = Form(default=[]),
     allergens: list[str] = Form(default=[]),
@@ -963,6 +996,8 @@ def add_item(
                 dest = f"/orders/{order_id}?seat={seat_number}"
                 if category:
                     dest += f"&category={category}"
+                if hh:
+                    dest += "&hh=1"
                 return RedirectResponse(dest, status_code=303)
 
     item = OrderItem(
@@ -1007,11 +1042,13 @@ def add_item(
 
     db.commit()
 
-    # Stay on the same seat (and menu category) after adding — the waiter picks
-    # the seat manually and it holds until they change it.
+    # Stay on the same seat (and menu category, or the happy-hour filter) after
+    # adding — the waiter picks the seat manually and it holds until they change it.
     dest = f"/orders/{order_id}?seat={seat_number}"
     if category:
         dest += f"&category={category}"
+    if hh:
+        dest += "&hh=1"
     return RedirectResponse(dest, status_code=303)
 
 
