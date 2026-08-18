@@ -82,6 +82,14 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # on both Postgres and SQLite, so the ADD COLUMN succeeds on the live DB.
     ("swap_request", "new_starts_at", "TIMESTAMP"),
     ("swap_request", "new_ends_at", "TIMESTAMP"),
+    # Happy-hour pricing snapshot on an order line (services/happyhour). All NULL /
+    # false on existing rows = an ordinary line, so pre-happy-hour orders bill
+    # exactly as before. The happy_hour* tables themselves are made by create_all.
+    ("order_item", "hh_id", "INTEGER REFERENCES happy_hour(id)"),
+    ("order_item", "hh_percent", "INTEGER"),
+    ("order_item", "hh_full_cents", "INTEGER"),
+    ("order_item", "hh_hold_until", "TIMESTAMP"),
+    ("order_item", "hh_reverted", "BOOLEAN NOT NULL DEFAULT 0"),
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW

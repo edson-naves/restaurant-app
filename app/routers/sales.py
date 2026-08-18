@@ -43,7 +43,7 @@ from app.models.oltp import (
     TableStatus,
     Zone,
 )
-from app.services import daymenu
+from app.services import daymenu, happyhour
 from app.services import upsell
 from app.services.payments import balance_panel, ensure_seats, set_shared_item_shares
 
@@ -751,6 +751,7 @@ def order_screen(
     day_menus = []
     dm_mods: dict[int, list] = {}
     hh_deals: dict[int, dict] = {}
+    hh_ended: dict | None = None
     if order.status not in (OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED):
         _now = datetime.now()
         for dm in daymenu.resolve_all_for(db, _now.date(), _now):
@@ -781,25 +782,28 @@ def order_screen(
                                 groups.append({"name": g.name, "single": g.single, "options": free})
                         dm_mods[mi.id] = groups
 
-        # Happy-hour nudge: which visible items are covered by an active percent
-        # deal right now, and the price they'd get — powers the menu-row badge
-        # and the one-tap "add at happy-hour price" in the configurator. The add
-        # itself goes through the existing /day-menu combo route (which re-checks
-        # the window), so no new pricing logic touches the money path.
-        _hh = daymenu.active_percent_deals(db, _now.date(), _now)
-        if _hh:
-            _mis = db.execute(
-                select(MenuItem).where(MenuItem.id.in_(_hh.keys()))
-            ).scalars().all()
-            _mi_by = {mi.id: mi for mi in _mis}
-            for iid, m in _hh.items():
-                mi = _mi_by.get(iid)
-                if mi is not None and mi.is_active and mi.available:
-                    hh_deals[iid] = {
-                        "pct": m.discount_percent or 0,
-                        "menu_id": m.id,
-                        "name": m.name,
-                        "price": daymenu.effective_price_cents(m, [mi]),
+        # Happy hour (services/happyhour, Model A). First put back any un-fired
+        # discounted line whose grace has passed, and flag it so the screen tells
+        # the waiter it ended. Then mark which visible items are on happy hour now
+        # (a star) and the price they'd get — the discount auto-applies at Add.
+        _reverted = happyhour.revert_expired(db, order, _now)
+        if _reverted:
+            db.commit()
+            hh_ended = {"count": len(_reverted),
+                        "names": ", ".join(sorted({r.menu_item.name for r in _reverted}))}
+        _ad = happyhour.load_active(db, _now)
+        if _ad.any():
+            _covered = list(items) + ([configuring] if configuring is not None else [])
+            for mi in _covered:
+                if mi.id in hh_deals:
+                    continue
+                _deal = _ad.for_item(mi)
+                if _deal:
+                    _pct, _h = _deal
+                    hh_deals[mi.id] = {
+                        "pct": _pct,
+                        "price": happyhour.deal_price_cents(mi.price_cents, _pct),
+                        "name": _h.name,
                     }
 
     # Collapse each combo's component lines into a single display unit carrying
@@ -831,7 +835,8 @@ def order_screen(
         "active_seat": active_seat,
         "seat_cards": seat_cards, "table_card": table_card,
         "line_groups": line_groups,
-        "day_menus": day_menus, "dm_mods": dm_mods, "hh_deals": hh_deals,
+        "day_menus": day_menus, "dm_mods": dm_mods,
+        "hh_deals": hh_deals, "hh_ended": hh_ended,
         "configuring": configuring,
         # Data-driven upsell: 1-2 add-ons learned from this venue's order history,
         # scoped to the category the waiter is browsing.
@@ -930,6 +935,12 @@ def add_item(
     new_mods = {m.id for m in (db.get(Modifier, i) for i in modifier_ids) if m}
     new_opts = {o.id for _, o in picked_options}
 
+    # Happy hour (Model A): the discount is decided now, at Add, and snapshotted
+    # onto the line — the percent, the full base it came off, and the hold
+    # deadline (window end + grace). It never changes once the line is fired.
+    hh_ld = happyhour.price_for(db, mi, datetime.now())
+    hh_unit = hh_ld.unit_price_cents if hh_ld else mi.price_cents
+
     # Merge into an identical, still-pending line on the same seat rather than
     # stacking duplicate rows — pressing + repeatedly just bumps the quantity.
     # Shared (table) items are left alone: their per-seat shares make merging
@@ -944,7 +955,9 @@ def add_item(
                     and ex.allergens == resolved_allergens
                     and ex.course == resolved_course
                     and {m.modifier_id for m in ex.modifiers} == new_mods
-                    and {o.option_id for o in ex.options} == new_opts):
+                    and {o.option_id for o in ex.options} == new_opts
+                    and ex.unit_price_cents == hh_unit
+                    and ex.hh_id == (hh_ld.hh_id if hh_ld else None)):
                 ex.quantity = min(99, ex.quantity + max(1, quantity))
                 db.commit()
                 dest = f"/orders/{order_id}?seat={seat_number}"
@@ -957,13 +970,18 @@ def add_item(
         menu_item_id=mi.id,
         seat_id=seat.id if seat else None,
         quantity=max(1, quantity),
-        unit_price_cents=mi.price_cents,
+        unit_price_cents=hh_unit,
         notes=notes.strip(),
         allergens=resolved_allergens,
         # 0 = "auto" from the menu section; an explicit choice overrides it.
         course=resolved_course,
         kitchen_status=KitchenStatus.PENDING,
     )
+    if hh_ld:
+        item.hh_id = hh_ld.hh_id
+        item.hh_percent = hh_ld.percent
+        item.hh_full_cents = hh_ld.full_cents
+        item.hh_hold_until = hh_ld.hold_until
     db.add(item)
     db.flush()
 
@@ -1358,6 +1376,9 @@ def send_to_kitchen(
         raise HTTPException(400, "Nothing new to fire to the kitchen.")
 
     now = datetime.now()
+    # Lock happy-hour pricing at the fire: anything whose grace has passed un-fired
+    # goes back to full price before it's committed to the kitchen.
+    happyhour.revert_expired(db, order, now)
     for item in pending:
         item.kitchen_status = KitchenStatus.PREPARING
     order.sent_to_kitchen_at = order.sent_to_kitchen_at or now
@@ -1389,6 +1410,7 @@ def fire_item(
         raise HTTPException(400, "That item has already been fired.")
 
     now = datetime.now()
+    happyhour.revert_expired(db, order, now)   # lock at full price if grace passed
     seat = item.seat.seat_number if item.seat else 0
     item.kitchen_status = KitchenStatus.PREPARING
     order.sent_to_kitchen_at = order.sent_to_kitchen_at or now

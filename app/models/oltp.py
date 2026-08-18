@@ -571,6 +571,101 @@ class DayMenuChoice(Base):
     menu_item: Mapped["MenuItem"] = relationship(lazy="joined")
 
 
+class HappyHour(Base):
+    """A time-boxed automatic discount — separate from the prix-fixe day menu.
+    It lowers an item's OWN price during a window, rather than bundling a combo.
+
+    A percent applies to targeted whole categories and/or individual items (an
+    item target overrides its category), on the chosen weekdays and/or within an
+    optional date range, between start_time and end_time — **inclusive on both
+    ends**; a window whose end is earlier than its start **wraps past midnight**.
+
+    Pricing is snapshotted onto the order line when the waiter taps Add (Model A)
+    and never changes once the line is fired to the kitchen. A line added in the
+    window but left un-fired past end_time + grace_minutes reverts to full price
+    (see services/happyhour).
+    """
+    __tablename__ = "happy_hour"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    # Active weekdays as a bitmask: bit 0 = Monday .. bit 6 = Sunday. 127 = daily.
+    weekday_mask: Mapped[int] = mapped_column(Integer, default=127, nullable=False)
+    # Optional calendar bounds. Both NULL = purely recurring by weekday; equal =
+    # one specific date; a span = a date range.
+    date_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    date_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    start_time: Mapped[str] = mapped_column(String(5), nullable=False)   # "HH:MM"
+    end_time: Mapped[str] = mapped_column(String(5), nullable=False)     # inclusive
+    # Grace after the window closes before an un-fired discounted line reverts.
+    grace_minutes: Mapped[int] = mapped_column(Integer, default=10, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
+
+    items: Mapped[list["HappyHourItem"]] = relationship(
+        back_populates="happy_hour", cascade="all, delete-orphan", lazy="selectin")
+    categories: Mapped[list["HappyHourCategory"]] = relationship(
+        back_populates="happy_hour", cascade="all, delete-orphan", lazy="selectin")
+
+    def runs_on(self, d: date) -> bool:
+        """Whether this happy hour applies on calendar date `d` (weekday + range)."""
+        if self.date_from and d < self.date_from:
+            return False
+        if self.date_to and d > self.date_to:
+            return False
+        return bool(self.weekday_mask & (1 << d.weekday()))
+
+    def covers_time(self, t: time) -> bool:
+        """Whether wall-clock time `t` is inside the window (both ends inclusive;
+        wraps past midnight when end_time < start_time)."""
+        hm = f"{t.hour:02d}:{t.minute:02d}"
+        if self.start_time <= self.end_time:
+            return self.start_time <= hm <= self.end_time
+        return hm >= self.start_time or hm <= self.end_time      # overnight
+
+    def has_weekday(self, i: int) -> bool:
+        """Whether weekday `i` (0=Mon..6=Sun) is in the mask — for the editor."""
+        return bool(self.weekday_mask & (1 << i))
+
+    @property
+    def weekdays_label(self) -> str:
+        names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+        on = [names[i] for i in range(7) if self.weekday_mask & (1 << i)]
+        if len(on) == 7:
+            return "Every day"
+        return ", ".join(on) if on else "—"
+
+
+class HappyHourItem(Base):
+    """A per-item discount within a happy hour (overrides the item's category)."""
+    __tablename__ = "happy_hour_item"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    happy_hour_id: Mapped[int] = mapped_column(
+        ForeignKey("happy_hour.id", ondelete="CASCADE"), nullable=False)
+    menu_item_id: Mapped[int] = mapped_column(
+        ForeignKey("menu_item.id", ondelete="CASCADE"), nullable=False)
+    discount_percent: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    happy_hour: Mapped["HappyHour"] = relationship(back_populates="items")
+    menu_item: Mapped["MenuItem"] = relationship(lazy="joined")
+
+
+class HappyHourCategory(Base):
+    """A whole-category discount within a happy hour."""
+    __tablename__ = "happy_hour_category"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    happy_hour_id: Mapped[int] = mapped_column(
+        ForeignKey("happy_hour.id", ondelete="CASCADE"), nullable=False)
+    category_id: Mapped[int] = mapped_column(
+        ForeignKey("menu_category.id", ondelete="CASCADE"), nullable=False)
+    discount_percent: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    happy_hour: Mapped["HappyHour"] = relationship(back_populates="categories")
+    category: Mapped["MenuCategory"] = relationship(lazy="joined")
+
+
 class PaymentInstrument(Base):
     """Section 4.2.1 — the accepted payment instruments."""
     __tablename__ = "payment_instrument"
@@ -676,6 +771,16 @@ class OrderItem(Base):
     # entry. NULL for an ordinary à-la-carte line.
     combo_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     combo_name: Mapped[str] = mapped_column(String(80), default="")
+    # Happy-hour provenance (services/happyhour). Set when a time-boxed discount
+    # was applied at add time: which happy hour, the percent, the full base price
+    # it was taken from, and when the provisional hold expires (window end + grace)
+    # for an un-fired line. hh_reverted flips true if the grace passed un-fired and
+    # the line was put back to full price. All NULL/false = an ordinary line.
+    hh_id: Mapped[int | None] = mapped_column(ForeignKey("happy_hour.id"), nullable=True)
+    hh_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hh_full_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    hh_hold_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    hh_reverted: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
     # Provenance: set when this line arrives via a table merge (4.1.1), pointing
     # at the (now-dissolved) order it came from. Drives the "from Table N" badge

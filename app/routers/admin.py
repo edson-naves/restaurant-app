@@ -38,6 +38,9 @@ from app.models.oltp import (
     DayMenuChoice,
     day_menu_course_for_category,
     Floor,
+    HappyHour,
+    HappyHourCategory,
+    HappyHourItem,
     MenuCategory,
     MenuItem,
     Modifier,
@@ -1814,3 +1817,176 @@ def remove_day_menu_choice(
         db.delete(c)
         db.commit()
     return RedirectResponse("/admin/day-menus", status_code=303)
+
+
+# Happy hour (services/happyhour) — a time-boxed automatic per-item discount,
+# separate from the prix-fixe day menu. The manager sets when it runs and which
+# categories / items it discounts, and the order screen applies it at Add.
+
+def _parse_happy_hour(weekdays: list[int], date_from: str, date_to: str,
+                      start_time: str, end_time: str, grace: int):
+    mask = 0
+    for d in weekdays:
+        if 0 <= d <= 6:
+            mask |= (1 << d)
+    if mask == 0:
+        mask = 127                                   # none ticked = every day
+    start_time, end_time = start_time.strip(), end_time.strip()
+    if len(start_time) != 5 or len(end_time) != 5:
+        raise HTTPException(400, "Start and end time are required (HH:MM).")
+    try:
+        df = date.fromisoformat(date_from.strip()) if date_from.strip() else None
+        dt = date.fromisoformat(date_to.strip()) if date_to.strip() else None
+    except ValueError:
+        raise HTTPException(400, "Invalid date.")
+    if df and dt and dt < df:
+        raise HTTPException(400, "The end date is before the start date.")
+    return mask, df, dt, start_time, end_time, max(0, grace)
+
+
+@router.get("/happy-hours")
+def happy_hours_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    hhs = db.execute(select(HappyHour).order_by(HappyHour.name)).scalars().all()
+    cats = db.execute(select(MenuCategory).order_by(MenuCategory.name)).scalars().all()
+    items = db.execute(
+        select(MenuItem).where(MenuItem.is_active.is_(True)).order_by(MenuItem.name)
+    ).scalars().all()
+    return render(request, "admin_happy_hours.html", {
+        "db": db, "staff": staff, "happy_hours": hhs,
+        "categories": cats, "menu_items": items,
+        "weekday_names": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+        "title": "Happy hour",
+    })
+
+
+@router.post("/happy-hours/create")
+def create_happy_hour(
+    name: str = Form(...),
+    weekdays: list[int] = Form(default=[]),
+    date_from: str = Form(""),
+    date_to: str = Form(""),
+    start_time: str = Form(""),
+    end_time: str = Form(""),
+    grace_minutes: int = Form(10),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "A happy-hour name is required.")
+    mask, df, dt, st, et, g = _parse_happy_hour(
+        weekdays, date_from, date_to, start_time, end_time, grace_minutes)
+    db.add(HappyHour(name=name, weekday_mask=mask, date_from=df, date_to=dt,
+                     start_time=st, end_time=et, grace_minutes=g, is_active=True))
+    db.commit()
+    return RedirectResponse("/admin/happy-hours", status_code=303)
+
+
+@router.post("/happy-hours/{hh_id}/edit")
+def edit_happy_hour(
+    hh_id: int,
+    name: str = Form(...),
+    weekdays: list[int] = Form(default=[]),
+    date_from: str = Form(""),
+    date_to: str = Form(""),
+    start_time: str = Form(""),
+    end_time: str = Form(""),
+    grace_minutes: int = Form(10),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    h = db.get(HappyHour, hh_id)
+    if h is None:
+        raise HTTPException(404, "Happy hour not found.")
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "A happy-hour name is required.")
+    h.weekday_mask, h.date_from, h.date_to, h.start_time, h.end_time, h.grace_minutes = (
+        _parse_happy_hour(weekdays, date_from, date_to, start_time, end_time, grace_minutes))
+    h.name = name
+    db.commit()
+    return RedirectResponse("/admin/happy-hours", status_code=303)
+
+
+@router.post("/happy-hours/{hh_id}/active")
+def toggle_happy_hour(
+    hh_id: int,
+    active: int = Form(0),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    h = db.get(HappyHour, hh_id)
+    if h is None:
+        raise HTTPException(404, "Happy hour not found.")
+    h.is_active = bool(active)
+    db.commit()
+    return RedirectResponse("/admin/happy-hours", status_code=303)
+
+
+@router.post("/happy-hours/{hh_id}/delete")
+def delete_happy_hour(
+    hh_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    h = db.get(HappyHour, hh_id)
+    if h is not None:
+        db.delete(h)          # cascades to its item/category targets
+        db.commit()
+    return RedirectResponse("/admin/happy-hours", status_code=303)
+
+
+@router.post("/happy-hours/{hh_id}/targets/add")
+def add_happy_hour_target(
+    hh_id: int,
+    kind: str = Form(...),           # "item" or "category"
+    target_id: int = Form(...),
+    percent: int = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    h = db.get(HappyHour, hh_id)
+    if h is None:
+        raise HTTPException(404, "Happy hour not found.")
+    pct = max(1, min(100, percent))
+    if kind == "item":
+        if db.get(MenuItem, target_id) is None:
+            raise HTTPException(404, "Menu item not found.")
+        existing = next((t for t in h.items if t.menu_item_id == target_id), None)
+        if existing:
+            existing.discount_percent = pct
+        else:
+            db.add(HappyHourItem(happy_hour_id=h.id, menu_item_id=target_id, discount_percent=pct))
+    elif kind == "category":
+        if db.get(MenuCategory, target_id) is None:
+            raise HTTPException(404, "Category not found.")
+        existing = next((t for t in h.categories if t.category_id == target_id), None)
+        if existing:
+            existing.discount_percent = pct
+        else:
+            db.add(HappyHourCategory(happy_hour_id=h.id, category_id=target_id, discount_percent=pct))
+    else:
+        raise HTTPException(400, "Unknown target kind.")
+    db.commit()
+    return RedirectResponse("/admin/happy-hours", status_code=303)
+
+
+@router.post("/happy-hours/targets/{kind}/{target_id}/remove")
+def remove_happy_hour_target(
+    kind: str,
+    target_id: int,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    model = {"item": HappyHourItem, "category": HappyHourCategory}.get(kind)
+    if model is None:
+        raise HTTPException(400, "Unknown target kind.")
+    t = db.get(model, target_id)
+    if t is not None:
+        db.delete(t)
+        db.commit()
+    return RedirectResponse("/admin/happy-hours", status_code=303)

@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block body %}
+{% include "admin_nav.html" %}
+
+<div class="dm-page-head">
+  <span class="dm-title-icon">⏰</span>
+  <div>
+    <h1 style="margin:0">Happy hour</h1>
+    <p class="sub" style="margin:3px 0 0;max-width:720px">Time-boxed automatic discounts. Pick the days and the window, then discount whole categories or individual items by a percent (an item's own percent wins over its category). The price drops on its own when a waiter adds the item during the window.</p>
+  </div>
+</div>
+
+{# ---- create ---- #}
+<div class="card" style="margin-bottom:18px">
+  <div class="dm-create-h">✦ Create a happy hour</div>
+  <form method="post" action="/admin/happy-hours/create" style="display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end">
+    <div class="field" style="flex:1;min-width:180px"><label>Name</label><input type="text" name="name" placeholder="e.g. Weekday drinks" required></div>
+    <div class="field"><label>From</label><input type="time" name="start_time" required></div>
+    <div class="field"><label>To</label><input type="time" name="end_time" required></div>
+    <div class="field" style="max-width:120px"><label>Grace (min)</label><input type="number" name="grace_minutes" min="0" max="120" value="10"></div>
+    <div class="field"><label>Date from (optional)</label><input type="date" name="date_from"></div>
+    <div class="field"><label>Date to (optional)</label><input type="date" name="date_to"></div>
+    <div class="field" style="flex-basis:100%">
+      <label>Days</label>
+      <div class="hh-days">
+        {% for i in range(7) %}
+        <label class="hh-day"><input type="checkbox" name="weekdays" value="{{ i }}" checked> {{ weekday_names[i] }}</label>
+        {% endfor %}
+      </div>
+    </div>
+    <button class="btn primary">Create</button>
+  </form>
+  <p class="sub" style="margin:10px 0 0;font-size:12px">Window is inclusive on both ends; a window whose end is earlier than its start runs past midnight (e.g. 22:00 → 01:00). Leave the dates empty for a purely recurring window; set both equal for one specific date.</p>
+</div>
+
+{# ---- existing ---- #}
+{% if not happy_hours %}
+<p class="sub">No happy hours yet — create one above.</p>
+{% endif %}
+
+{% for h in happy_hours %}
+<div class="card" style="margin-bottom:16px;{{ '' if h.is_active else 'opacity:.6' }}">
+  <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+    <span style="font-size:17px;font-weight:700">⏰ {{ h.name }}</span>
+    <span class="pill">{{ h.weekdays_label }}</span>
+    <span class="pill">{{ h.start_time }}–{{ h.end_time }}{% if h.start_time > h.end_time %} (overnight){% endif %}</span>
+    {% if h.date_from or h.date_to %}<span class="pill">{{ h.date_from or '…' }} → {{ h.date_to or '…' }}</span>{% endif %}
+    <span class="pill">grace {{ h.grace_minutes }}m</span>
+    <span class="pill {{ 'paid' if h.is_active else '' }}">{{ 'Active' if h.is_active else 'Off' }}</span>
+    <span style="margin-left:auto;display:flex;gap:6px">
+      <form method="post" action="/admin/happy-hours/{{ h.id }}/active" style="display:inline">
+        <input type="hidden" name="active" value="{{ 0 if h.is_active else 1 }}">
+        <button class="btn sm">{{ 'Turn off' if h.is_active else 'Turn on' }}</button>
+      </form>
+      <form method="post" action="/admin/happy-hours/{{ h.id }}/delete" style="display:inline" onsubmit="return confirm('Delete this happy hour?')">
+        <button class="btn sm danger">Delete</button>
+      </form>
+    </span>
+  </div>
+
+  {# edit schedule/window #}
+  <form method="post" action="/admin/happy-hours/{{ h.id }}/edit" style="display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;border-top:1px solid var(--line);padding-top:12px">
+    <div class="field" style="flex:1;min-width:160px"><label>Name</label><input type="text" name="name" value="{{ h.name }}" required></div>
+    <div class="field"><label>From</label><input type="time" name="start_time" value="{{ h.start_time }}" required></div>
+    <div class="field"><label>To</label><input type="time" name="end_time" value="{{ h.end_time }}" required></div>
+    <div class="field" style="max-width:110px"><label>Grace (min)</label><input type="number" name="grace_minutes" min="0" max="120" value="{{ h.grace_minutes }}"></div>
+    <div class="field"><label>Date from</label><input type="date" name="date_from" value="{{ h.date_from.isoformat() if h.date_from else '' }}"></div>
+    <div class="field"><label>Date to</label><input type="date" name="date_to" value="{{ h.date_to.isoformat() if h.date_to else '' }}"></div>
+    <div class="field" style="flex-basis:100%">
+      <label>Days</label>
+      <div class="hh-days">
+        {% for i in range(7) %}
+        <label class="hh-day"><input type="checkbox" name="weekdays" value="{{ i }}" {{ 'checked' if h.has_weekday(i) else '' }}> {{ weekday_names[i] }}</label>
+        {% endfor %}
+      </div>
+    </div>
+    <button class="btn sm primary">Save schedule</button>
+  </form>
+
+  {# targets #}
+  <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
+    <div class="sub" style="font-weight:600;margin-bottom:6px">Discounts</div>
+    {% if not h.categories and not h.items %}
+    <p class="sub" style="font-size:12px">No discounts yet — add a category or an item below.</p>
+    {% endif %}
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+      {% for c in h.categories %}
+      <span class="hh-target">📂 {{ c.category.name if c.category else '?' }} · −{{ c.discount_percent }}%
+        <form method="post" action="/admin/happy-hours/targets/category/{{ c.id }}/remove" style="display:inline"><button class="hh-x" title="Remove">✕</button></form>
+      </span>
+      {% endfor %}
+      {% for it in h.items %}
+      <span class="hh-target hh-target-item">🍔 {{ it.menu_item.name if it.menu_item else '?' }} · −{{ it.discount_percent }}%
+        <form method="post" action="/admin/happy-hours/targets/item/{{ it.id }}/remove" style="display:inline"><button class="hh-x" title="Remove">✕</button></form>
+      </span>
+      {% endfor %}
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:16px">
+      <form method="post" action="/admin/happy-hours/{{ h.id }}/targets/add" style="display:flex;gap:6px;align-items:flex-end">
+        <input type="hidden" name="kind" value="category">
+        <div class="field" style="margin:0"><label>Category</label>
+          <select name="target_id" required>
+            {% for c in categories %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field" style="margin:0;max-width:90px"><label>%</label><input type="number" name="percent" min="1" max="100" placeholder="10" required></div>
+        <button class="btn sm">Add category</button>
+      </form>
+      <form method="post" action="/admin/happy-hours/{{ h.id }}/targets/add" style="display:flex;gap:6px;align-items:flex-end">
+        <input type="hidden" name="kind" value="item">
+        <div class="field" style="margin:0"><label>Item (overrides its category)</label>
+          <select name="target_id" required>
+            {% for it in menu_items %}<option value="{{ it.id }}">{{ it.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="field" style="margin:0;max-width:90px"><label>%</label><input type="number" name="percent" min="1" max="100" placeholder="20" required></div>
+        <button class="btn sm">Add item</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endfor %}
+
+<style>
+.hh-days { display:flex; flex-wrap:wrap; gap:10px; }
+.hh-day { display:inline-flex; align-items:center; gap:5px; font-size:13px; font-weight:500; }
+.hh-target { display:inline-flex; align-items:center; gap:6px; background:var(--panel-2);
+  border:1px solid var(--line); border-radius:999px; padding:3px 6px 3px 12px; font-size:13px; font-weight:600; }
+.hh-target-item { border-color:var(--warn); }
+.hh-x { background:none; border:none; cursor:pointer; color:var(--muted); font-size:12px; padding:2px 4px; line-height:1; }
+.hh-x:hover { color:#ef4444; }
+</style>
+{% endblock %}

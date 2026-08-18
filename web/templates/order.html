@@ -1,5 +1,12 @@
 {% extends "base.html" %}
 {% block body %}
+{% if hh_ended %}
+<div class="hh-ended-pop" role="alert">
+  <span>⏰ <b>Happy hour acabou.</b> {{ hh_ended.count }} item{{ '' if hh_ended.count == 1 else 's' }}
+  ({{ hh_ended.names }}) voltaram ao preço cheio — avise o cliente.</span>
+  <button type="button" class="btn sm" onclick="this.closest('.hh-ended-pop').remove()">OK</button>
+</div>
+{% endif %}
 <div class="between">
   <div>
     <h1>{{ order.code }}</h1>
@@ -315,10 +322,10 @@ document.addEventListener('click', function(e){
          href="/orders/{{ order.id }}?item={{ mi.id }}&seat={{ active_seat }}&category={{ active_cat }}">
         <span class="mi-thumb">{% if mi.image_url %}<img src="{{ mi.image_url }}" alt="" width="42" height="42" loading="lazy" decoding="async">{% else %}{{ mi.thumb_emoji }}{% endif %}</span>
         <span class="mi-body">
-          <span class="mi-name">{{ mi.name }}{% if mi.modifier_groups %} <span class="spec">options</span>{% endif %}{% if mi.is_shareable %} <span class="spec">shareable</span>{% endif %}{% if mi.id in hh_deals %} <span class="hh-tag" title="Happy hour ativo — {{ hh_deals[mi.id].name }}">⏰ HH −{{ hh_deals[mi.id].pct }}%</span>{% endif %}</span>
+          <span class="mi-name">{{ mi.name }}{% if mi.modifier_groups %} <span class="spec">options</span>{% endif %}{% if mi.is_shareable %} <span class="spec">shareable</span>{% endif %}{% if mi.id in hh_deals %} <span class="hh-star" title="Happy hour: {{ hh_deals[mi.id].name }} (−{{ hh_deals[mi.id].pct }}%)">⭐ −{{ hh_deals[mi.id].pct }}%</span>{% endif %}</span>
           {% if mi.description %}<span class="mi-desc">{{ mi.description }}</span>{% endif %}
         </span>
-        <span class="mi-price">${{ mi.price_cents|money }}</span>
+        <span class="mi-price">{% if mi.id in hh_deals %}<s class="mi-was">${{ mi.price_cents|money }}</s> ${{ hh_deals[mi.id].price|money }}{% else %}${{ mi.price_cents|money }}{% endif %}</span>
       </a>
       {% endfor %}
     </div>
@@ -327,31 +334,13 @@ document.addEventListener('click', function(e){
   {# Column 3 — item configurator (accent echoes the active seat) #}
   <div class="card pos-cfg" id="menucard" style="border-left:4px solid {{ active_seat|seat_color }}">
     <h2>{{ configuring.name if configuring else 'Customize' }}</h2>
-    {# Happy-hour nudge: if this item is covered by an active percent deal, offer
-       a one-tap add at the deal price. It posts to the existing /day-menu combo
-       route (re-checks the window, reuses the tested pricing), so the waiter
-       never has to remember the happy-hour button. The full-price add below
-       stays for quantity/modifiers. #}
-    {% if configuring and can('orders.manage') and configuring.id in hh_deals %}
-    {% set hh = hh_deals[configuring.id] %}
-    <div class="hh-nudge">
-      <div class="hh-nudge-lead">⏰ Happy hour ativo · {{ hh.name }} · {{ hh.pct }}% off</div>
-      <form method="post" action="/orders/{{ order.id }}/day-menu" style="margin:0">
-        <input type="hidden" name="day_menu_id" value="{{ hh.menu_id }}">
-        <input type="hidden" name="item_ids" value="{{ configuring.id }}">
-        <input type="hidden" name="seat_number" value="{{ active_seat }}">
-        <button class="btn primary hh-add">Add · Happy hour ${{ hh.price|money }}
-          <s class="hh-was">${{ configuring.price_cents|money }}</s></button>
-      </form>
-    </div>
-    {% endif %}
     {% if can('orders.manage') %}
     <form method="post" action="/orders/{{ order.id }}/items" id="addf">
       <input type="hidden" name="category" value="{{ active_cat }}">
       <input type="hidden" name="seat_number" id="seatf" value="{{ active_seat }}">
       {% if configuring %}
       <input type="hidden" name="menu_item_id" value="{{ configuring.id }}">
-      <p class="sub" style="margin:0 0 10px">Configuring <b>{{ configuring.name }}</b> · base ${{ configuring.price_cents|money }}</p>
+      <p class="sub" style="margin:0 0 10px">Configuring <b>{{ configuring.name }}</b> · base {% if configuring.id in hh_deals %}<b>${{ hh_deals[configuring.id].price|money }}</b> <s>${{ configuring.price_cents|money }}</s> <span class="hh-star">⭐ Happy hour −{{ hh_deals[configuring.id].pct }}%</span>{% else %}${{ configuring.price_cents|money }}{% endif %}</p>
       <div class="cfg-addrow">
         <div class="field" style="margin:0">
           <label>Quantity</label>
@@ -642,7 +631,7 @@ document.addEventListener('click', function(e){
 <script>
 // Item configurator (4.1.2). Base price of the item being configured; 0 when
 // nothing is selected (no form on screen).
-var CFG_BASE = {{ configuring.price_cents if configuring else 0 }};
+var CFG_BASE = {{ hh_deals[configuring.id].price if (configuring and configuring.id in hh_deals) else (configuring.price_cents if configuring else 0) }};
 
 // Single-select groups act like radios: checking one unchecks its siblings.
 function optChange(cb) {

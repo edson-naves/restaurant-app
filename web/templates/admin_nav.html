@@ -9,6 +9,7 @@
   {% if can('settings') %}
   <a href="/admin/menu" class="{{ 'on' if request.url.path.startswith('/admin/menu') else '' }}">Menu</a>
   <a href="/admin/day-menus" class="{{ 'on' if request.url.path.startswith('/admin/day-menus') else '' }}">Day menus</a>
+  <a href="/admin/happy-hours" class="{{ 'on' if request.url.path.startswith('/admin/happy-hours') else '' }}">Happy hour</a>
   <a href="/admin/positions" class="{{ 'on' if request.url.path.startswith('/admin/positions') else '' }}">Positions</a>
   <a href="/admin/settings" class="{{ 'on' if request.url.path.startswith('/admin/settings') else '' }}">Settings</a>
   {% endif %}
