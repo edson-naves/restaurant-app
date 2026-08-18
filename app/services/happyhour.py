@@ -69,11 +69,22 @@ class ActiveDiscounts:
 def load_active(db: Session, now: datetime | None = None) -> ActiveDiscounts:
     """Every discount in force at `now` (default: current time), best-per-target."""
     now = now or datetime.now()
-    d, t = now.date(), now.time()
+    t = now.time()
+    hm = f"{now.hour:02d}:{now.minute:02d}"
     ad = ActiveDiscounts()
     hhs = db.execute(select(HappyHour).where(HappyHour.is_active.is_(True))).scalars().all()
     for h in hhs:
-        if not (h.runs_on(d) and h.covers_time(t)):
+        if not h.covers_time(t):
+            continue
+        # The weekday/date range applies to the day the occurrence *started*. For
+        # the after-midnight tail of an overnight window (end < start, and we're at
+        # or before end_time), that's the previous calendar day — so a Monday
+        # 22:00–01:00 deal is live Tuesday 00:30 but not Monday 00:30 (which belongs
+        # to Sunday's occurrence).
+        occ_date = now.date()
+        if h.start_time > h.end_time and hm <= h.end_time:
+            occ_date -= timedelta(days=1)
+        if not h.runs_on(occ_date):
             continue
         for it in h.items:
             if it.discount_percent > ad.item_pct.get(it.menu_item_id, -1):

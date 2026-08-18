@@ -89,6 +89,42 @@ def test_overnight_window():
     check(not h.covers_time(datetime(2026, 8, 19, 21, 0).time()), "21:00 is outside")
 
 
+def test_overnight_occurrence_date_weekday():
+    # Regression: an overnight window belongs to the day it STARTED. Monday
+    # 22:00–01:00 is one occurrence Mon 22:00 → Tue 01:00; load_active must check
+    # the weekday against the start day, not now's civil date.
+    db = _db()
+    beer, _ = _item(db, "Beer", 1000)
+    _hh(db, start="22:00", end="01:00", mask=(1 << 0), item=beer, item_pct=20)   # Mon only
+    db.commit()
+
+    def active(dt):
+        return beer.id in hh.load_active(db, dt).item_pct
+    check(active(datetime(2026, 8, 17, 23, 0)), "Mon 23:00 is active")
+    check(active(datetime(2026, 8, 18, 0, 30)), "Tue 00:30 is active (occurrence started Mon)")
+    check(not active(datetime(2026, 8, 17, 0, 30)),
+          "Mon 00:30 is NOT active (that belongs to Sunday's occurrence)")
+    db.close()
+
+
+def test_overnight_occurrence_date_range():
+    # Same regression for a specific-date window (date_from == date_to).
+    db = _db()
+    beer, _ = _item(db, "Beer", 1000)
+    d17 = datetime(2026, 8, 17).date()
+    _hh(db, start="22:00", end="01:00", mask=127, date_from=d17, date_to=d17,
+        item=beer, item_pct=20)
+    db.commit()
+
+    def active(dt):
+        return beer.id in hh.load_active(db, dt).item_pct
+    check(active(datetime(2026, 8, 17, 23, 0)), "17th 23:00 is active (date-specific)")
+    check(active(datetime(2026, 8, 18, 0, 30)), "18th 00:30 is active (occurrence started 17th)")
+    check(not active(datetime(2026, 8, 17, 0, 30)),
+          "17th 00:30 is NOT active (belongs to the 16th's occurrence)")
+    db.close()
+
+
 def test_weekday_and_date_range():
     wed = datetime(2026, 8, 19).date()   # Wednesday
     h = HappyHour(name="x", start_time="00:00", end_time="23:59", weekday_mask=(1 << 2))  # Wed only
@@ -220,6 +256,7 @@ def test_no_revert_within_hold():
 
 if __name__ == "__main__":
     for fn in (test_window_inclusive_both_ends, test_overnight_window,
+               test_overnight_occurrence_date_weekday, test_overnight_occurrence_date_range,
                test_weekday_and_date_range, test_item_discount_applies_in_window,
                test_no_discount_outside_window, test_item_overrides_category,
                test_category_covers_its_items, test_bigger_discount_wins,
