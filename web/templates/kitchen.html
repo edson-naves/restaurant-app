@@ -3,14 +3,31 @@
 <div class="between">
   <div>
     <h1>Kitchen display</h1>
-    <p class="sub">{{ tickets|length }} active · auto-refreshes every 15s</p>
+    <p class="sub">{{ tickets|length }} shown{% if board_total > limit %} · {{ board_total }} on the board (most urgent {{ limit }} shown){% endif %} · auto-refreshes every 15s</p>
   </div>
   <div class="catbar" style="margin:0">
-    <a class="btn sm {{ 'primary' if view == 'all' else '' }}" href="/kitchen?view=all&kstatus={{ kstatus }}&mine={{ mine }}">All</a>
-    <a class="btn sm {{ 'primary' if view == 'dine_in' else '' }}" href="/kitchen?view=dine_in&kstatus={{ kstatus }}&mine={{ mine }}">Dine-in</a>
-    <a class="btn sm {{ 'primary' if view == 'delivery' else '' }}" href="/kitchen?view=delivery&kstatus={{ kstatus }}&mine={{ mine }}">Delivery</a>
+    <a class="btn sm {{ 'primary' if view == 'all' else '' }}" href="/kitchen?view=all&kstatus={{ kstatus }}&station={{ station }}&mine={{ mine }}">All</a>
+    <a class="btn sm {{ 'primary' if view == 'dine_in' else '' }}" href="/kitchen?view=dine_in&kstatus={{ kstatus }}&station={{ station }}&mine={{ mine }}">Dine-in</a>
+    <a class="btn sm {{ 'primary' if view == 'delivery' else '' }}" href="/kitchen?view=delivery&kstatus={{ kstatus }}&station={{ station }}&mine={{ mine }}">Delivery</a>
   </div>
 </div>
+
+{# Station filter (Kitchen Stations). "All" is the full expo board; each station
+   shows only its own fired lines; "Unassigned" surfaces un-routed lines so they
+   are never lost. The count is what each tab would reveal. #}
+{% if stations or has_unassigned %}
+<div class="catbar station-bar" style="margin:0 0 12px">
+  <a class="btn sm {{ 'primary' if station == 'all' else '' }}" href="/kitchen?view={{ view }}&kstatus={{ kstatus }}&station=all&mine={{ mine }}">All stations {{ station_tab_counts.all }}</a>
+  {% for s in stations %}
+  <a class="btn sm {{ 'primary' if station == s.id|string else '' }}" href="/kitchen?view={{ view }}&kstatus={{ kstatus }}&station={{ s.id }}&mine={{ mine }}" style="--sc: {{ s.swatch }}">
+    <i class="st-tab-dot" style="background: {{ s.swatch }}"></i>{{ s.icon }} {{ s.name }} {{ station_tab_counts[s.id] }}
+  </a>
+  {% endfor %}
+  {% if has_unassigned %}
+  <a class="btn sm {{ 'primary' if station == 'unassigned' else '' }}" href="/kitchen?view={{ view }}&kstatus={{ kstatus }}&station=unassigned&mine={{ mine }}" title="Fired lines with no station routed">⚠ Unassigned {{ station_tab_counts.unassigned }}</a>
+  {% endif %}
+</div>
+{% endif %}
 
 {# Status filter — the channel view is kept, so All/Dine-in/Delivery and the
    status choice combine. Server-side, not JS, so it survives the 15s reload. #}
@@ -18,22 +35,33 @@
   {# Not a filter but the absence of one, so it never shows as "selected" — only
      Preparing / Ready light up when actually chosen. #}
   <a class="btn sm"
-     href="/kitchen?view={{ view }}&kstatus=all&mine={{ mine }}">All statuses</a>
+     href="/kitchen?view={{ view }}&kstatus=all&station={{ station }}&mine={{ mine }}">All statuses</a>
   <a class="btn sm {{ 'primary' if kstatus == 'preparing' else '' }}"
-     href="/kitchen?view={{ view }}&kstatus=preparing&mine={{ mine }}">Preparing {{ status_counts.preparing }}</a>
+     href="/kitchen?view={{ view }}&kstatus=preparing&station={{ station }}&mine={{ mine }}">Preparing {{ status_counts.preparing }}</a>
   <a class="btn sm {{ 'primary' if kstatus == 'ready' else '' }}"
-     href="/kitchen?view={{ view }}&kstatus=ready&mine={{ mine }}">Ready {{ status_counts.ready }}</a>
+     href="/kitchen?view={{ view }}&kstatus=ready&station={{ station }}&mine={{ mine }}">Ready {{ status_counts.ready }}</a>
   {# Waiter's "only my tables" toggle — narrows the board to the orders this
      person is covering. Sits with the status filters and combines with them. #}
   <a class="btn sm {{ 'primary' if mine else '' }}"
-     href="/kitchen?view={{ view }}&kstatus={{ kstatus }}&mine={{ 0 if mine else 1 }}"
+     href="/kitchen?view={{ view }}&kstatus={{ kstatus }}&station={{ station }}&mine={{ 0 if mine else 1 }}"
      title="Show only tables you're serving">My tables</a>
 </div>
 
+{% if b2_blocked %}
+{# Kitchen Stations B2: task-based KDS is flagged on but some fired work has no
+   PreparationTasks yet — the runtime gate keeps the COMPLETE Stage A board (never
+   a hybrid) until that clears. Operator-visible, not hidden. #}
+<div class="card" style="border-left:4px solid #d9822b;margin:0 0 12px">
+  <p class="sub" style="margin:0"><strong>⚠ Task-based KDS activation blocked:</strong>
+  {{ b2_missing }} fired item{{ '' if b2_missing == 1 else 's' }} without kitchen tasks.
+  Showing the full Stage A board until every fired item has tasks.</p>
+</div>
+{% endif %}
+
 {% if not tickets %}
   <div class="card"><p class="empty">
-    {% if kstatus != 'all' or view != 'all' or mine %}
-      Nothing matches this filter — <a href="/kitchen?view=all&kstatus=all&mine=0">show everything</a>.
+    {% if kstatus != 'all' or view != 'all' or station != 'all' or mine %}
+      Nothing matches this filter — <a href="/kitchen?view=all&kstatus=all&station=all&mine=0">show everything</a>.
     {% else %}
       Nothing in the kitchen right now.
     {% endif %}
@@ -74,14 +102,51 @@
       {% endif %}
       <ul>
         {% for i in c.lines %}
-        <li class="k-line{% if i.is_new %} k-new{% endif %}{% if i.kitchen_status == 'ready' %} k-done{% endif %}">
+        <li class="k-line{% if i.is_new %} k-new{% endif %}{% if not task_mode and i.kitchen_status == 'ready' %} k-done{% endif %}">
           <div class="k-line-body">
+            {# Stage A station chip (snapshot at fire) on the All board. In task
+               mode the station lives in the per-task sub-rows below instead. #}
+            {% if not task_mode and station == 'all' %}{% if i.station %}<span class="k-st-chip" style="--sc: {{ i.station.swatch }}">{{ i.station.icon }} {{ i.station.name }}</span> {% else %}<span class="k-st-chip k-st-none">⚠ Unassigned</span> {% endif %}{% endif %}
             {% if i.is_new %}<span class="k-new-tag">NEW</span> {% endif %}{{ i.quantity }}× {{ i.menu_item.name }}
             {% for o in i.options %}<br><span class="sub">+ {{ o.label }}</span>{% endfor %}
             {% for m in i.modifiers %}<br><span class="sub">+ {{ m.modifier.name }}</span>{% endfor %}
             {% if i.allergens %}<br><span class="allergy-chit">⚠ ALLERGY: {{ i.allergens }}</span>{% endif %}
             {% if i.notes %}<br><span class="note">✎ {{ i.notes }}</span>{% endif %}
+            {% if task_mode %}
+            {# Kitchen Stations B2.1 — one sale line, per-station task sub-rows
+               (read-only). Never duplicates the sale item. #}
+            <div class="k-tasks">
+              {% for tk in i.display_tasks %}
+              <div class="k-task">
+                {% if tk.station %}<span class="k-st-chip" style="--sc: {{ tk.station.swatch }}">{{ tk.station.icon }} {{ tk.station.name }}</span>{% else %}<span class="k-st-chip k-st-none">⚠ Unassigned</span>{% endif %}
+                {% if can('kitchen.update') and tk.kitchen_status == 'preparing' %}
+                {# Kitchen Stations B2.2 — mark THIS station's task ready. The item
+                   rolls up to Ready only when every station's task is ready. #}
+                <form method="post" action="/kitchen/tasks/{{ tk.id }}/ready" class="k-line-act">
+                  <button type="submit" class="k-check" title="Mark {{ tk.station.name if tk.station else 'Unassigned' }} ready" aria-label="Mark task ready"></button>
+                </form>
+                {% else %}
+                <span class="k-task-status {{ 'ok' if tk.kitchen_status == 'ready' else '' }}" title="{{ 'ready' if tk.kitchen_status == 'ready' else 'preparing' }}">{{ '✓' if tk.kitchen_status == 'ready' else '⏳' }}</span>
+                {% endif %}
+              </div>
+              {% endfor %}
+            </div>
+            {% if can('kitchen.update') and i.display_tasks|selectattr('kitchen_status','equalto','ready')|list %}
+            {# Kitchen Stations B2.2 (design v3 §5.3) — coarse "un-ready" via the legacy
+               bridge (POST status=preparing). DESTRUCTIVE: resets readiness at EVERY
+               station of this item. The label + title + confirm make that explicit. #}
+            <form method="post" action="/kitchen/{{ t.order.id }}/status" class="k-unready"
+                  onsubmit="return confirm('Un-ready {{ i.menu_item.name }}? This clears READY at ALL of its stations.');">
+              <input type="hidden" name="status" value="preparing">
+              <input type="hidden" name="item_id" value="{{ i.id }}">
+              <button type="submit" class="btn sm" title="Resets readiness at ALL stations of this item (destructive)">↩ Un-ready (all stations)</button>
+            </form>
+            {% endif %}
+            {% endif %}
           </div>
+          {% if not task_mode %}
+          {# Stage A per-line ready controls (legacy /status action). Deliberately
+             absent in task mode: per-task READY is B2.2; B2.1 is read-only. #}
           {% if can('kitchen.update') and i.kitchen_status == 'preparing' %}
           <form method="post" action="/kitchen/{{ t.order.id }}/status" class="k-line-act">
             <input type="hidden" name="status" value="ready">
@@ -98,13 +163,14 @@
           {% elif i.kitchen_status == 'ready' %}
           <span class="k-line-done" title="Ready">✓</span>
           {% endif %}
+          {% endif %}
         </li>
         {% endfor %}
       </ul>
     </div>
     {% endfor %}
 
-    {% if can('kitchen.update') and t.courses|selectattr('status','equalto','preparing')|list %}
+    {% if not task_mode and can('kitchen.update') and t.courses|selectattr('status','equalto','preparing')|list %}
     <form method="post" action="/kitchen/{{ t.order.id }}/status" style="margin-top:8px">
       <input type="hidden" name="status" value="ready">
       <button class="btn good" style="width:100%">✓ Mark all ready</button>

@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block body %}
+{% include "admin_nav.html" %}
+
+{# Shared create/edit fields. `s` is a Station (or None for the create form). The
+   `prod-only` block is hidden by JS when the type is Coordination. #}
+{% macro station_fields(s) %}
+  <div class="formline">
+    <div class="field" style="flex:2;min-width:160px;margin:0">
+      <label>Name</label>
+      <input type="text" name="name" value="{{ s.name if s else '' }}" placeholder="e.g. Pizza, Grill, Expo" required>
+    </div>
+    <div class="field" style="width:150px;margin:0">
+      <label>Type</label>
+      <select name="type" class="st-type">
+        <option value="production" {{ 'selected' if s and s.type == 'production' else '' }}>Production</option>
+        <option value="coordination" {{ 'selected' if s and s.type == 'coordination' else '' }}>Coordination</option>
+      </select>
+    </div>
+    <div class="field" style="width:110px;margin:0">
+      <label>Code</label>
+      <input type="text" name="code" value="{{ s.code if s else '' }}" placeholder="PIZ" maxlength="12">
+    </div>
+    <div class="field" style="width:90px;margin:0">
+      <label>Colour</label>
+      <input type="color" name="color" value="{{ s.color if s else '#64748b' }}" style="min-height:38px;padding:2px">
+    </div>
+    <div class="field" style="width:90px;margin:0">
+      <label>Icon</label>
+      <input type="text" name="icon" value="{{ s.icon if s else '' }}" placeholder="🍕" maxlength="8">
+    </div>
+  </div>
+  <div class="formline" style="margin-top:10px">
+    <div class="field" style="flex:1;min-width:200px;margin:0">
+      <label>Description (optional)</label>
+      <input type="text" name="description" value="{{ s.description if s else '' }}" placeholder="What this station prepares / coordinates" maxlength="200">
+    </div>
+  </div>
+  <div class="formline" style="margin-top:10px">
+    {# Production-only operational hints — a coordination station coordinates
+       output, so it runs no prep target or printer. #}
+    <div class="field prod-only" style="width:170px;margin:0">
+      <label>Target prep (min)</label>
+      <input type="number" name="target_prep_min" value="{{ s.target_prep_min if s and s.target_prep_min is not none else '' }}" min="0" max="240" placeholder="e.g. 12">
+    </div>
+    <div class="field prod-only" style="width:180px;margin:0">
+      <label>Printer (optional)</label>
+      <input type="text" name="printer_ref" value="{{ s.printer_ref if s else '' }}" placeholder="e.g. Kitchen printer 1" maxlength="60">
+    </div>
+    <div class="field" style="width:180px;margin:0">
+      <label>KDS screen (optional)</label>
+      <input type="text" name="kds_ref" value="{{ s.kds_ref if s else '' }}" placeholder="e.g. Screen 1" maxlength="60">
+    </div>
+  </div>
+  <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px">
+    <label class="tick" style="margin:0"><input type="checkbox" name="visible_to_kitchen" value="1" {{ 'checked' if (s.visible_to_kitchen if s else True) else '' }}> Visible to kitchen</label>
+    <label class="tick" style="margin:0"><input type="checkbox" name="visible_to_foh" value="1" {{ 'checked' if (s.visible_to_foh if s else False) else '' }}> Visible to front-of-house</label>
+  </div>
+{% endmacro %}
+
+<div class="between" style="margin-bottom:14px">
+  <div>
+    <h1 style="margin:0">Kitchen stations</h1>
+    <p class="sub" style="margin:2px 0 0">Where each item is prepared. Route menu items to stations from the Menu editor; the kitchen display shows each station only its own work.</p>
+  </div>
+  <div style="display:flex;align-items:center;gap:12px">
+    {% if unassigned %}
+    <a href="/admin/menu" class="pill warn" title="Active items with no station — they land in the KDS Unassigned bucket when fired">{{ unassigned }} unassigned items</a>
+    {% endif %}
+    <details class="edit-menu" id="addStation">
+      <summary class="btn sm primary" style="display:inline-block">+ Add station</summary>
+      <div class="edit-pop" style="width:min(680px,90vw)">
+        <form method="post" action="/admin/stations/create" class="st-form">
+          {{ station_fields(None) }}
+          <button class="btn sm primary" style="width:100%;margin-top:14px">Create station</button>
+        </form>
+      </div>
+    </details>
+  </div>
+</div>
+
+{% if import_result %}
+  {% if import_result.error %}
+  <div class="note" style="margin-bottom:14px;color:var(--warn)">{{ import_result.error }}</div>
+  {% else %}
+  <div class="note" style="margin-bottom:14px">
+    Routing applied: <b>{{ import_result.assigned }}</b> routed · <b>{{ import_result.cleared }}</b> set to Unassigned · {{ import_result.unchanged }} unchanged{% if import_result.missing_items %} · {{ import_result.missing_items }} unknown item id(s) skipped{% endif %}{% if import_result.bad_rows %} · {{ import_result.bad_rows }} malformed row(s) skipped{% endif %}.
+    {% if import_result.truncated %}<br><span style="color:var(--warn)">Only the first {{ 20000 }} rows were processed (file too long).</span>{% endif %}
+    {% if import_result.unknown %}
+    <br><span style="color:var(--warn)">Unknown station name(s), not applied: {% for name, n in import_result.unknown.items() %}“{{ name }}” ({{ n }}){% if not loop.last %}, {% endif %}{% endfor %}. Create/rename those stations or fix the CSV, then re-upload.</span>
+    {% endif %}
+  </div>
+  {% endif %}
+{% endif %}
+
+{# Bulk routing — the venue routes the whole menu at once via a CSV round-trip. #}
+<div class="card" style="margin-bottom:16px">
+  <strong>Bulk routing (CSV or Excel)</strong>
+  <p class="sub" style="margin:2px 0 12px">
+    Route the whole menu in one go. <b>1)</b> Download the template. <b>2)</b> Fill the
+    <b>station</b> column with an exact station name (or leave it blank = Unassigned).
+    <b>3)</b> Upload it back — <b>.csv</b> or <b>.xlsx</b>. Matching is by <b>item_id</b>,
+    so keep that column intact.
+  </p>
+  <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+    <a class="btn sm" href="/admin/stations/routing/template">↓ Download template</a>
+    <form method="post" action="/admin/stations/routing/import" enctype="multipart/form-data"
+          style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input type="file" name="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
+      <button class="btn sm primary">Upload &amp; apply</button>
+    </form>
+  </div>
+  {% set active_names = stations | selectattr('is_active') | map(attribute='name') | list %}
+  {% if active_names %}
+  <p class="sub" style="font-size:11px;margin-top:10px">Valid station names: {{ active_names | join(', ') }} · or blank/Unassigned.</p>
+  {% endif %}
+</div>
+
+{% if not stations %}
+<div class="card"><p class="empty" style="margin:0">No stations yet. Add your first one — Pizza, Grill, Cold, Dessert, Bar, Expo… whatever your kitchen runs.</p></div>
+{% else %}
+<div class="st-list">
+  {% for s in stations %}
+  <div class="card st-card{{ '' if s.is_active else ' st-off' }}" style="--sc: {{ s.swatch }}">
+    <div class="st-row">
+      <span class="st-dot" style="background: {{ s.swatch }}">{{ s.icon }}</span>
+      <div class="st-main">
+        <div class="st-name">{{ s.name }}{% if s.code %} <span class="sub" style="font-weight:400">· {{ s.code }}</span>{% endif %}</div>
+        <div class="sub" style="font-size:12px">
+          <span class="st-type-badge st-{{ s.type }}">{{ 'Coordination' if s.type == 'coordination' else 'Production' }}</span>
+          {% if s.type == 'coordination' %}
+            · receives all production stations
+          {% else %}
+            · {{ counts.get(s.id, 0) }} menu item{{ '' if counts.get(s.id, 0) == 1 else 's' }}{% if s.target_prep_min is not none %} · target {{ s.target_prep_min }} min{% endif %}
+          {% endif %}
+          {% if s.kds_ref %} · KDS: {{ s.kds_ref }}{% endif %}{% if s.printer_ref %} · {{ s.printer_ref }}{% endif %}
+          {% if not s.is_active %} · <span class="warn">inactive</span>{% endif %}
+        </div>
+        {% if s.description %}<div class="sub" style="font-size:11px;margin-top:2px">{{ s.description }}</div>{% endif %}
+      </div>
+      <div class="st-actions">
+        {% if s.is_active %}
+        <form method="post" action="/admin/stations/{{ s.id }}/move" style="display:inline"><input type="hidden" name="dir" value="up"><button class="btn sm" title="Move up">↑</button></form>
+        <form method="post" action="/admin/stations/{{ s.id }}/move" style="display:inline"><input type="hidden" name="dir" value="down"><button class="btn sm" title="Move down">↓</button></form>
+        {% endif %}
+        <details class="edit-menu">
+          <summary class="btn sm" style="display:inline-block" title="Edit">✎</summary>
+          <div class="edit-pop" style="width:min(680px,90vw)">
+            <form method="post" action="/admin/stations/{{ s.id }}/edit" class="st-form">
+              {{ station_fields(s) }}
+              <button class="btn sm primary" style="width:100%;margin-top:14px">Save changes</button>
+            </form>
+          </div>
+        </details>
+        {% if s.is_active %}
+        {% set n = counts.get(s.id, 0) %}
+        <form method="post" action="/admin/stations/{{ s.id }}/active" style="display:inline"
+              onsubmit="return {{ 'confirm(\"Deactivate ' ~ s.name ~ '? ' ~ n ~ ' menu item(s) routed here will become Unassigned until you re-route them.\")' if n else 'true' }};">
+          <input type="hidden" name="active" value="0">
+          <button class="btn sm" title="Deactivate">Deactivate</button>
+        </form>
+        {% else %}
+        <form method="post" action="/admin/stations/{{ s.id }}/active" style="display:inline">
+          <input type="hidden" name="active" value="1">
+          <button class="btn sm primary" title="Reactivate">Activate</button>
+        </form>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Show production-only fields only when the station type is Production. Runs per
+// form (create + each edit popover), and on change.
+(function () {
+  function sync(form) {
+    var t = form.querySelector('.st-type');
+    if (!t) return;
+    var prod = t.value === 'production';
+    form.querySelectorAll('.prod-only').forEach(function (el) { el.style.display = prod ? '' : 'none'; });
+    form.querySelectorAll('.coord-only').forEach(function (el) { el.style.display = 'none'; });
+  }
+  Array.from(document.querySelectorAll('.st-form')).forEach(function (form) {
+    sync(form);
+    var t = form.querySelector('.st-type');
+    if (t) t.addEventListener('change', function () { sync(form); });
+  });
+})();
+</script>
+{% endblock %}

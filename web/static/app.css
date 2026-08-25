@@ -889,6 +889,61 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 tr.dim > td { opacity: .5; }
 tr.dim:hover > td { opacity: 1; }
 
+/* ---------- floor card: per-station readiness strip ---------- */
+.tbl-stations { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.tst { display: inline-flex; align-items: center; gap: 2px; font-size: 10px;
+  font-weight: 700; line-height: 1.4; padding: 0 5px; border-radius: 999px;
+  border: 1px solid var(--sc); color: var(--ink);
+  background: color-mix(in srgb, var(--sc) 14%, transparent); }
+.tst.prep { color: var(--warn); }
+.tst.rdy { color: var(--ok); }
+
+/* ---------- expo (coordination) board ---------- */
+.ticket.expo-ready { border-top-color: var(--ok); }
+.expo-stations { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.expo-st { border: 1px solid var(--line); border-radius: 10px; padding: 7px 9px; }
+.expo-st.ready { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
+.expo-st.wait { border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+.expo-st-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.expo-st-name { font-weight: 700; font-size: 13px; }
+.expo-st-status { font-size: 15px; }
+.expo-st.wait .expo-st-status { color: var(--warn); }
+.expo-st.ready .expo-st-status { color: var(--ok); }
+.expo-st-lines { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+.expo-overall { margin-top: 8px; font-weight: 800; font-size: 13px; letter-spacing: .3px;
+  padding: 6px 10px; border-radius: 8px; text-align: center; }
+.expo-overall.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.expo-overall.wait { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+
+/* ---------- kitchen display: station tabs + per-line chips ---------- */
+.station-bar { flex-wrap: wrap; gap: 6px; }
+.station-bar .btn.primary { border-color: var(--sc, var(--accent)); }
+.st-tab-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block;
+  margin-right: 5px; vertical-align: middle; }
+.k-st-chip { display: inline-block; font-size: 10px; font-weight: 700;
+  padding: 0 6px; border-radius: 999px; vertical-align: middle;
+  color: var(--sc, var(--muted)); border: 1px solid var(--sc, var(--line));
+  background: color-mix(in srgb, var(--sc, #64748b) 12%, transparent); }
+.k-st-chip.k-st-none { --sc: var(--warn); }
+
+/* ---------- kitchen stations admin ---------- */
+.st-list { display: flex; flex-direction: column; gap: 10px; }
+.st-card { margin: 0; border-left: 4px solid var(--sc, var(--line)); }
+.st-card.st-off { opacity: .6; }
+.st-row { display: flex; align-items: center; gap: 14px; }
+.st-dot { width: 34px; height: 34px; border-radius: 9px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center; font-size: 17px; }
+.st-main { flex: 1; min-width: 0; }
+.st-name { font-weight: 700; font-size: 16px; }
+.st-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.st-type-badge { display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; border: 1px solid var(--line); }
+.st-type-badge.st-production { color: #34d399; border-color: color-mix(in srgb, #34d399 45%, transparent); }
+.st-type-badge.st-coordination { color: #60a5fa; border-color: color-mix(in srgb, #60a5fa 45%, transparent); }
+.pill.warn { background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn); border-radius: 999px; padding: 3px 10px; font-size: 12px;
+  font-weight: 700; text-decoration: none; }
+
 .bulkbar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   margin-top: 12px; padding: 10px 12px; border-radius: 10px;

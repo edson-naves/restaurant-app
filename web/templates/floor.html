@@ -91,6 +91,16 @@
          href="/orders/{{ c.order.id }}">
         <span class="n">Table {{ c.table.number }}</span>
         <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes|duration }}</span>
+        {% if c.stations %}
+        {# Per-station readiness of what's fired — the detail behind the card's
+           aggregate status (hover a chip for the station name + count). #}
+        <span class="tbl-stations">
+          {% for s in c.stations %}
+          <span class="tst {{ 'rdy' if s.ready else 'prep' }}" style="--sc: {{ s.station.swatch if s.station else '#f59e0b' }}"
+                title="{{ s.name }} · {{ 'ready' if s.ready else 'preparing' }} · {{ s.count }} item{{ '' if s.count == 1 else 's' }}">{{ (s.station.icon if s.station and s.station.icon else s.name[:3]) }} {{ '✓' if s.ready else '⏳' }}</span>
+          {% endfor %}
+        </span>
+        {% endif %}
         <span class="meta">{{ c.waiter or '—' }}</span>
         {# Food that's plated and waiting — the waiter's run cue. Shown whenever
            any item is up, even while the rest of the order is still cooking, so

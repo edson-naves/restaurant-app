@@ -18,14 +18,18 @@ managers from settings explicitly).
 """
 from __future__ import annotations
 
+import csv
+import io
 import re
+import xml.etree.ElementTree as ET
+import zipfile
 from datetime import date, datetime
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import RedirectResponse
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select, update
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.deps import WEB_DIR, render, require, role_capabilities
@@ -51,6 +55,8 @@ from app.models.oltp import (
     Role,
     Shift,
     Staff,
+    Station,
+    StationType,
     TableStatus,
     Zone,
     day_menu_course_label,
@@ -1359,7 +1365,7 @@ def menu_page(
         select(MenuCategory).order_by(MenuCategory.sort_order, MenuCategory.name)
     ).scalars().all()
     items = db.execute(
-        select(MenuItem).order_by(MenuItem.name)
+        select(MenuItem).options(selectinload(MenuItem.station)).order_by(MenuItem.name)
     ).scalars().all()
     modifiers = db.execute(select(Modifier).order_by(Modifier.name)).scalars().all()
 
@@ -1367,9 +1373,18 @@ def menu_page(
     for item in items:
         by_cat.setdefault(item.category_id, []).append(item)
 
+    # Active PRODUCTION stations for the per-item "Kitchen routing" dropdown —
+    # coordination stations don't prepare items, so they're not route targets.
+    stations = db.execute(
+        select(Station).where(
+            Station.is_active.is_(True), Station.type == StationType.PRODUCTION
+        ).order_by(Station.display_order, Station.name)
+    ).scalars().all()
+
     return render(request, "admin_menu.html", {
         "db": db, "staff": staff,
         "categories": categories, "by_cat": by_cat, "modifiers": modifiers,
+        "stations": stations,
         "active_count": sum(1 for i in items if i.is_active),
         "title": "Manage menu",
     })
@@ -1429,6 +1444,7 @@ def create_item(
     price: str = Form(...),
     description: str = Form(""),
     is_shareable: int = Form(0),
+    station_id: int = Form(0),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
@@ -1444,6 +1460,7 @@ def create_item(
     db.add(MenuItem(
         category_id=category_id, name=name, description=description.strip(),
         price_cents=cents, is_active=True, is_shareable=bool(is_shareable),
+        station_id=_routed_station(db, station_id),
     ))
     db.commit()
     return RedirectResponse("/admin/menu", status_code=303)
@@ -1457,6 +1474,7 @@ def edit_item(
     price: str = Form(...),
     description: str = Form(""),
     is_shareable: int = Form(0),
+    station_id: int = Form(0),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
@@ -1479,8 +1497,26 @@ def edit_item(
     item.description = description.strip()
     item.price_cents = cents
     item.is_shareable = bool(is_shareable)
+    # Kitchen routing (Stage A). Changing this affects only lines fired AFTER
+    # the change — already-fired OrderItems keep their snapshotted station.
+    item.station_id = _routed_station(db, station_id)
     db.commit()
     return RedirectResponse("/admin/menu", status_code=303)
+
+
+def _routed_station(db: Session, station_id: int) -> int | None:
+    """Resolve a routing dropdown value: 0 = Unassigned (None); otherwise the id
+    of an active PRODUCTION station. Coordination stations (Expo, Delivery)
+    coordinate output — they don't prepare items — so they can't be a route
+    target. Unknown / inactive / coordination ids are rejected."""
+    if not station_id:
+        return None
+    st = db.get(Station, station_id)
+    if st is None or not st.is_active or st.type != StationType.PRODUCTION:
+        raise HTTPException(
+            400, "Pick an active production station (coordination stations can't prepare items)."
+        )
+    return station_id
 
 
 @router.post("/menu/items/{item_id}/active")
@@ -1592,6 +1628,445 @@ def edit_modifier(
     mod.category_id = category_id or None
     db.commit()
     return RedirectResponse("/admin/menu", status_code=303)
+
+
+# --------------------------------------------------------------------------
+# Kitchen Stations (Stage A) — the venue configures its own stations and routes
+# menu items to them. No station names are hardcoded; everything is data here.
+# --------------------------------------------------------------------------
+
+_HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def _station_counts(db: Session) -> dict[int, int]:
+    """Active menu items routed to each station, for the list's badge."""
+    rows = db.execute(
+        select(MenuItem.station_id, func.count())
+        .where(MenuItem.station_id.is_not(None), MenuItem.is_active.is_(True))
+        .group_by(MenuItem.station_id)
+    ).all()
+    return {sid: n for sid, n in rows}
+
+
+def _render_stations(request, db, staff, import_result=None):
+    """Shared render for the Stations page (GET and the bulk-import result)."""
+    stations = db.execute(
+        select(Station).order_by(Station.is_active.desc(), Station.display_order, Station.name)
+    ).scalars().all()
+    counts = _station_counts(db)
+    # How many active items are still Unassigned — surfaced so routing gaps are
+    # never invisible (they'll land in the KDS Unassigned bucket when fired).
+    unassigned = db.execute(
+        select(func.count()).select_from(MenuItem).where(
+            MenuItem.station_id.is_(None), MenuItem.is_active.is_(True)
+        )
+    ).scalar_one()
+    return render(request, "admin_stations.html", {
+        "db": db, "staff": staff,
+        "stations": stations, "counts": counts, "unassigned": unassigned,
+        "STATION_TYPES": StationType.ALL, "import_result": import_result,
+        "title": "Kitchen stations",
+    })
+
+
+@router.get("/stations")
+def stations_page(
+    request: Request,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Kitchen Stations admin: create/edit/reorder/deactivate + item counts."""
+    return _render_stations(request, db, staff)
+
+
+@router.get("/stations/routing/template")
+def export_routing_template(
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Download the routing template: every active item with its category and
+    current station. The venue edits the `station` column (exact station name,
+    or blank/Unassigned) and re-uploads it to bulk-route the whole menu."""
+    rows = db.execute(
+        select(MenuItem, MenuCategory.name, Station.name)
+        .join(MenuCategory, MenuCategory.id == MenuItem.category_id)
+        .join(Station, Station.id == MenuItem.station_id, isouter=True)
+        .where(MenuItem.is_active.is_(True))
+        .order_by(MenuCategory.sort_order, MenuCategory.name, MenuItem.name)
+    ).all()
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["item_id", "category", "item", "price", "station"])
+    for item, cat_name, st_name in rows:
+        w.writerow([item.id, cat_name, item.name, f"{item.price_cents / 100:.2f}", st_name or ""])
+    return Response(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=menu-routing-template.csv"},
+    )
+
+
+# The routing import treats the upload as untrusted. Hard caps so a malformed or
+# malicious file (zip bomb, runaway sheet) can't exhaust memory or wedge a worker.
+_IMPORT_MAX_UPLOAD = 5 * 1024 * 1024        # 5 MB raw file
+_XLSX_MAX_ENTRIES = 64                       # files inside the .xlsx zip
+_XLSX_MAX_UNCOMPRESSED = 40 * 1024 * 1024    # total inflated bytes (anti zip-bomb)
+_XLSX_MAX_ENTRY = 20 * 1024 * 1024           # inflated bytes per entry
+_IMPORT_MAX_ROWS = 20000                     # data rows processed
+_IMPORT_MAX_COLS = 64                        # columns read per row (ignore beyond)
+_IMPORT_MAX_STR = 200                        # cell string length kept
+
+
+def _parse_item_id(raw: str) -> int | None:
+    """Strict positive-integer id. Accepts '12' and Excel's '12.0', but rejects
+    '12.5', scientific notation, signs and anything else — so a fuzzy value can
+    never silently resolve to a different, valid item id."""
+    raw = (raw or "").strip()
+    if re.fullmatch(r"\d+", raw):
+        val = int(raw)
+    elif re.fullmatch(r"\d+\.0+", raw):          # Excel often stores ints as "12.0"
+        val = int(raw.split(".")[0])
+    else:
+        return None
+    return val if val > 0 else None
+
+
+_XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+
+
+def _xlsx_col_index(ref: str) -> int:
+    """A1-style cell ref → 0-based column index ('B3' → 1)."""
+    letters = "".join(ch for ch in ref if ch.isalpha()).upper()
+    idx = 0
+    for ch in letters:
+        idx = idx * 26 + (ord(ch) - 64)
+        if idx > 1_000_000:                       # absurd ref — stop, don't overflow
+            break
+    return idx - 1
+
+
+def _read_xlsx_rows(raw: bytes) -> list[list[str]]:
+    """Read the first worksheet of an .xlsx as rows of strings — stdlib only, no
+    openpyxl. Handles shared and inline strings; enough for the routing template
+    (we only need the item_id and station columns)."""
+    z = zipfile.ZipFile(io.BytesIO(raw))
+    infos = z.infolist()
+    # Anti zip-bomb: bound entry count and inflated size before reading anything.
+    if len(infos) > _XLSX_MAX_ENTRIES:
+        raise ValueError("workbook has too many internal files")
+    if (sum(i.file_size for i in infos) > _XLSX_MAX_UNCOMPRESSED
+            or any(i.file_size > _XLSX_MAX_ENTRY for i in infos)):
+        raise ValueError("workbook is too large to read safely")
+
+    shared: list[str] = []
+    if "xl/sharedStrings.xml" in z.namelist():
+        root = ET.fromstring(z.read("xl/sharedStrings.xml"))
+        for si in root.findall(f"{_XLSX_NS}si"):
+            shared.append("".join(t.text or "" for t in si.iter(f"{_XLSX_NS}t"))[:_IMPORT_MAX_STR])
+    sheet = next((n for n in sorted(z.namelist())
+                  if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")), None)
+    if sheet is None:
+        return []
+    root = ET.fromstring(z.read(sheet))
+    rows: list[list[str]] = []
+    for row in root.iter(f"{_XLSX_NS}row"):
+        if len(rows) >= _IMPORT_MAX_ROWS + 1:      # +1 for a header row
+            break
+        cells: dict[int, str] = {}
+        maxcol = -1
+        for c in row.findall(f"{_XLSX_NS}c"):
+            col = _xlsx_col_index(c.get("r", "A"))
+            if col < 0 or col > _IMPORT_MAX_COLS:  # ignore cells beyond the cap
+                continue
+            ctype = c.get("t")
+            if ctype == "s":
+                v = c.find(f"{_XLSX_NS}v")
+                try:
+                    val = shared[int(v.text)] if v is not None and v.text else ""
+                except (ValueError, IndexError):
+                    val = ""
+            elif ctype == "inlineStr":
+                node = c.find(f"{_XLSX_NS}is")
+                val = ("".join(t.text or "" for t in node.iter(f"{_XLSX_NS}t"))
+                       if node is not None else "")
+            else:
+                v = c.find(f"{_XLSX_NS}v")
+                val = v.text if v is not None and v.text is not None else ""
+            cells[col] = (val or "")[:_IMPORT_MAX_STR]
+            maxcol = max(maxcol, col)
+        rows.append([cells.get(i, "") for i in range(maxcol + 1)])
+    return rows
+
+
+@router.post("/stations/routing/import")
+def import_routing(
+    request: Request,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Apply a filled routing template (CSV or .xlsx). Reads `item_id` and
+    `station` (by header, or the first two columns if headerless). Matches the
+    station by name (case-insensitive, active); blank / "unassigned" clears
+    routing. Nothing destructive: unknown stations and missing items are
+    reported, not applied."""
+    # Untrusted upload — bound the raw size before reading it all into memory.
+    raw = file.file.read(_IMPORT_MAX_UPLOAD + 1)
+    if len(raw) > _IMPORT_MAX_UPLOAD:
+        return _render_stations(request, db, staff,
+                                {"error": "File too large (max 5 MB)."})
+    name = (file.filename or "").lower()
+    if name.endswith(".xlsx") or raw[:2] == b"PK":
+        try:
+            rows = [r for r in _read_xlsx_rows(raw) if any((c or "").strip() for c in r)]
+        except Exception:  # noqa: BLE001 — a bad/oversized workbook shouldn't 500
+            return _render_stations(request, db, staff, {
+                "error": "Couldn't read that Excel file (unreadable or too large). "
+                         "Re-save it as CSV (File → Save As → CSV) and upload again."})
+    else:
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            text = raw.decode("latin-1", errors="replace")
+        rows = [r for r in csv.reader(io.StringIO(text)) if any((c or "").strip() for c in r)]
+    if not rows:
+        return _render_stations(request, db, staff,
+                                {"error": "The file was empty."})
+
+    # Locate the id / station columns from a header, tolerant of spacing/case
+    # ("Item ID", "item_id", "ItemId" all match). Falls back to the first two
+    # columns only when there's no recognisable header.
+    norm = [re.sub(r"[^a-z0-9]", "", (c or "").strip().lower()) for c in rows[0]]
+    i_id = next((k for k, v in enumerate(norm) if v in ("itemid", "id")), None)
+    i_st = next((k for k, v in enumerate(norm) if v == "station"), None)
+    if i_id is not None and i_st is not None:
+        body = rows[1:]
+    else:
+        i_id, i_st = 0, 1
+        body = rows
+
+    # Route only to active PRODUCTION stations — coordination stations (Expo,
+    # Delivery) don't prepare items, so they're never a valid routing target.
+    # Keyed by the SAME normalisation the duplicate-name check uses.
+    by_name = {
+        _normalize_station_name(s.name): s.id
+        for s in db.execute(
+            select(Station).where(
+                Station.is_active.is_(True), Station.type == StationType.PRODUCTION
+            )
+        ).scalars().all()
+    }
+
+    result = {"rows": 0, "assigned": 0, "cleared": 0, "unchanged": 0,
+              "missing_items": 0, "bad_rows": 0, "truncated": False, "unknown": {}}
+    if len(body) > _IMPORT_MAX_ROWS:
+        result["truncated"] = True
+        body = body[:_IMPORT_MAX_ROWS]
+    for r in body:
+        if len(r) <= max(i_id, i_st):
+            result["bad_rows"] += 1
+            continue
+        raw_id = (r[i_id] or "").strip()
+        st_name = (r[i_st] or "").strip()[:_IMPORT_MAX_STR]
+        item_id = _parse_item_id(raw_id)   # strict: '12' or '12.0', never '12.5'
+        if item_id is None:
+            result["bad_rows"] += 1
+            continue
+        result["rows"] += 1
+        item = db.get(MenuItem, item_id)
+        if item is None:
+            result["missing_items"] += 1
+            continue
+        norm_st = _normalize_station_name(st_name)
+        if norm_st in ("", "unassigned", "-", "none"):
+            target = None
+        else:
+            target = by_name.get(norm_st)
+            if target is None:
+                result["unknown"][st_name] = result["unknown"].get(st_name, 0) + 1
+                continue
+        if item.station_id == target:
+            result["unchanged"] += 1
+        else:
+            item.station_id = target
+            if target is None:
+                result["cleared"] += 1
+            else:
+                result["assigned"] += 1
+    db.commit()
+    return _render_stations(request, db, staff, result)
+
+
+def _normalize_station_name(value: str) -> str:
+    """The single station-name comparison key used everywhere (duplicate check
+    AND bulk-import matching), so both agree on when two names are the same:
+    trim + Unicode casefold. Storage keeps the original casing untouched."""
+    return (value or "").strip().casefold()
+
+
+def _station_name_clash(db: Session, name: str, exclude_id: int | None = None) -> bool:
+    """True if another station already has this name after normalisation — so
+    'Grill' and 'grill' can't both exist and make bulk-import matching ambiguous."""
+    norm = _normalize_station_name(name)
+    if not norm:
+        return False
+    rows = db.execute(select(Station.id, Station.name)).all()
+    return any(
+        sid != exclude_id and _normalize_station_name(nm) == norm
+        for sid, nm in rows
+    )
+
+
+def _station_form(
+    name: str, type_: str, color: str, icon: str, code: str, description: str,
+    target_prep_min: str, printer_ref: str, kds_ref: str,
+    visible_to_foh: int, visible_to_kitchen: int, station: Station,
+) -> None:
+    """Validate + apply the shared create/edit fields onto `station`."""
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "Station name is required.")
+    if type_ not in StationType.ALL:
+        raise HTTPException(400, "Invalid station type.")
+    color = (color or "").strip() or "#64748b"
+    if not _HEX_RE.match(color):
+        raise HTTPException(400, "Colour must be a #rrggbb hex value.")
+    prep = (target_prep_min or "").strip()
+    if prep:
+        try:
+            prep_val = int(prep)
+        except ValueError:
+            raise HTTPException(400, "Target prep must be a whole number of minutes.")
+        if prep_val < 0:
+            raise HTTPException(400, "Target prep can't be negative.")
+        station.target_prep_min = prep_val
+    else:
+        station.target_prep_min = None
+
+    station.name = name
+    station.type = type_
+    station.color = color
+    station.icon = (icon or "").strip()[:8]
+    station.code = (code or "").strip()[:12]
+    station.description = (description or "").strip()[:200]
+    # Coordination stations don't run a printer/prep line; keep those fields off.
+    if type_ == StationType.COORDINATION:
+        station.target_prep_min = None
+        station.printer_ref = ""
+    else:
+        station.printer_ref = (printer_ref or "").strip()[:60]
+    station.kds_ref = (kds_ref or "").strip()[:60]
+    station.visible_to_foh = bool(visible_to_foh)
+    station.visible_to_kitchen = bool(visible_to_kitchen)
+
+
+@router.post("/stations/create")
+def create_station(
+    name: str = Form(...),
+    type: str = Form(StationType.PRODUCTION),
+    color: str = Form("#64748b"),
+    icon: str = Form(""),
+    code: str = Form(""),
+    description: str = Form(""),
+    target_prep_min: str = Form(""),
+    printer_ref: str = Form(""),
+    kds_ref: str = Form(""),
+    visible_to_foh: int = Form(0),
+    visible_to_kitchen: int = Form(1),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    if _station_name_clash(db, name):
+        raise HTTPException(400, f"A station named “{name.strip()}” already exists.")
+    station = Station()
+    _station_form(name, type, color, icon, code, description, target_prep_min,
+                  printer_ref, kds_ref, visible_to_foh, visible_to_kitchen, station)
+    # New station goes to the end of the order.
+    last = db.execute(select(func.max(Station.display_order))).scalar_one()
+    station.display_order = (last or 0) + 1
+    db.add(station)
+    db.commit()
+    return RedirectResponse("/admin/stations", status_code=303)
+
+
+@router.post("/stations/{station_id}/edit")
+def edit_station(
+    station_id: int,
+    name: str = Form(...),
+    type: str = Form(StationType.PRODUCTION),
+    color: str = Form("#64748b"),
+    icon: str = Form(""),
+    code: str = Form(""),
+    description: str = Form(""),
+    target_prep_min: str = Form(""),
+    printer_ref: str = Form(""),
+    kds_ref: str = Form(""),
+    visible_to_foh: int = Form(0),
+    visible_to_kitchen: int = Form(1),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    station = db.get(Station, station_id)
+    if station is None:
+        raise HTTPException(404, "Station not found")
+    if _station_name_clash(db, name, exclude_id=station_id):
+        raise HTTPException(400, f"A station named “{name.strip()}” already exists.")
+    _station_form(name, type, color, icon, code, description, target_prep_min,
+                  printer_ref, kds_ref, visible_to_foh, visible_to_kitchen, station)
+    db.commit()
+    return RedirectResponse("/admin/stations", status_code=303)
+
+
+@router.post("/stations/{station_id}/move")
+def move_station(
+    station_id: int,
+    dir: str = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Reorder by swapping display_order with the adjacent active station."""
+    station = db.get(Station, station_id)
+    if station is None:
+        raise HTTPException(404, "Station not found")
+    ordered = db.execute(
+        select(Station).where(Station.is_active.is_(True))
+        .order_by(Station.display_order, Station.name)
+    ).scalars().all()
+    idx = next((i for i, s in enumerate(ordered) if s.id == station_id), None)
+    if idx is not None:
+        swap = idx - 1 if dir == "up" else idx + 1
+        if 0 <= swap < len(ordered):
+            a, b = ordered[idx], ordered[swap]
+            a.display_order, b.display_order = b.display_order, a.display_order
+            db.commit()
+    return RedirectResponse("/admin/stations", status_code=303)
+
+
+@router.post("/stations/{station_id}/active")
+def set_station_active(
+    station_id: int,
+    active: int = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Activate, or deactivate — deactivation reassigns any routed items to
+    Unassigned so a hidden station never silently orphans a menu item. The
+    confirmation (with the count) happens in the UI before this is called."""
+    station = db.get(Station, station_id)
+    if station is None:
+        raise HTTPException(404, "Station not found")
+    if active:
+        station.is_active = True
+    else:
+        station.is_active = False
+        # Explicitly un-route items pointing here — they become Unassigned.
+        db.execute(
+            update(MenuItem)
+            .where(MenuItem.station_id == station_id)
+            .values(station_id=None)
+        )
+    db.commit()
+    return RedirectResponse("/admin/stations", status_code=303)
 
 
 # --------------------------------------------------------------------------

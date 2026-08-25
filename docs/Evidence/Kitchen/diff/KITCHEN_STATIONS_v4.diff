@@ -1,0 +1,3502 @@
+warning: in the working copy of 'web/templates/base.html', LF will be replaced by CRLF the next time Git touches it
+diff --git a/app/migrate.py b/app/migrate.py
+index 8370418..01a9712 100644
+--- a/app/migrate.py
++++ b/app/migrate.py
+@@ -11,6 +11,8 @@ service history. Run on every startup; a fully migrated database is a no-op.
+ """
+ from __future__ import annotations
+ 
++from datetime import datetime
++
+ from sqlalchemy import text
+ from sqlalchemy.engine import Engine
+ 
+@@ -104,6 +106,17 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
+     ("zone", "pos_y", "INTEGER NOT NULL DEFAULT 60"),
+     ("zone", "width", "INTEGER NOT NULL DEFAULT 360"),
+     ("zone", "height", "INTEGER NOT NULL DEFAULT 300"),
++    # Kitchen Stations (Stage A). The `station` table itself is created by
++    # create_all; these two columns route/snapshot items to it. Both NULL by
++    # default = Unassigned, so existing menus and open orders are untouched (no
++    # item is silently auto-routed — the manager assigns stations explicitly).
++    ("menu_item", "station_id", "INTEGER REFERENCES station(id)"),
++    ("order_item", "station_id", "INTEGER REFERENCES station(id)"),
++    # Kitchen Stations (Stage B1) — modifier-level routing config (NULL = prepared
++    # with the item). The preparation_task / preparation_task_modifier tables are
++    # created by create_all. Additive; existing menus/orders untouched.
++    ("modifier", "station_id", "INTEGER REFERENCES station(id)"),
++    ("modifier_option", "station_id", "INTEGER REFERENCES station(id)"),
+ )
+ 
+ # (table, column, min_length, new DDL type). Columns whose type/length GREW
+@@ -146,6 +159,7 @@ def run(engine: Engine) -> list[str]:
+             applied.append(f"{table}.{column}")
+ 
+         applied.extend(_backfill_locations(conn))
++        applied.extend(_backfill_prep_tasks(conn))
+     # SQLite does not enforce VARCHAR length, so no column ever needs widening
+     # there — the model's new size applies to fresh databases via create_all.
+     return applied
+@@ -217,9 +231,48 @@ def _run_postgres(engine: Engine) -> list[str]:
+             applied.append(f"widened {table}.{column} -> {ddl}")
+         except Exception as exc:               # noqa: BLE001 — never block startup
+             applied.append(f"SKIPPED widen {table}.{column}: {exc}")
++    try:
++        with engine.begin() as conn:
++            applied.extend(_backfill_prep_tasks(conn))
++    except Exception as exc:                    # noqa: BLE001 — never block startup
++        applied.append(f"SKIPPED prep-task backfill: {exc}")
+     return applied
+ 
+ 
++def _backfill_prep_tasks(conn) -> list[str]:
++    """Kitchen Stations B1 — create one base PreparationTask per already-fired
++    OrderItem (preparing/ready) that has none yet, from its legacy station_id
++    snapshot. Idempotent (guarded on NOT EXISTS); never touches order_item, never
++    re-reads current menu routing, preserves Unassigned as NULL station. Safe to
++    run repeatedly. (The preparation_task table itself is made by create_all.)
++    """
++    try:
++        pending = conn.execute(text(
++            "SELECT COUNT(*) FROM order_item oi "
++            "WHERE oi.kitchen_status IN ('preparing','ready') "
++            "AND NOT EXISTS (SELECT 1 FROM preparation_task pt WHERE pt.order_item_id = oi.id)"
++        )).scalar_one()
++    except Exception:                           # noqa: BLE001 — table absent/transient
++        return []
++    if not pending:
++        return []
++    now = datetime.now()
++    conn.execute(text(
++        'INSERT INTO preparation_task '
++        '(order_item_id, order_id, station_id, course, kitchen_status, quantity, '
++        ' item_label, is_base, fire_seq, fired_at, ready_at, served_at, created_at, updated_at) '
++        'SELECT oi.id, oi.order_id, oi.station_id, oi.course, oi.kitchen_status, oi.quantity, '
++        "       COALESCE((SELECT name FROM menu_item WHERE id = oi.menu_item_id), ''), :is_base, 1, "
++        '       COALESCE((SELECT sent_to_kitchen_at FROM "order" WHERE id = oi.order_id), :now), '
++        "       CASE WHEN oi.kitchen_status = 'ready' THEN :now ELSE NULL END, "
++        '       NULL, :now, :now '
++        'FROM order_item oi '
++        "WHERE oi.kitchen_status IN ('preparing','ready') "
++        'AND NOT EXISTS (SELECT 1 FROM preparation_task pt WHERE pt.order_item_id = oi.id)'
++    ), {"now": now, "is_base": True})
++    return [f"backfilled {pending} preparation_task(s) from fired order items"]
++
++
+ def _backfill_locations(conn) -> list[str]:
+     """Give tables that predate floors and zones a home.
+ 
+diff --git a/app/models/oltp.py b/app/models/oltp.py
+index f5dd06f..77037d5 100644
+--- a/app/models/oltp.py
++++ b/app/models/oltp.py
+@@ -9,12 +9,14 @@ from datetime import date, datetime, time
+ from sqlalchemy import (
+     Boolean,
+     CheckConstraint,
++    Column,
+     Date,
+     DateTime,
+     ForeignKey,
+     Index,
+     Integer,
+     String,
++    Table,
+     Text,
+     UniqueConstraint,
+     func,
+@@ -407,6 +409,73 @@ class Channel(Base):
+     is_third_party: Mapped[bool] = mapped_column(Boolean, default=False)
+ 
+ 
++class StationType:
++    """A station either prepares work or coordinates it (Kitchen Stations).
++
++    PRODUCTION stations make food/drink (Pizza, Grill, Fryer, Cold, Dessert,
++    Bar) and have menu items routed to them. COORDINATION stations (Expo,
++    Delivery/Takeout) don't prepare — they aggregate what the production
++    stations produce. The distinction drives which fields/UI a station shows.
++    """
++    PRODUCTION = "production"
++    COORDINATION = "coordination"
++    ALL = (PRODUCTION, COORDINATION)
++
++
++class Station(Base):
++    """A configurable kitchen station (Kitchen Stations — Stage A).
++
++    Reusable and restaurant-configurable: the venue creates, renames, colours,
++    reorders and deactivates its own stations, and routes menu items to them.
++    No station names are hardcoded in business logic. Single-tenant today, so
++    there is no restaurant_id/location_id yet — both are a trivial nullable
++    ADD COLUMN if a Location entity is introduced later.
++
++    Stations are soft-deactivated (is_active), never deleted, so historical
++    order snapshots (OrderItem.station_id) always resolve.
++    """
++    __tablename__ = "station"
++
++    id: Mapped[int] = mapped_column(primary_key=True)
++    name: Mapped[str] = mapped_column(String(60), nullable=False)
++    # Short code/label for compact KDS chips (e.g. "PIZ", "GRL"). Optional.
++    code: Mapped[str] = mapped_column(String(12), default="", nullable=False)
++    description: Mapped[str] = mapped_column(String(200), default="", nullable=False)
++    type: Mapped[str] = mapped_column(
++        String(20), default=StationType.PRODUCTION, nullable=False
++    )
++    # Accent colour (hex) used as a station chip/badge on the KDS and menu editor.
++    color: Mapped[str] = mapped_column(String(7), default="#64748b", nullable=False)
++    # Optional emoji/glyph shown beside the name.
++    icon: Mapped[str] = mapped_column(String(8), default="", nullable=False)
++    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
++    display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
++    # Production-only operational hints (nullable / ignored for coordination).
++    target_prep_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
++    # Free-text references to a printer / KDS screen, kept as strings so no
++    # hardware tables are needed yet. Optional throughout.
++    printer_ref: Mapped[str] = mapped_column(String(60), default="", nullable=False)
++    kds_ref: Mapped[str] = mapped_column(String(60), default="", nullable=False)
++    # Visibility flags for future KDS/FOH surfaces (default: visible to kitchen).
++    visible_to_foh: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
++    visible_to_kitchen: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
++    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
++    updated_at: Mapped[datetime] = mapped_column(
++        DateTime, default=datetime.now, onupdate=datetime.now, nullable=False
++    )
++
++    __table_args__ = (
++        CheckConstraint(
++            "type IN ('production','coordination')", name="ck_station_type"
++        ),
++        Index("ix_station_active_order", "is_active", "display_order"),
++    )
++
++    @property
++    def swatch(self) -> str:
++        return self.color or "#64748b"
++
++
+ class MenuCategory(Base):
+     __tablename__ = "menu_category"
+ 
+@@ -435,8 +504,16 @@ class MenuItem(Base):
+     is_shareable: Mapped[bool] = mapped_column(Boolean, default=False)
+     # A photo for the item row (4.1.2). Empty falls back to a category emoji.
+     image_url: Mapped[str] = mapped_column(String(300), default="")
++    # Kitchen Stations routing (Stage A): which station prepares this item.
++    # Nullable = Unassigned — never silently routed; the manager assigns it, and
++    # until then a fired line shows in the KDS's explicit Unassigned bucket.
++    station_id: Mapped[int | None] = mapped_column(
++        ForeignKey("station.id"), nullable=True
++    )
+ 
+     category: Mapped["MenuCategory"] = relationship(back_populates="items")
++    # Lazy by default (the routing target). The menu editor selectinloads it.
++    station: Mapped["Station | None"] = relationship("Station", lazy="select")
+ 
+     @property
+     def thumb_emoji(self) -> str:
+@@ -466,6 +543,10 @@ class Modifier(Base):
+     name: Mapped[str] = mapped_column(String(80), nullable=False)
+     price_delta_cents: Mapped[int] = mapped_column(Integer, default=0)
+     category_id: Mapped[int | None] = mapped_column(ForeignKey("menu_category.id"), nullable=True)
++    # Kitchen Stations Stage B (config only): which production station prepares
++    # this modifier's work (e.g. "add fries" → Fryer). NULL = prepared with the
++    # item (folds into the base task). Snapshotted onto PreparationTask at fire.
++    station_id: Mapped[int | None] = mapped_column(ForeignKey("station.id"), nullable=True)
+ 
+ 
+ class ModifierGroup(Base):
+@@ -512,6 +593,9 @@ class ModifierOption(Base):
+     name: Mapped[str] = mapped_column(String(80), nullable=False)
+     price_delta_cents: Mapped[int] = mapped_column(Integer, default=0)
+     sort_order: Mapped[int] = mapped_column(Integer, default=0)
++    # Kitchen Stations Stage B (config only): station that prepares this option's
++    # work. NULL = prepared with the item. Snapshotted onto PreparationTask.
++    station_id: Mapped[int | None] = mapped_column(ForeignKey("station.id"), nullable=True)
+ 
+     group: Mapped["ModifierGroup"] = relationship(back_populates="options")
+ 
+@@ -798,6 +882,13 @@ class OrderItem(Base):
+     # prominently. Comma-separated; empty when none.
+     allergens: Mapped[str] = mapped_column(String(200), default="")
+     kitchen_status: Mapped[str] = mapped_column(String(20), default=KitchenStatus.PENDING)
++    # Kitchen Stations (Stage A): station this line was routed to, SNAPSHOTTED
++    # when the line is fired to the kitchen (not read live from MenuItem), so the
++    # KDS/Expo stay correct even if the item's routing is changed afterwards.
++    # NULL = fired while Unassigned; it shows in the explicit Unassigned bucket.
++    station_id: Mapped[int | None] = mapped_column(
++        ForeignKey("station.id"), nullable=True
++    )
+     # Section 4.1.3 — coursing. Which stage of the meal this line belongs to, so
+     # the kitchen fires starters, then mains, then dessert rather than all at
+     # once. Defaults to Mains (2): an untagged item is treated as a main and
+@@ -836,7 +927,17 @@ class OrderItem(Base):
+         "Order", foreign_keys=[merged_from_order_id], lazy="joined"
+     )
+     menu_item: Mapped["MenuItem"] = relationship(lazy="joined")
++    # The snapshotted routing station (Kitchen Stations). Lazy by default so it
++    # is NOT loaded on every OrderItem query (checkout, reports, …); the KDS /
++    # Expo / floor queries that need it selectinload it explicitly.
++    station: Mapped["Station | None"] = relationship("Station", lazy="select")
+     seat: Mapped["Seat | None"] = relationship(back_populates="items")
++    # Kitchen Stations Stage B — the preparation work this line generated at fire
++    # (one task per target station). Lazy by default (not loaded on billing /
++    # reports); the KDS/Expo/floor selectinload it in B2+.
++    tasks: Mapped[list["PreparationTask"]] = relationship(
++        back_populates="order_item", cascade="all, delete-orphan", lazy="select",
++    )
+     modifiers: Mapped[list["OrderItemModifier"]] = relationship(
+         cascade="all, delete-orphan", lazy="selectin"
+     )
+@@ -896,6 +997,97 @@ class OrderItemOption(Base):
+     price_delta_cents: Mapped[int] = mapped_column(Integer, default=0)
+ 
+ 
++class PreparationTaskStatus:
++    """Task lifecycle (Kitchen Stations Stage B). Minimal set for B1, mirroring
++    the OrderItem kitchen lifecycle; richer states (accepted/started/…) are a
++    later, additive slice."""
++    PREPARING = "preparing"
++    READY = "ready"
++    SERVED = "served"
++
++
++class PreparationTask(Base):
++    """A unit of kitchen preparation work for one fired order line at one station
++    (Kitchen Stations Stage B). One OrderItem can produce several — its own
++    station plus any station its modifiers route to — WITHOUT duplicating the
++    sale line. Routing is snapshotted at fire and never moves afterwards.
++
++    B1 introduces the model + creation/snapshot + backfill only; the KDS/Expo/
++    floor do not read tasks yet (that is B2/B3). OrderItem.kitchen_status stays
++    the source of truth for the order/payment flow.
++    """
++    __tablename__ = "preparation_task"
++
++    id: Mapped[int] = mapped_column(primary_key=True)
++    order_item_id: Mapped[int] = mapped_column(
++        ForeignKey("order_item.id", ondelete="CASCADE"), nullable=False
++    )
++    # Denormalized for cheap board grouping/scoping (B2+).
++    order_id: Mapped[int] = mapped_column(ForeignKey("order.id", ondelete="CASCADE"), nullable=False)
++    # Routing snapshot at fire. NULL = Unassigned (kept explicit, never hidden).
++    station_id: Mapped[int | None] = mapped_column(ForeignKey("station.id"), nullable=True)
++    # Snapshot of the line's course at fire (coursing).
++    course: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
++    kitchen_status: Mapped[str] = mapped_column(
++        String(20), default=PreparationTaskStatus.PREPARING, nullable=False
++    )
++    quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
++    # Snapshot of the item name — receipt-stable, survives later menu edits.
++    item_label: Mapped[str] = mapped_column(String(120), default="", nullable=False)
++    # True = the item's own station task; False = a modifier-only task.
++    is_base: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
++    # Which fire produced this task (1 for the first fire of a line). NOT a
++    # uniqueness key — future re-fire/remake may add same-(item,station) tasks;
++    # this only records the batch. Idempotency is transactional (see sales.py).
++    fire_seq: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
++    fired_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
++    ready_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
++    served_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
++    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
++    updated_at: Mapped[datetime] = mapped_column(
++        DateTime, default=datetime.now, onupdate=datetime.now, nullable=False
++    )
++
++    order_item: Mapped["OrderItem"] = relationship(back_populates="tasks")
++    station: Mapped["Station | None"] = relationship("Station", lazy="select")
++    details: Mapped[list["PreparationTaskModifier"]] = relationship(
++        back_populates="task", cascade="all, delete-orphan", lazy="selectin",
++        order_by="PreparationTaskModifier.id",
++    )
++
++    __table_args__ = (
++        CheckConstraint(
++            "kitchen_status IN ('preparing','ready','served')",
++            name="ck_prep_task_status",
++        ),
++        Index("ix_prep_task_order", "order_id"),
++        Index("ix_prep_task_item", "order_item_id"),
++        Index("ix_prep_task_station_status", "station_id", "kitchen_status"),
++    )
++
++
++class PreparationTaskModifier(Base):
++    """Snapshotted detail line on a PreparationTask — the item and/or the
++    modifiers this task is responsible for (e.g. the Fryer task's "Fries").
++    Normalized (no arrays / CSV of station ids anywhere)."""
++    __tablename__ = "preparation_task_modifier"
++
++    id: Mapped[int] = mapped_column(primary_key=True)
++    preparation_task_id: Mapped[int] = mapped_column(
++        ForeignKey("preparation_task.id", ondelete="CASCADE"), nullable=False
++    )
++    # 'base' | 'modifier' | 'option' — where the label came from.
++    source_kind: Mapped[str] = mapped_column(String(10), default="modifier", nullable=False)
++    # id of the OrderItemModifier / OrderItemOption / OrderItem it snapshots
++    # (informational; NULL for a free-text/base entry).
++    source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
++    label: Mapped[str] = mapped_column(String(120), default="", nullable=False)
++    # Station this detail was routed to at fire (snapshot; matches its task).
++    station_id: Mapped[int | None] = mapped_column(ForeignKey("station.id"), nullable=True)
++
++    task: Mapped["PreparationTask"] = relationship(back_populates="details")
++
++
+ class SharedItemShare(Base):
+     """Section 4.2.4 — proportional split of one shared item across seats.
+ 
+@@ -1192,6 +1384,25 @@ class ReservationStatus:
+     NO_SHOW = "no_show"
+ 
+ 
++# A booking can hold more than one physical table (a big party spanning two
++# tables). The single Reservation.table_id below stays for the table an order
++# was actually opened on at seat time; this join carries the *held* set.
++reservation_table = Table(
++    "reservation_table",
++    Base.metadata,
++    Column(
++        "reservation_id",
++        ForeignKey("reservation.id", ondelete="CASCADE"),
++        primary_key=True,
++    ),
++    Column(
++        "table_id",
++        ForeignKey("restaurant_table.id"),
++        primary_key=True,
++    ),
++)
++
++
+ class Reservation(Base):
+     """Section 4.1.5 — future bookings and the walk-in waitlist.
+ 
+@@ -1218,6 +1429,10 @@ class Reservation(Base):
+     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+ 
+     table: Mapped["RestaurantTable | None"] = relationship(lazy="joined")
++    # The full set of physical tables this booking holds (may be more than one).
++    tables: Mapped[list["RestaurantTable"]] = relationship(
++        secondary=reservation_table, lazy="selectin"
++    )
+ 
+     __table_args__ = (
+         CheckConstraint(
+diff --git a/app/routers/admin.py b/app/routers/admin.py
+index 4cb77ab..75a9de8 100644
+--- a/app/routers/admin.py
++++ b/app/routers/admin.py
+@@ -18,15 +18,19 @@ managers from settings explicitly).
+ """
+ from __future__ import annotations
+ 
++import csv
++import io
+ import math
+ import re
++import xml.etree.ElementTree as ET
++import zipfile
+ from datetime import date, datetime
+ from pathlib import Path
+ 
+ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile
+ from fastapi.responses import RedirectResponse
+-from sqlalchemy import func, select
+-from sqlalchemy.orm import Session
++from sqlalchemy import func, select, update
++from sqlalchemy.orm import Session, selectinload
+ 
+ from app.database import get_db
+ from app.deps import WEB_DIR, render, require, role_capabilities
+@@ -53,6 +57,8 @@ from app.models.oltp import (
+     Role,
+     Shift,
+     Staff,
++    Station,
++    StationType,
+     TableStatus,
+     Zone,
+     day_menu_course_label,
+@@ -1539,7 +1545,7 @@ def menu_page(
+         select(MenuCategory).order_by(MenuCategory.sort_order, MenuCategory.name)
+     ).scalars().all()
+     items = db.execute(
+-        select(MenuItem).order_by(MenuItem.name)
++        select(MenuItem).options(selectinload(MenuItem.station)).order_by(MenuItem.name)
+     ).scalars().all()
+     modifiers = db.execute(select(Modifier).order_by(Modifier.name)).scalars().all()
+ 
+@@ -1547,9 +1553,18 @@ def menu_page(
+     for item in items:
+         by_cat.setdefault(item.category_id, []).append(item)
+ 
++    # Active PRODUCTION stations for the per-item "Kitchen routing" dropdown —
++    # coordination stations don't prepare items, so they're not route targets.
++    stations = db.execute(
++        select(Station).where(
++            Station.is_active.is_(True), Station.type == StationType.PRODUCTION
++        ).order_by(Station.display_order, Station.name)
++    ).scalars().all()
++
+     return render(request, "admin_menu.html", {
+         "db": db, "staff": staff,
+         "categories": categories, "by_cat": by_cat, "modifiers": modifiers,
++        "stations": stations,
+         "active_count": sum(1 for i in items if i.is_active),
+         "title": "Manage menu",
+     })
+@@ -1609,6 +1624,7 @@ def create_item(
+     price: str = Form(...),
+     description: str = Form(""),
+     is_shareable: int = Form(0),
++    station_id: int = Form(0),
+     db: Session = Depends(get_db),
+     staff: Staff = Depends(require("settings")),
+ ):
+@@ -1624,6 +1640,7 @@ def create_item(
+     db.add(MenuItem(
+         category_id=category_id, name=name, description=description.strip(),
+         price_cents=cents, is_active=True, is_shareable=bool(is_shareable),
++        station_id=_routed_station(db, station_id),
+     ))
+     db.commit()
+     return RedirectResponse("/admin/menu", status_code=303)
+@@ -1637,6 +1654,7 @@ def edit_item(
+     price: str = Form(...),
+     description: str = Form(""),
+     is_shareable: int = Form(0),
++    station_id: int = Form(0),
+     db: Session = Depends(get_db),
+     staff: Staff = Depends(require("settings")),
+ ):
+@@ -1659,10 +1677,28 @@ def edit_item(
+     item.description = description.strip()
+     item.price_cents = cents
+     item.is_shareable = bool(is_shareable)
++    # Kitchen routing (Stage A). Changing this affects only lines fired AFTER
++    # the change — already-fired OrderItems keep their snapshotted station.
++    item.station_id = _routed_station(db, station_id)
+     db.commit()
+     return RedirectResponse("/admin/menu", status_code=303)
+ 
+ 
++def _routed_station(db: Session, station_id: int) -> int | None:
++    """Resolve a routing dropdown value: 0 = Unassigned (None); otherwise the id
++    of an active PRODUCTION station. Coordination stations (Expo, Delivery)
++    coordinate output — they don't prepare items — so they can't be a route
++    target. Unknown / inactive / coordination ids are rejected."""
++    if not station_id:
++        return None
++    st = db.get(Station, station_id)
++    if st is None or not st.is_active or st.type != StationType.PRODUCTION:
++        raise HTTPException(
++            400, "Pick an active production station (coordination stations can't prepare items)."
++        )
++    return station_id
++
++
+ @router.post("/menu/items/{item_id}/active")
+ def toggle_item(
+     item_id: int,
+@@ -1774,6 +1810,445 @@ def edit_modifier(
+     return RedirectResponse("/admin/menu", status_code=303)
+ 
+ 
++# --------------------------------------------------------------------------
++# Kitchen Stations (Stage A) — the venue configures its own stations and routes
++# menu items to them. No station names are hardcoded; everything is data here.
++# --------------------------------------------------------------------------
++
++_HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
++
++
++def _station_counts(db: Session) -> dict[int, int]:
++    """Active menu items routed to each station, for the list's badge."""
++    rows = db.execute(
++        select(MenuItem.station_id, func.count())
++        .where(MenuItem.station_id.is_not(None), MenuItem.is_active.is_(True))
++        .group_by(MenuItem.station_id)
++    ).all()
++    return {sid: n for sid, n in rows}
++
++
++def _render_stations(request, db, staff, import_result=None):
++    """Shared render for the Stations page (GET and the bulk-import result)."""
++    stations = db.execute(
++        select(Station).order_by(Station.is_active.desc(), Station.display_order, Station.name)
++    ).scalars().all()
++    counts = _station_counts(db)
++    # How many active items are still Unassigned — surfaced so routing gaps are
++    # never invisible (they'll land in the KDS Unassigned bucket when fired).
++    unassigned = db.execute(
++        select(func.count()).select_from(MenuItem).where(
++            MenuItem.station_id.is_(None), MenuItem.is_active.is_(True)
++        )
++    ).scalar_one()
++    return render(request, "admin_stations.html", {
++        "db": db, "staff": staff,
++        "stations": stations, "counts": counts, "unassigned": unassigned,
++        "STATION_TYPES": StationType.ALL, "import_result": import_result,
++        "title": "Kitchen stations",
++    })
++
++
++@router.get("/stations")
++def stations_page(
++    request: Request,
++    db: Session = Depends(get_db),
++    staff: Staff = Depends(require("settings")),
++):
++    """Kitchen Stations admin: create/edit/reorder/deactivate + item counts."""
++    return _render_stations(request, db, staff)
++
++
++@router.get("/stations/routing/template")
++def export_routing_template(
++    db: Session = Depends(get_db),
++    staff: Staff = Depends(require("settings")),
++):
++    """Download the routing template: every active item with its category and
++    current station. The venue edits the `station` column (exact station name,
++    or blank/Unassigned) and re-uploads it to bulk-route the whole menu."""
++    rows = db.execute(
++        select(MenuItem, MenuCategory.name, Station.name)
++        .join(MenuCategory, MenuCategory.id == MenuItem.category_id)
++        .join(Station, Station.id == MenuItem.station_id, isouter=True)
++        .where(MenuItem.is_active.is_(True))
++        .order_by(MenuCategory.sort_order, MenuCategory.name, MenuItem.name)
++    ).all()
++    buf = io.StringIO()
++    w = csv.writer(buf)
++    w.writerow(["item_id", "category", "item", "price", "station"])
++    for item, cat_name, st_name in rows:
++        w.writerow([item.id, cat_name, item.name, f"{item.price_cents / 100:.2f}", st_name or ""])
++    return Response(
++        content=buf.getvalue(),
++        media_type="text/csv",
++        headers={"Content-Disposition": "attachment; filename=menu-routing-template.csv"},
++    )
++
++
++# The routing import treats the upload as untrusted. Hard caps so a malformed or
++# malicious file (zip bomb, runaway sheet) can't exhaust memory or wedge a worker.
++_IMPORT_MAX_UPLOAD = 5 * 1024 * 1024        # 5 MB raw file
++_XLSX_MAX_ENTRIES = 64                       # files inside the .xlsx zip
++_XLSX_MAX_UNCOMPRESSED = 40 * 1024 * 1024    # total inflated bytes (anti zip-bomb)
++_XLSX_MAX_ENTRY = 20 * 1024 * 1024           # inflated bytes per entry
++_IMPORT_MAX_ROWS = 20000                     # data rows processed
++_IMPORT_MAX_COLS = 64                        # columns read per row (ignore beyond)
++_IMPORT_MAX_STR = 200                        # cell string length kept
++
++
++def _parse_item_id(raw: str) -> int | None:
++    """Strict positive-integer id. Accepts '12' and Excel's '12.0', but rejects
++    '12.5', scientific notation, signs and anything else — so a fuzzy value can
++    never silently resolve to a different, valid item id."""
++    raw = (raw or "").strip()
++    if re.fullmatch(r"\d+", raw):
++        val = int(raw)
++    elif re.fullmatch(r"\d+\.0+", raw):          # Excel often stores ints as "12.0"
++        val = int(raw.split(".")[0])
++    else:
++        return None
++    return val if val > 0 else None
++
++
++_XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
++
++
++def _xlsx_col_index(ref: str) -> int:
++    """A1-style cell ref → 0-based column index ('B3' → 1)."""
++    letters = "".join(ch for ch in ref if ch.isalpha()).upper()
++    idx = 0
++    for ch in letters:
++        idx = idx * 26 + (ord(ch) - 64)
++        if idx > 1_000_000:                       # absurd ref — stop, don't overflow
++            break
++    return idx - 1
++
++
++def _read_xlsx_rows(raw: bytes) -> list[list[str]]:
++    """Read the first worksheet of an .xlsx as rows of strings — stdlib only, no
++    openpyxl. Handles shared and inline strings; enough for the routing template
++    (we only need the item_id and station columns)."""
++    z = zipfile.ZipFile(io.BytesIO(raw))
++    infos = z.infolist()
++    # Anti zip-bomb: bound entry count and inflated size before reading anything.
++    if len(infos) > _XLSX_MAX_ENTRIES:
++        raise ValueError("workbook has too many internal files")
++    if (sum(i.file_size for i in infos) > _XLSX_MAX_UNCOMPRESSED
++            or any(i.file_size > _XLSX_MAX_ENTRY for i in infos)):
++        raise ValueError("workbook is too large to read safely")
++
++    shared: list[str] = []
++    if "xl/sharedStrings.xml" in z.namelist():
++        root = ET.fromstring(z.read("xl/sharedStrings.xml"))
++        for si in root.findall(f"{_XLSX_NS}si"):
++            shared.append("".join(t.text or "" for t in si.iter(f"{_XLSX_NS}t"))[:_IMPORT_MAX_STR])
++    sheet = next((n for n in sorted(z.namelist())
++                  if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")), None)
++    if sheet is None:
++        return []
++    root = ET.fromstring(z.read(sheet))
++    rows: list[list[str]] = []
++    for row in root.iter(f"{_XLSX_NS}row"):
++        if len(rows) >= _IMPORT_MAX_ROWS + 1:      # +1 for a header row
++            break
++        cells: dict[int, str] = {}
++        maxcol = -1
++        for c in row.findall(f"{_XLSX_NS}c"):
++            col = _xlsx_col_index(c.get("r", "A"))
++            if col < 0 or col > _IMPORT_MAX_COLS:  # ignore cells beyond the cap
++                continue
++            ctype = c.get("t")
++            if ctype == "s":
++                v = c.find(f"{_XLSX_NS}v")
++                try:
++                    val = shared[int(v.text)] if v is not None and v.text else ""
++                except (ValueError, IndexError):
++                    val = ""
++            elif ctype == "inlineStr":
++                node = c.find(f"{_XLSX_NS}is")
++                val = ("".join(t.text or "" for t in node.iter(f"{_XLSX_NS}t"))
++                       if node is not None else "")
++            else:
++                v = c.find(f"{_XLSX_NS}v")
++                val = v.text if v is not None and v.text is not None else ""
++            cells[col] = (val or "")[:_IMPORT_MAX_STR]
++            maxcol = max(maxcol, col)
++        rows.append([cells.get(i, "") for i in range(maxcol + 1)])
++    return rows
++
++
++@router.post("/stations/routing/import")
++def import_routing(
++    request: Request,
++    file: UploadFile = File(...),
++    db: Session = Depends(get_db),
++    staff: Staff = Depends(require("settings")),
++):
++    """Apply a filled routing template (CSV or .xlsx). Reads `item_id` and
++    `station` (by header, or the first two columns if headerless). Matches the
++    station by name (case-insensitive, active); blank / "unassigned" clears
++    routing. Nothing destructive: unknown stations and missing items are
++    reported, not applied."""
++    # Untrusted upload — bound the raw size before reading it all into memory.
++    raw = file.file.read(_IMPORT_MAX_UPLOAD + 1)
++    if len(raw) > _IMPORT_MAX_UPLOAD:
++        return _render_stations(request, db, staff,
++                                {"error": "File too large (max 5 MB)."})
++    name = (file.filename or "").lower()
++    if name.endswith(".xlsx") or raw[:2] == b"PK":
++        try:
++            rows = [r for r in _read_xlsx_rows(raw) if any((c or "").strip() for c in r)]
++        except Exception:  # noqa: BLE001 — a bad/oversized workbook shouldn't 500
++            return _render_stations(request, db, staff, {
++                "error": "Couldn't read that Excel file (unreadable or too large). "
++                         "Re-save it as CSV (File → Save As → CSV) and upload again."})
++    else:
++        try:
++            text = raw.decode("utf-8-sig")
++        except UnicodeDecodeError:
++            text = raw.decode("latin-1", errors="replace")
++        rows = [r for r in csv.reader(io.StringIO(text)) if any((c or "").strip() for c in r)]
++    if not rows:
++        return _render_stations(request, db, staff,
++                                {"error": "The file was empty."})
++
++    # Locate the id / station columns from a header, tolerant of spacing/case
++    # ("Item ID", "item_id", "ItemId" all match). Falls back to the first two
++    # columns only when there's no recognisable header.
++    norm = [re.sub(r"[^a-z0-9]", "", (c or "").strip().lower()) for c in rows[0]]
++    i_id = next((k for k, v in enumerate(norm) if v in ("itemid", "id")), None)
++    i_st = next((k for k, v in enumerate(norm) if v == "station"), None)
++    if i_id is not None and i_st is not None:
++        body = rows[1:]
++    else:
++        i_id, i_st = 0, 1
++        body = rows
++
++    # Route only to active PRODUCTION stations — coordination stations (Expo,
++    # Delivery) don't prepare items, so they're never a valid routing target.
++    # Keyed by the SAME normalisation the duplicate-name check uses.
++    by_name = {
++        _normalize_station_name(s.name): s.id
++        for s in db.execute(
++            select(Station).where(
++                Station.is_active.is_(True), Station.type == StationType.PRODUCTION
++            )
++        ).scalars().all()
++    }
++
++    result = {"rows": 0, "assigned": 0, "cleared": 0, "unchanged": 0,
++              "missing_items": 0, "bad_rows": 0, "truncated": False, "unknown": {}}
++    if len(body) > _IMPORT_MAX_ROWS:
++        result["truncated"] = True
++        body = body[:_IMPORT_MAX_ROWS]
++    for r in body:
++        if len(r) <= max(i_id, i_st):
++            result["bad_rows"] += 1
++            continue
++        raw_id = (r[i_id] or "").strip()
++        st_name = (r[i_st] or "").strip()[:_IMPORT_MAX_STR]
++        item_id = _parse_item_id(raw_id)   # strict: '12' or '12.0', never '12.5'
++        if item_id is None:
++            result["bad_rows"] += 1
++            continue
++        result["rows"] += 1
++        item = db.get(MenuItem, item_id)
++        if item is None:
++            result["missing_items"] += 1
++            continue
++        norm_st = _normalize_station_name(st_name)
++        if norm_st in ("", "unassigned", "-", "none"):
++            target = None
++        else:
++            target = by_name.get(norm_st)
++            if target is None:
++                result["unknown"][st_name] = result["unknown"].get(st_name, 0) + 1
++                continue
++        if item.station_id == target:
++            result["unchanged"] += 1
++        else:
++            item.station_id = target
++            if target is None:
++                result["cleared"] += 1
++            else:
++                result["assigned"] += 1
++    db.commit()
++    return _render_stations(request, db, staff, result)
++
++
++def _normalize_station_name(value: str) -> str:
++    """The single station-name comparison key used everywhere (duplicate check
++    AND bulk-import matching), so both agree on when two names are the same:
++    trim + Unicode casefold. Storage keeps the original casing untouched."""
++    return (value or "").strip().casefold()
++
++
++def _station_name_clash(db: Session, name: str, exclude_id: int | None = None) -> bool:
++    """True if another station already has this name after normalisation — so
++    'Grill' and 'grill' can't both exist and make bulk-import matching ambiguous."""
++    norm = _normalize_station_name(name)
++    if not norm:
++        return False
++    rows = db.execute(select(Station.id, Station.name)).all()
++    return any(
++        sid != exclude_id and _normalize_station_name(nm) == norm
++        for sid, nm in rows
++    )
++
++
++def _station_form(
++    name: str, type_: str, color: str, icon: str, code: str, description: str,
++    target_prep_min: str, printer_ref: str, kds_ref: str,
++    visible_to_foh: int, visible_to_kitchen: int, station: Station,
++) -> None:
++    """Validate + apply the shared create/edit fields onto `station`."""
++    name = name.strip()
++    if not name:
++        raise HTTPException(400, "Station name is required.")
++    if type_ not in StationType.ALL:
++        raise HTTPException(400, "Invalid station type.")
++    color = (color or "").strip() or "#64748b"
++    if not _HEX_RE.match(color):
++        raise HTTPException(400, "Colour must be a #rrggbb hex value.")
++    prep = (target_prep_min or "").strip()
++    if prep:
++        try:
++            prep_val = int(prep)
++        except ValueError:
++            raise HTTPException(400, "Target prep must be a whole number of minutes.")
++        if prep_val < 0:
++            raise HTTPException(400, "Target prep can't be negative.")
++        station.target_prep_min = prep_val
++    else:
++        station.target_prep_min = None
++
++    station.name = name
++    station.type = type_
++    station.color = color
++    station.icon = (icon or "").strip()[:8]
++    station.code = (code or "").strip()[:12]
++    station.description = (description or "").strip()[:200]
++    # Coordination stations don't run a printer/prep line; keep those fields off.
++    if type_ == StationType.COORDINATION:
++        station.target_prep_min = None
++        station.printer_ref = ""
++    else:
++        station.printer_ref = (printer_ref or "").strip()[:60]
++    station.kds_ref = (kds_ref or "").strip()[:60]
++    station.visible_to_foh = bool(visible_to_foh)
++    station.visible_to_kitchen = bool(visible_to_kitchen)
++
++
++@router.post("/stations/create")
++def create_station(
++    name: str = Form(...),
++    type: str = Form(StationType.PRODUCTION),
++    color: str = Form("#64748b"),
++    icon: str = Form(""),
++    code: str = Form(""),
++    description: str = Form(""),
++    target_prep_min: str = Form(""),
++    printer_ref: str = Form(""),
++    kds_ref: str = Form(""),
++    visible_to_foh: int = Form(0),
++    visible_to_kitchen: int = Form(1),
++    db: Session = Depends(get_db),
++    staff: Staff = Depends(require("settings")),
++):
++    if _station_name_clash(db, name):
++        raise HTTPException(400, f"A station named “{name.strip()}” already exists.")
++    station = Station()
++    _station_form(name, type, color, icon, code, description, target_prep_min,
++                  printer_ref, kds_ref, visible_to_foh, visible_to_kitchen, station)
++    # New station goes to the end of the order.
++    last = db.execute(select(func.max(Station.display_order))).scalar_one()
++    station.display_order = (last or 0) + 1
++    db.add(station)
++    db.commit()
++    return RedirectResponse("/admin/stations", status_code=303)
++
++
++@router.post("/stations/{station_id}/edit")
++def edit_station(
++    station_id: int,
++    name: str = Form(...),
++    type: str = Form(StationType.PRODUCTION),
++    color: str = Form("#64748b"),
++    icon: str = Form(""),
++    code: str = Form(""),
++    description: str = Form(""),
++    target_prep_min: str = Form(""),
++    printer_ref: str = Form(""),
++    kds_ref: str = Form(""),
++    visible_to_foh: int = Form(0),
++    visible_to_kitchen: int = Form(1),
++    db: Session = Depends(get_db),
++    staff: Staff = Depends(require("settings")),
++):
++    station = db.get(Station, station_id)
++    if station is None:
++        raise HTTPException(404, "Station not found")
++    if _station_name_clash(db, name, exclude_id=station_id):
++        raise HTTPException(400, f"A station named “{name.strip()}” already exists.")
++    _station_form(name, type, color, icon, code, description, target_prep_min,
++                  printer_ref, kds_ref, visible_to_foh, visible_to_kitchen, station)
++    db.commit()
++    return RedirectResponse("/admin/stations", status_code=303)
++
++
++@router.post("/stations/{station_id}/move")
++def move_station(
++    station_id: int,
++    dir: str = Form(...),
++    db: Session = Depends(get_db),
++    staff: Staff = Depends(require("settings")),
++):
++    """Reorder by swapping display_order with the adjacent active station."""
++    station = db.get(Station, station_id)
++    if station is None:
++        raise HTTPException(404, "Station not found")
++    ordered = db.execute(
++        select(Station).where(Station.is_active.is_(True))
++        .order_by(Station.display_order, Station.name)
++    ).scalars().all()
++    idx = next((i for i, s in enumerate(ordered) if s.id == station_id), None)
++    if idx is not None:
++        swap = idx - 1 if dir == "up" else idx + 1
++        if 0 <= swap < len(ordered):
++            a, b = ordered[idx], ordered[swap]
++            a.display_order, b.display_order = b.display_order, a.display_order
++            db.commit()
++    return RedirectResponse("/admin/stations", status_code=303)
++
++
++@router.post("/stations/{station_id}/active")
++def set_station_active(
++    station_id: int,
++    active: int = Form(...),
++    db: Session = Depends(get_db),
++    staff: Staff = Depends(require("settings")),
++):
++    """Activate, or deactivate — deactivation reassigns any routed items to
++    Unassigned so a hidden station never silently orphans a menu item. The
++    confirmation (with the count) happens in the UI before this is called."""
++    station = db.get(Station, station_id)
++    if station is None:
++        raise HTTPException(404, "Station not found")
++    if active:
++        station.is_active = True
++    else:
++        station.is_active = False
++        # Explicitly un-route items pointing here — they become Unassigned.
++        db.execute(
++            update(MenuItem)
++            .where(MenuItem.station_id == station_id)
++            .values(station_id=None)
++        )
++    db.commit()
++    return RedirectResponse("/admin/stations", status_code=303)
++
++
+ # --------------------------------------------------------------------------
+ # Day menus (prix fixe) — the manager composes a fixed-price combo (4.1)
+ # --------------------------------------------------------------------------
+diff --git a/app/routers/sales.py b/app/routers/sales.py
+index a6b7392..2f8c662 100644
+--- a/app/routers/sales.py
++++ b/app/routers/sales.py
+@@ -5,10 +5,11 @@ import json
+ import secrets
+ from collections import deque
+ from datetime import datetime
++from urllib.parse import urlsplit, urlunsplit
+ 
+ from fastapi import APIRouter, Depends, Form, HTTPException, Request
+ from fastapi.responses import RedirectResponse
+-from sqlalchemy import func, select
++from sqlalchemy import func, or_, select
+ from sqlalchemy.orm import Session, selectinload
+ 
+ from app.database import get_db
+@@ -28,11 +29,15 @@ from app.models.oltp import (
+     MenuCategory,
+     MenuItem,
+     Modifier,
++    ModifierOption,
+     Order,
+     OrderItem,
+     OrderItemModifier,
+     OrderItemOption,
+     OrderStatus,
++    PreparationTask,
++    PreparationTaskModifier,
++    PreparationTaskStatus,
+     Payment,
+     build_allergens,
+     order_status_label,
+@@ -42,10 +47,12 @@ from app.models.oltp import (
+     SeatStatus,
+     SharedItemShare,
+     Staff,
++    Station,
+     TableStatus,
+     Zone,
+ )
+ from app.services import daymenu, happyhour
++from app.services import reservations as reservations_svc
+ from app.services import upsell
+ from app.services.payments import balance_panel, ensure_seats, set_shared_item_shares
+ 
+@@ -81,6 +88,32 @@ def _next_code(db: Session) -> str:
+ # 4.1.1  Floor plan
+ # --------------------------------------------------------------------------
+ 
++
++def _order_station_status(order: "Order") -> list[dict]:
++    """Compact per-station readiness for a table card (Kitchen Stations, Stage A).
++
++    Groups the order's fired lines by their station snapshot; each station is
++    ready only when all of its lines are. Returns the small breakdown the floor
++    card shows (Pizza ✓ · Grill ⏳ · Bar ✓) — display only, it never changes the
++    card's aggregate status.
++    """
++    groups: dict = {}
++    for i in order.items:
++        if i.kitchen_status in (KitchenStatus.PREPARING, KitchenStatus.READY):
++            groups.setdefault(i.station_id, []).append(i)
++    out = []
++    for _sid, items in groups.items():
++        st = items[0].station
++        out.append({
++            "station": st,
++            "name": st.name if st else "Unassigned",
++            "ready": all(it.kitchen_status == KitchenStatus.READY for it in items),
++            "count": sum(it.quantity for it in items),
++        })
++    out.sort(key=lambda g: (g["station"].display_order if g["station"] else 999, g["name"]))
++    return out
++
++
+ @router.get("/")
+ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db), staff: Staff = Depends(current_staff)):
+     # Retired tables (admin) keep their history but leave the floor.
+@@ -100,8 +133,9 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
+         )
+         # Card total is sum(item.line_total_cents) — a computed property, so the
+         # items (and their modifiers) must be loaded; batch them across all
+-        # orders instead of one graph load per occupied table.
+-        .options(selectinload(Order.items))
++        # orders instead of one graph load per occupied table. Station is
++        # selectinloaded too (the per-station strip reads it, no N+1).
++        .options(selectinload(Order.items).selectinload(OrderItem.station))
+     ).scalars().all()
+     by_table = {o.table_id: o for o in open_orders}
+ 
+@@ -120,14 +154,21 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
+             t.status = TableStatus.OCCUPIED
+         db.commit()
+ 
++    # Tables a booking is holding right now (its window is open). Free tables in
++    # this map show as "reserved" on the live floor instead of free, and can be
++    # seated straight from the map. Auto-drops any no-show past its window.
++    holds = reservations_svc.active_holds(db)
++
+     # Role visibility: managers/owners see every table; a waiter sees only their
+     # own tables plus occupied ones no one has claimed yet (which they can pick
+-    # up by opening the order) — never the free ones.
++    # up by opening the order) — never the free ones. Held tables stay visible to
++    # everyone, so a waiter can seat the booking from the map.
+     if staff.role not in (Role.OWNER, Role.MANAGER):
+         tables = [
+             t for t in tables
+             if t.current_waiter_id == staff.id
+             or (t.status != TableStatus.FREE and t.current_waiter_id is None)
++            or t.id in holds
+         ]
+ 
+     cards = []
+@@ -146,8 +187,10 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
+         #   ready_serve  a waiter's on it and food is up — RUN it (wins on partial)
+         #   served       delivered, guests dining
+         #   occupied     order in, kitchen still cooking, nothing up yet
++        res = holds.get(t.id)
+         if t.status == TableStatus.FREE:
+-            disp = "free"
++            # A held free table reads as "reserved" (booking incoming), not free.
++            disp = "reserved" if res else "free"
+         elif t.status == TableStatus.READY_TO_PAY:
+             disp = "ready_to_pay"
+         elif not claimed:
+@@ -178,6 +221,13 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
+                     int((datetime.now() - order.opened_at).total_seconds() // 60)
+                     if order else 0
+                 ),
++                # The booking holding this table right now (None if not reserved).
++                # Carries guest name / time / party for the reserved card, and its
++                # id for the one-tap "Seat" straight from the map.
++                "reservation": res,
++                # Per-station readiness of what's fired (Pizza ✓ · Grill ⏳ …),
++                # shown as a compact strip on the card. Empty when nothing's fired.
++                "stations": _order_station_status(order) if order else [],
+             }
+         )
+ 
+@@ -187,7 +237,7 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
+         return {
+             "free": n("free"), "seated": n("seated"), "occupied": n("occupied"),
+             "ready_serve": n("ready_serve"), "served": n("served"),
+-            "ready": n("ready_to_pay"),
++            "ready": n("ready_to_pay"), "reserved": n("reserved"),
+         }
+ 
+     counts = tally(cards)
+@@ -215,6 +265,23 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
+                 seen[w.id] = w
+         return sorted(seen.values(), key=lambda w: w.name)
+ 
++    def zone_groups(group):
++        # Cards bucketed by zone, each with its table + seat totals, for the
++        # bordered per-zone panels in the list view. Ordered as on the floor.
++        buckets: dict[int, dict] = {}
++        for c in group:
++            z = c["table"].zone_ref
++            key = z.id if z else 0
++            b = buckets.setdefault(key, {"zone": z, "cards": [], "tables": 0, "seats": 0})
++            b["cards"].append(c)
++            b["tables"] += 1
++            b["seats"] += c["table"].capacity
++        return sorted(
++            buckets.values(),
++            key=lambda b: (b["zone"].sort_order if b["zone"] else 999,
++                           b["zone"].name if b["zone"] else "zzz"),
++        )
++
+     sections = []
+     for fl in sorted(
+         {c["table"].floor for c in cards if c["table"].floor},
+@@ -222,13 +289,15 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
+     ):
+         group = [c for c in cards if c["table"].floor_id == fl.id]
+         sections.append({"floor": fl, "cards": group, "counts": tally(group),
+-                         "zones": zones_of(group), "waiters": waiters_of(group)})
++                         "zones": zones_of(group), "waiters": waiters_of(group),
++                         "zone_groups": zone_groups(group)})
+ 
+     # A table whose zone was removed would otherwise vanish from the floor.
+     homeless = [c for c in cards if not c["table"].floor]
+     if homeless:
+         sections.append({"floor": None, "cards": homeless, "counts": tally(homeless),
+-                         "zones": zones_of(homeless), "waiters": waiters_of(homeless)})
++                         "zones": zones_of(homeless), "waiters": waiters_of(homeless),
++                         "zone_groups": zone_groups(homeless)})
+ 
+     # Every active zone (with its map rectangle) per floor, so the spatial map can
+     # draw each zone — including empty ones — behind its tables.
+@@ -1499,6 +1568,77 @@ def _recompute_kitchen(order: Order, now: datetime) -> None:
+         order.kitchen_status = KitchenStatus.PENDING
+ 
+ 
++def _create_tasks_for_item(db: Session, item: OrderItem, now: datetime) -> None:
++    """Kitchen Stations B1 — create the PreparationTask set for a line being
++    fired, snapshotting routing at this instant.
++
++    One task per distinct target station: the item's own station (the base task,
++    always present, may be NULL = Unassigned) plus any station its modifiers /
++    options explicitly route to. Modifiers with no station (or the item's station)
++    fold into the base task. The item is NOT duplicated — the sale line stays one
++    `OrderItem`.
++
++    Idempotent: if the line already has tasks it returns immediately, so a
++    repeated/retried fire never double-creates. (No UNIQUE(order_item, station)
++    constraint — a future re-fire/remake may legitimately add same-station tasks;
++    idempotency here is the pending→preparing transition + this guard, serialized
++    by the order row lock the fire routes take.)
++    """
++    if item.tasks:
++        return
++    base_station = item.menu_item.station_id
++    label = item.menu_item.name
++    groups: dict[int | None, list[tuple[str, int, str]]] = {}
++    groups.setdefault(base_station, []).append(("base", item.id, label))
++    for m in item.modifiers:
++        st = m.modifier.station_id if m.modifier else None
++        target = st if (st is not None and st != base_station) else base_station
++        groups.setdefault(target, []).append(
++            ("modifier", m.id, m.modifier.name if m.modifier else "")
++        )
++    for o in item.options:
++        mo = db.get(ModifierOption, o.option_id) if o.option_id else None
++        st = mo.station_id if mo else None
++        target = st if (st is not None and st != base_station) else base_station
++        groups.setdefault(target, []).append(("option", o.id, o.label))
++
++    for station_id, entries in groups.items():
++        task = PreparationTask(
++            order_item_id=item.id, order_id=item.order_id, station_id=station_id,
++            course=item.course, kitchen_status=PreparationTaskStatus.PREPARING,
++            quantity=item.quantity, item_label=label,
++            is_base=(station_id == base_station), fire_seq=1, fired_at=now,
++        )
++        for kind, sid, lbl in entries:
++            if kind == "base":
++                continue                    # the item itself is already item_label
++            task.details.append(PreparationTaskModifier(
++                source_kind=kind, source_id=sid, label=lbl, station_id=station_id,
++            ))
++        db.add(task)
++        item.tasks.append(task)
++
++
++def rollup_item_kitchen_status(item: OrderItem) -> str:
++    """Derive OrderItem.kitchen_status from its PreparationTasks (Stage B1).
++
++    Rule: ready only when every non-served task is ready; otherwise preparing.
++    NEVER sets served — served is owned by the existing serving flow. A line with
++    no tasks (legacy / not fired) is left untouched, so old behavior is preserved.
++    In B1 this drives only the fire→preparing transition; B2 makes it the live
++    authority once the KDS marks individual tasks.
++    """
++    tasks = item.tasks
++    if not tasks or item.kitchen_status == KitchenStatus.SERVED:
++        return item.kitchen_status
++    active = [t for t in tasks if t.kitchen_status != PreparationTaskStatus.SERVED]
++    if active and all(t.kitchen_status == PreparationTaskStatus.READY for t in active):
++        item.kitchen_status = KitchenStatus.READY
++    elif active:
++        item.kitchen_status = KitchenStatus.PREPARING
++    return item.kitchen_status
++
++
+ @router.post("/orders/{order_id}/send")
+ def send_to_kitchen(
+     order_id: int,
+@@ -1514,6 +1654,11 @@ def send_to_kitchen(
+     order = db.get(Order, order_id)
+     if order is None:
+         raise HTTPException(404, "Order not found")
++    # Serialize concurrent fires of the same order (Postgres row lock; no-op on
++    # SQLite, which already serializes writers) so two in-flight fires can't both
++    # create the same line's tasks. The idempotency guard is the pending→preparing
++    # transition: the loser re-reads no pending items and creates nothing.
++    db.execute(select(Order).where(Order.id == order_id).with_for_update())
+     pending = [i for i in order.items if i.kitchen_status == KitchenStatus.PENDING]
+     if course:
+         pending = [i for i in pending if i.course == course]
+@@ -1525,7 +1670,14 @@ def send_to_kitchen(
+     # goes back to full price before it's committed to the kitchen.
+     happyhour.revert_expired(db, order, now)
+     for item in pending:
+-        item.kitchen_status = KitchenStatus.PREPARING
++        # Snapshot the routing at fire time (Kitchen Stations): the KDS/Expo read
++        # this, not the live MenuItem, so re-routing later never moves work that's
++        # already on the line. NULL menu_item.station_id → Unassigned bucket.
++        item.station_id = item.menu_item.station_id
++        # Stage B1: create the preparation tasks (base + modifier stations) and
++        # derive the line status from them (all tasks preparing → preparing).
++        _create_tasks_for_item(db, item, now)
++        rollup_item_kitchen_status(item)
+     order.sent_to_kitchen_at = order.sent_to_kitchen_at or now
+     _recompute_kitchen(order, now)
+     db.commit()
+@@ -1554,10 +1706,13 @@ def fire_item(
+     if item.kitchen_status != KitchenStatus.PENDING:
+         raise HTTPException(400, "That item has already been fired.")
+ 
++    db.execute(select(Order).where(Order.id == order_id).with_for_update())  # serialize fires
+     now = datetime.now()
+     happyhour.revert_expired(db, order, now)   # lock at full price if grace passed
+     seat = item.seat.seat_number if item.seat else 0
+-    item.kitchen_status = KitchenStatus.PREPARING
++    item.station_id = item.menu_item.station_id     # snapshot routing at fire time
++    _create_tasks_for_item(db, item, now)           # Stage B1 tasks
++    rollup_item_kitchen_status(item)                # tasks preparing → line preparing
+     order.sent_to_kitchen_at = order.sent_to_kitchen_at or now
+     _recompute_kitchen(order, now)
+     db.commit()
+@@ -1569,11 +1724,17 @@ def fire_item(
+ # 4.1.3  Kitchen display
+ # --------------------------------------------------------------------------
+ 
++# Cap how many tickets the board renders (oldest-fired first). Keeps the page
++# responsive under an unusually large open-order set; the rest are counted.
++KITCHEN_LIMIT = 80
++
++
+ @router.get("/kitchen")
+ def kitchen_display(
+     request: Request,
+     view: str = "all",
+     kstatus: str = "all",
++    station: str = "all",
+     mine: int | None = None,
+     db: Session = Depends(get_db),
+     staff: Staff = Depends(require("kitchen.view")),
+@@ -1588,6 +1749,19 @@ def kitchen_display(
+     if kstatus != "all" and kstatus not in KITCHEN_STATES:
+         kstatus = "all"
+ 
++    # Station filter (Kitchen Stations, Stage A): "all" = the full board;
++    # "unassigned" = fired lines with no routing; else a station id. Reads the
++    # snapshot on the order line, never the live MenuItem.
++    if station == "unassigned":
++        station_filter: str | int | None = "unassigned"
++    elif station not in ("all", ""):
++        try:
++            station_filter = int(station)
++        except ValueError:
++            station_filter, station = None, "all"
++    else:
++        station_filter = None
++
+     # "My tables" defaults on for anyone actually serving tables; unset in the URL
+     # (first visit) means "decide by coverage", an explicit 0/1 (the toggle) wins.
+     mine = (1 if _covers_tables(db, staff) else 0) if mine is None else (1 if mine else 0)
+@@ -1610,39 +1784,88 @@ def kitchen_display(
+             _recompute_kitchen(o, datetime.now())
+         db.commit()
+ 
+-    q = select(Order).where(
++    _on_board = [
+         Order.kitchen_status.in_(KITCHEN_STATES),
+         # Served orders have been delivered — off the kitchen's plate.
+         Order.status.not_in(
+             (OrderStatus.SERVED, OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED)
+         ),
+-    )
+-    orders = db.execute(q).scalars().all()
++    ]
++
++    def _view_mine(stmt):
++        """Apply the channel view + 'my tables' in SQL, so they narrow the set
++        BEFORE the LIMIT — a valid order must never be pushed past the cap and
++        silently vanish (e.g. an Unassigned order at position 81)."""
++        if view in ("dine_in", "delivery"):
++            stmt = stmt.join(Channel, Channel.id == Order.channel_id).where(
++                Channel.channel_type == "delivery" if view == "delivery"
++                else Channel.channel_type != "delivery"
++            )
++        if mine:
++            stmt = stmt.where(Order.waiter_id == staff.id)
++        return stmt
++
++    # Status tallies over the board (view/mine applied, but NOT the status or
++    # station filter) so each status button shows what it would reveal.
++    status_counts = {KitchenStatus.PREPARING: 0, KitchenStatus.READY: 0}
++    for st, n in db.execute(
++        _view_mine(select(Order.kitchen_status, func.count()).where(*_on_board))
++        .group_by(Order.kitchen_status)
++    ):
++        status_counts[st] = n
++
++    # Fired lines per station (+ explicit "unassigned"), over the same board —
++    # the station tab badges. Aggregated in SQL, not by scanning a capped page.
++    station_line_counts: dict = {}
++    for sid, n in db.execute(
++        _view_mine(
++            select(OrderItem.station_id, func.count())
++            .select_from(OrderItem).join(Order, Order.id == OrderItem.order_id)
++            .where(*_on_board, OrderItem.kitchen_status.in_(KITCHEN_STATES))
++        ).group_by(OrderItem.station_id)
++    ):
++        station_line_counts[sid if sid is not None else "unassigned"] = n
++
++    # The rendered set: view/mine + the status and station filters, ALL in SQL,
++    # oldest-fired first, then capped. board_total counts the SAME filtered set
++    # (no LIMIT) so "showing N of M" is honest.
++    tq = _view_mine(select(Order).where(*_on_board))
++    if kstatus != "all":
++        tq = tq.where(Order.kitchen_status == kstatus)
++    if station_filter is not None:
++        sub = select(OrderItem.id).where(
++            OrderItem.order_id == Order.id,
++            OrderItem.kitchen_status.in_(KITCHEN_STATES),
++            OrderItem.station_id.is_(None) if station_filter == "unassigned"
++            else OrderItem.station_id == station_filter,
++        )
++        tq = tq.where(sub.exists())
++    board_total = db.execute(
++        select(func.count()).select_from(tq.subquery())
++    ).scalar_one()
++    orders = db.execute(
++        tq.options(selectinload(Order.items).selectinload(OrderItem.station))
++        .order_by(Order.sent_to_kitchen_at).limit(KITCHEN_LIMIT)
++    ).scalars().all()
+ 
+-    # Counts reflect the channel view but not the status filter, so each status
+-    # button can show how many it would reveal — the number must not drop to
+-    # zero just because a different status is currently selected.
+     now = datetime.now()
+     tickets = []
+-    status_counts = {KitchenStatus.PREPARING: 0, KitchenStatus.READY: 0}
+     for o in orders:
+         is_delivery = o.channel.channel_type == "delivery"
+-        if view == "dine_in" and is_delivery:
+-            continue
+-        if view == "delivery" and not is_delivery:
+-            continue
+-        # "Only my tables": a waiter narrows the board to the orders they're
+-        # covering. Applied with the channel view (before the counts) so the
+-        # status tallies match the narrowed set.
+-        if mine and o.waiter_id != staff.id:
+-            continue
+-        status_counts[o.kitchen_status] = status_counts.get(o.kitchen_status, 0) + 1
+-        if kstatus != "all" and o.kitchen_status != kstatus:
++        # Items grouped by course, scoped to the chosen station.
++        courses = _ticket_courses(o, station_filter)
++        if station_filter is not None and not courses:
+             continue
+         sent_at = o.sent_to_kitchen_at or o.opened_at
+         elapsed = int((now - sent_at).total_seconds() // 60)
+         # Colour-coded urgency (4.1.3).
+         urgency = "ok" if elapsed < 10 else ("warn" if elapsed < 20 else "late")
++        if station_filter is None:
++            total_items = sum(
++                i.quantity for i in o.items if i.kitchen_status != KitchenStatus.SERVED
++            )
++        else:
++            total_items = sum(i.quantity for c in courses for i in c["lines"])
+         tickets.append({
+             "order": o,
+             "elapsed": elapsed,
+@@ -1654,12 +1877,8 @@ def kitchen_display(
+             "server": o.waiter.name if o.waiter else None,
+             # Field 5: the line count the expo checks the plated tray against —
+             # only what's still on the line (served items have left the kitchen).
+-            "total_items": sum(
+-                i.quantity for i in o.items if i.kitchen_status != KitchenStatus.SERVED
+-            ),
+-            # Items grouped by course, each with an aggregate status so the line
+-            # can mark a whole course up at once (4.1.3 coursing).
+-            "courses": _ticket_courses(o),
++            "total_items": total_items,
++            "courses": courses,
+             "where": (
+                 f"Table {o.table.number}" if o.table
+                 else f"{o.channel.name}"
+@@ -1668,19 +1887,56 @@ def kitchen_display(
+         })
+     tickets.sort(key=lambda t: (-t["elapsed"],))
+ 
++    # Station tabs: active stations PLUS any inactive station that still has
++    # fired lines on the board — so a just-deactivated station's live work stays
++    # reachable (its lines keep their snapshot; they don't move to Unassigned).
++    tab_ids = {sid for sid in station_line_counts if isinstance(sid, int)}
++    stations = db.execute(
++        select(Station).where(or_(Station.is_active.is_(True), Station.id.in_(tab_ids)))
++        .order_by(Station.display_order, Station.name)
++    ).scalars().all()
++
++    # Station tab counts: total on the board (All) plus per station / unassigned.
++    station_tab_counts = {
++        "all": sum(station_line_counts.values()),
++        "unassigned": station_line_counts.get("unassigned", 0),
++    }
++    for s in stations:
++        station_tab_counts[s.id] = station_line_counts.get(s.id, 0)
++
+     return render(request, "kitchen.html", {
+         "db": db, "staff": staff, "tickets": tickets, "view": view,
+         "kstatus": kstatus, "mine": 1 if mine else 0, "status_counts": status_counts,
++        "stations": stations, "station": station,
++        "station_tab_counts": station_tab_counts,
++        # Only offer the Unassigned tab when something un-routed is actually on
++        # the board — but never hide those lines: the All board still shows them.
++        "has_unassigned": station_line_counts.get("unassigned", 0) > 0,
++        "board_total": board_total, "limit": KITCHEN_LIMIT,
+         "title": "Kitchen display",
+     })
+ 
+ 
+-def _ticket_courses(order: Order) -> list[dict]:
++def _line_in_station(item: OrderItem, station_filter) -> bool:
++    """Whether a line belongs to the selected station filter (Kitchen Stations).
++
++    None = every station (the full expo board); "unassigned" = un-routed lines;
++    an int = that station id. Matches the snapshot on the line, not live routing.
++    """
++    if station_filter is None:
++        return True
++    if station_filter == "unassigned":
++        return item.station_id is None
++    return item.station_id == station_filter
++
++
++def _ticket_courses(order: Order, station_filter=None) -> list[dict]:
+     """An order's items grouped by course for the kitchen display, in meal order.
+ 
+     Only fired items (preparing/ready) reach the kitchen, so a held course
+     simply doesn't appear until the waiter fires it. Each group's status is the
+     least-advanced item in it — a course is 'ready' only when all its items are.
++    A station_filter scopes the lines to one station (or the Unassigned bucket).
+     """
+     # A line added after the order was first fired is a later addition — flag it
+     # so the line can tell a new item apart from what it already made/plated
+@@ -1689,6 +1945,8 @@ def _ticket_courses(order: Order) -> list[dict]:
+     groups: dict[int, list] = {}
+     for i in order.items:
+         if i.kitchen_status in (KitchenStatus.PREPARING, KitchenStatus.READY):
++            if not _line_in_station(i, station_filter):
++                continue
+             i.is_new = bool(first_fire and i.created_at and i.created_at > first_fire)
+             groups.setdefault(i.course, []).append(i)
+     out = []
+@@ -1706,12 +1964,132 @@ def _ticket_courses(order: Order) -> list[dict]:
+     return out
+ 
+ 
++def _expo_courses(order: Order) -> list[dict]:
++    """An order's fired lines grouped by course, then by station — the Expo's
++    coordination view (Kitchen Stations, Stage A).
++
++    Reads the station snapshot on each line. Per station: ready only when all of
++    its lines are ready. Per course: ready only when every station is — else it
++    is "waiting on" the stations that aren't. Coursing is preserved, so a held
++    later course never blocks an earlier one from reading ready.
++    """
++    by_course: dict[int, dict] = {}
++    for i in order.items:
++        if i.kitchen_status in (KitchenStatus.PREPARING, KitchenStatus.READY):
++            by_course.setdefault(i.course, {}).setdefault(i.station_id, []).append(i)
++    out = []
++    for course in sorted(by_course):
++        st_groups, waiting = [], []
++        all_ready = True
++        for _sid, items in by_course[course].items():
++            ready = all(it.kitchen_status == KitchenStatus.READY for it in items)
++            st = items[0].station                      # snapshot relationship
++            name = st.name if st else "Unassigned"
++            if not ready:
++                all_ready = False
++                waiting.append(name)
++            st_groups.append({"station": st, "name": name, "ready": ready, "lines": items})
++        st_groups.sort(key=lambda g: (g["station"].display_order if g["station"] else 999, g["name"]))
++        waiting.sort()
++        out.append({
++            "course": course, "label": course_label(course),
++            "stations": st_groups, "ready": all_ready, "waiting_on": waiting,
++            "multi": len(by_course) > 1,
++        })
++    return out
++
++
++# The Expo board caps how many orders it renders — with a large open-order set a
++# full render would be unusable. Oldest-fired first (most urgent), rest counted.
++EXPO_LIMIT = 60
++
++
++@router.get("/expo")
++def expo_display(
++    request: Request,
++    view: str = "all",
++    mine: int | None = None,
++    db: Session = Depends(gewarning: in the working copy of 'tests/test_prep_tasks.py', LF will be replaced by CRLF the next time Git touches it
+t_db),
++    staff: Staff = Depends(require("kitchen.view")),
++):
++    """Coordination board: per table/course, which stations are ready and the
++    overall 'waiting on X' → 'ready to serve'. Reuses the per-item kitchen status
++    and the station snapshot; no new state (Kitchen Stations, Stage A)."""
++    mine = (1 if _covers_tables(db, staff) else 0) if mine is None else (1 if mine else 0)
++
++    # Channel view + "my tables" applied in SQL, before the LIMIT, so the cap
++    # never drops a valid order off the end.
++    board = select(Order).where(
++        Order.kitchen_status.in_((KitchenStatus.PREPARING, KitchenStatus.READY)),
++        Order.status.not_in(
++            (OrderStatus.SERVED, OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED)
++        ),
++    )
++    if view in ("dine_in", "delivery"):
++        board = board.join(Channel, Channel.id == Order.channel_id).where(
++            Channel.channel_type == "delivery" if view == "delivery"
++            else Channel.channel_type != "delivery"
++        )
++    if mine:
++        board = board.where(Order.waiter_id == staff.id)
++
++    total = db.execute(select(func.count()).select_from(board.subquery())).scalar_one()
++    orders = db.execute(
++        board.options(selectinload(Order.items).selectinload(OrderItem.station))
++        .order_by(Order.sent_to_kitchen_at).limit(EXPO_LIMIT)
++    ).scalars().all()
++
++    now = datetime.now()
++    cards = []
++    for o in orders:
++        is_delivery = o.channel.channel_type == "delivery"
++        courses = _expo_courses(o)
++        if not courses:
++            continue
++        sent_at = o.sent_to_kitchen_at or o.opened_at
++        elapsed = int((now - sent_at).total_seconds() // 60)
++        urgency = "ok" if elapsed < 10 else ("warn" if elapsed < 20 else "late")
++        cards.append({
++            "order": o, "courses": courses, "elapsed": elapsed, "urgency": urgency,
++            "is_delivery": is_delivery,
++            "server": o.waiter.name if o.waiter else None,
++            "all_ready": o.kitchen_status == KitchenStatus.READY,
++            "where": (
++                f"Table {o.table.number}" if o.table
++                else f"{o.channel.name}"
++                + (f" · {o.delivery.platform_ref}" if o.delivery and o.delivery.platform_ref else "")
++            ),
++        })
++    cards.sort(key=lambda t: (-t["elapsed"],))
++
++    return render(request, "expo.html", {
++        "db": db, "staff": staff, "cards": cards, "view": view,
++        "mine": 1 if mine else 0, "shown": total, "limit": EXPO_LIMIT,
++        "title": "Expo",
++    })
++
++
++def _safe_next_board(target: str) -> str:
++    """Allowlist the post-action redirect. The only legitimate destinations in
++    Stage A are the kitchen and expo boards, so the PATH must be exactly
++    "/kitchen" or "/expo" (the query string may ride along). Everything else —
++    an external URL, "//host", a backslash, or a look-alike like "/expo-x" —
++    falls back to "/kitchen". Validated with urlsplit, not startswith."""
++    if not target or "\\" in target:
++        return "/kitchen"
++    parts = urlsplit(target)
++    if parts.scheme or parts.netloc or parts.path not in ("/kitchen", "/expo"):
++        return "/kitchen"
++    return urlunsplit(("", "", parts.path, parts.query, ""))
++
++
+ @router.post("/kitchen/{order_id}/status")
+ def kitchen_status(
+     order_id: int,
+     status: str = Form(...),
+     course: int = Form(0),
+     item_id: int = Form(0),
++    next: str = Form(""),
+     db: Session = Depends(get_db),
+     staff: Staff = Depends(require("kitchen.update")),
+ ):
+@@ -1745,7 +2123,8 @@ def kitchen_status(
+         order.sent_to_kitchen_at = order.sent_to_kitchen_at or now
+     _recompute_kitchen(order, now)
+     db.commit()
+-    return RedirectResponse("/kitchen", status_code=303)
++    # Return to the board the action came from — allowlisted to /kitchen or /expo.
++    return RedirectResponse(_safe_next_board(next), status_code=303)
+ 
+ 
+ # --------------------------------------------------------------------------
+diff --git a/tests/test_prep_tasks.py b/tests/test_prep_tasks.py
+new file mode 100644
+index 0000000..6a22581
+--- /dev/null
++++ b/tests/test_prep_tasks.py
+@@ -0,0 +1,313 @@
++"""Kitchen Stations Stage B1 — PreparationTask model + creation/snapshot + rollup
+++ backfill + idempotency. Tasks are introduced UNDER the current system; the KDS/
++Expo/floor are NOT changed here (that is B2/B3). Throwaway SQLite + overrides.
++Run: python tests/test_prep_tasks.py
++"""
++import os
++import sys
++import tempfile
++import uuid
++from datetime import datetime
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++from fastapi.testclient import TestClient
++from sqlalchemy import create_engine, event
++from sqlalchemy.orm import sessionmaker
++
++from app.database import Base
++from app.deps import current_staff, get_db
++from app.main import app
++from app.models import oltp  # noqa: F401
++from app.models.oltp import (
++    Channel, KitchenStatus, MenuCategory, MenuItem, Modifier, ModifierGroup,
++    ModifierOption, Order, OrderItem, OrderItemModifier, OrderItemOption,
++    OrderStatus, PreparationTask, PreparationTaskStatus, Staff, Station,
++)
++
++_fail = []
++
++
++def check(cond, label):
++    print(f"  {'ok  ' if cond else 'FAIL'} {label}")
++    if not cond:
++        _fail.append(label)
++
++
++def _session():
++    path = os.path.join(tempfile.gettempdir(), f"prep_{uuid.uuid4().hex}.db")
++    engine = create_engine(f"sqlite:///{path}", future=True)
++
++    @event.listens_for(engine, "connect")
++    def _fk(dbapi, _rec):  # noqa: ANN001
++        dbapi.execute("PRAGMA foreign_keys=ON")
++
++    Base.metadata.create_all(engine)
++    return sessionmaker(bind=engine, future=True)()
++
++
++def _client(db, staff):
++    app.dependency_overrides[get_db] = lambda: db
++    app.dependency_overrides[current_staff] = lambda: staff
++    return TestClient(app)
++
++
++def _owner(db):
++    o = Staff(name="Owner", role="owner", pin_code="x", is_active=True)
++    db.add(o); db.commit()
++    return o
++
++
++def _base(db, item_station=None):
++    """A dine-in channel + a menu item routed to `item_station` (or Unassigned)."""
++    ch = Channel(code="dine_in", name="Dine-in", channel_type="dine_in")
++    cat = MenuCategory(name="Mains")
++    db.add_all([ch, cat]); db.flush()
++    item = MenuItem(category_id=cat.id, name="Burger", price_cents=1500,
++                    station_id=item_station)
++    db.add(item); db.commit()
++    return ch, cat, item
++
++
++def _order_with_item(db, ch, menu_item, course=2):
++    o = Order(code=f"O-{uuid.uuid4().hex[:6]}", channel_id=ch.id, status=OrderStatus.OPEN,
++              guest_count=2, opened_at=datetime.now())
++    db.add(o); db.flush()
++    oi = OrderItem(order_id=o.id, menu_item_id=menu_item.id, quantity=1,
++                   unit_price_cents=menu_item.price_cents, kitchen_status=KitchenStatus.PENDING,
++                   course=course)
++    db.add(oi); db.commit()
++    return o, oi
++
++
++def _fire(c, order_id, course=0):
++    return c.post(f"/orders/{order_id}/send", data={"course": course}, follow_redirects=False)
++
++
++# --------------------------------------------------------------------------
++
++def test_single_station_task():
++    db = _session(); owner = _owner(db)
++    grill = Station(name="Grill", type="production", is_active=True); db.add(grill); db.flush()
++    ch, cat, mi = _base(db, item_station=grill.id)
++    o, oi = _order_with_item(db, ch, mi)
++    c = _client(db, owner)
++    _fire(c, o.id)
++    db.refresh(oi)
++    tasks = oi.tasks
++    check(len(tasks) == 1, "a single-station item fires exactly one task")
++    check(tasks[0].station_id == grill.id and tasks[0].is_base, "the base task snapshots the item's station")
++    check(tasks[0].kitchen_status == PreparationTaskStatus.PREPARING, "task starts preparing at fire")
++    check(oi.kitchen_status == KitchenStatus.PREPARING, "line rolls up to preparing")
++    app.dependency_overrides.clear(); db.close()
++
++
++def test_multi_station_snapshot():
++    db = _session(); owner = _owner(db)
++    grill = Station(name="Grill", type="production", is_active=True)
++    fryer = Station(name="Fryer", type="production", is_active=True)
++    cold = Station(name="Cold", type="production", is_active=True)
++    db.add_all([grill, fryer, cold]); db.flush()
++    ch, cat, mi = _base(db, item_station=grill.id)
++    # A modifier routed to Fryer, a NULL modifier (folds into base), and a grouped
++    # option routed to Cold.
++    fries = Modifier(name="Fries", station_id=fryer.id)
++    cheese = Modifier(name="Extra cheese", station_id=None)
++    grp = ModifierGroup(menu_item_id=mi.id, name="Sauce")
++    db.add_all([fries, cheese, grp]); db.flush()
++    sauce = ModifierOption(group_id=grp.id, name="Special sauce", station_id=cold.id)
++    db.add(sauce); db.flush()
++    o, oi = _order_with_item(db, ch, mi)
++    db.add_all([
++        OrderItemModifier(order_item_id=oi.id, modifier_id=fries.id, price_delta_cents=0),
++        OrderItemModifier(order_item_id=oi.id, modifier_id=cheese.id, price_delta_cents=0),
++        OrderItemOption(order_item_id=oi.id, option_id=sauce.id, group_name="Sauce",
++                        label="Special sauce", price_delta_cents=0),
++    ])
++    db.commit()
++    c = _client(db, owner)
++    _fire(c, o.id)
++    db.refresh(oi)
++    by_station = {t.station_id: t for t in oi.tasks}
++    check(len(oi.tasks) == 3, "one sale line fans out to 3 tasks (Grill + Fryer + Cold)")
++    check(by_station.get(grill.id) is not None and by_station[grill.id].is_base, "base task at Grill")
++    check(by_station.get(fryer.id) is not None and not by_station[fryer.id].is_base, "Fryer task (modifier)")
++    check(by_station.get(cold.id) is not None, "Cold task (option)")
++    # Extra cheese (NULL) folds into the base Grill task's details.
++    grill_labels = {d.label for d in by_station[grill.id].details}
++    check("Extra cheese" in grill_labels, "a NULL-station modifier folds into the base task")
++    check({d.label for d in by_station[fryer.id].details} == {"Fries"}, "Fryer task carries the Fries label")
++    check({d.label for d in by_station[cold.id].details} == {"Special sauce"}, "Cold task carries the sauce label")
++    check(all(t.item_label == "Burger" for t in oi.tasks), "every task snapshots the item name")
++    app.dependency_overrides.clear(); db.close()
++
++
++def test_unassigned_task():
++    db = _session(); owner = _owner(db)
++    ch, cat, mi = _base(db, item_station=None)   # item Unassigned
++    o, oi = _order_with_item(db, ch, mi)
++    c = _client(db, owner)
++    _fire(c, o.id)
++    db.refresh(oi)
++    check(len(oi.tasks) == 1 and oi.tasks[0].station_id is None,
++          "an Unassigned item fires one base task with NULL station (explicit, not hidden)")
++    app.dependency_overrides.clear(); db.close()
++
++
++def test_reroute_after_fire_does_not_move_tasks():
++    db = _session(); owner = _owner(db)
++    grill = Station(name="Grill", type="production", is_active=True)
++    fryer = Station(name="Fryer", type="production", is_active=True)
++    db.add_all([grill, fryer]); db.flush()
++    ch, cat, mi = _base(db, item_station=grill.id)
++    o, oi = _order_with_item(db, ch, mi)
++    c = _client(db, owner)
++    _fire(c, o.id)
++    db.refresh(oi)
++    task_station = oi.tasks[0].station_id
++    # Re-route the menu item afterwards.
++    mi.station_id = fryer.id
++    db.commit()
++    db.refresh(oi)
++    check(oi.tasks[0].station_id == task_station == grill.id,
++          "editing MenuItem routing after fire never moves the already-created task")
++    app.dependency_overrides.clear(); db.close()
++
++
++def test_rollup_all_ready_makes_item_ready():
++    from app.routers.sales import rollup_item_kitchen_status
++    db = _session()
++    grill = Station(name="Grill", type="production", is_active=True); db.add(grill); db.flush()
++    ch, cat, mi = _base(db, item_station=grill.id)
++    o, oi = _order_with_item(db, ch, mi)
++    oi.kitchen_status = KitchenStatus.PREPARING
++    t1 = PreparationTask(order_item_id=oi.id, order_id=o.id, station_id=grill.id, course=2,
++                         kitchen_status=PreparationTaskStatus.READY, quantity=1, item_label="Burger")
++    t2 = PreparationTask(order_item_id=oi.id, order_id=o.id, station_id=None, course=2,
++                         kitchen_status=PreparationTaskStatus.PREPARING, quantity=1, item_label="Burger")
++    db.add_all([t1, t2]); db.commit(); db.refresh(oi)
++    rollup_item_kitchen_status(oi)
++    check(oi.kitchen_status == KitchenStatus.PREPARING, "one task still preparing → line stays preparing")
++    t2.kitchen_status = PreparationTaskStatus.READY; db.commit(); db.refresh(oi)
++    rollup_item_kitchen_status(oi)
++    check(oi.kitchen_status == KitchenStatus.READY, "all tasks ready → line becomes ready")
++    db.close()
++
++
++def test_rollup_never_sets_served():
++    from app.routers.sales import rollup_item_kitchen_status
++    db = _session()
++    grill = Station(name="Grill", type="production", is_active=True); db.add(grill); db.flush()
++    ch, cat, mi = _base(db, item_station=grill.id)
++    o, oi = _order_with_item(db, ch, mi)
++    oi.kitchen_status = KitchenStatus.READY
++    t = PreparationTask(order_item_id=oi.id, order_id=o.id, station_id=grill.id, course=2,
++                        kitchen_status=PreparationTaskStatus.SERVED, quantity=1, item_label="Burger")
++    db.add(t); db.commit(); db.refresh(oi)
++    rollup_item_kitchen_status(oi)
++    check(oi.kitchen_status != KitchenStatus.SERVED,
++          "the rollup never sets the line served (served is owned by the serving flow)")
++    db.close()
++
++
++def test_legacy_item_without_tasks_safe():
++    from app.routers.sales import rollup_item_kitchen_status
++    db = _session()
++    ch, cat, mi = _base(db, item_station=None)
++    o, oi = _order_with_item(db, ch, mi)
++    oi.kitchen_status = KitchenStatus.PREPARING; db.commit(); db.refresh(oi)
++    before = oi.kitchen_status
++    rollup_item_kitchen_status(oi)   # no tasks → must be a safe no-op
++    check(oi.kitchen_status == before, "a line with no tasks is left unchanged (legacy safe)")
++    db.close()
++
++
++def test_held_course_creates_no_task():
++    db = _session(); owner = _owner(db)
++    grill = Station(name="Grill", type="production", is_active=True); db.add(grill); db.flush()
++    ch, cat, mi = _base(db, item_station=grill.id)
++    o, starter = _order_with_item(db, ch, mi, course=1)
++    main = OrderItem(order_id=o.id, menu_item_id=mi.id, quantity=1, unit_price_cents=1500,
++                     kitchen_status=KitchenStatus.PENDING, course=2)
++    db.add(main); db.commit()
++    c = _client(db, owner)
++    _fire(c, o.id, course=1)                 # fire only the starter
++    db.refresh(starter); db.refresh(main)
++    check(len(starter.tasks) == 1, "the fired course creates its task")
++    check(len(main.tasks) == 0, "a held later course creates NO task until fired")
++    check(main.kitchen_status == KitchenStatus.PENDING, "the held course stays pending (not blocked/advanced)")
++    app.dependency_overrides.clear(); db.close()
++
++
++def test_duplicate_fire_is_idempotent():
++    db = _session(); owner = _owner(db)
++    grill = Station(name="Grill", type="production", is_active=True); db.add(grill); db.flush()
++    ch, cat, mi = _base(db, item_station=grill.id)
++    o, oi = _order_with_item(db, ch, mi)
++    c = _client(db, owner)
++    _fire(c, o.id)
++    db.refresh(oi)
++    n = len(oi.tasks)
++    r2 = _fire(c, o.id)                       # repeat: nothing pending
++    db.refresh(oi)
++    check(r2.status_code == 400, "a repeated fire has nothing to fire (400)")
++    check(len(oi.tasks) == n == 1, "a duplicate fire creates no extra tasks")
++    # And the internal guard: calling the creator again is a no-op.
++    from app.routers.sales import _create_tasks_for_item
++    _create_tasks_for_item(db, oi, datetime.now())
++    db.refresh(oi)
++    check(len(oi.tasks) == 1, "the creation helper is idempotent on an already-fired line")
++    app.dependency_overrides.clear(); db.close()
++
++
++def test_backfill_idempotent():
++    from app import migrate
++    db = _session()
++    grill = Station(name="Grill", type="production", is_active=True); db.add(grill); db.flush()
++    ch, cat, mi = _base(db, item_station=grill.id)
++    o = Order(code="O-BF", channel_id=ch.id, status=OrderStatus.PREPARING, guest_count=1warning: in the working copy of 'tests/test_stations.py', LF will be replaced by CRLF the next time Git touches it
+,
++              opened_at=datetime.now(), kitchen_status=KitchenStatus.PREPARING,
++              sent_to_kitchen_at=datetime.now())
++    db.add(o); db.flush()
++    legacy = OrderItem(order_id=o.id, menu_item_id=mi.id, quantity=1, unit_price_cents=1500,
++                       kitchen_status=KitchenStatus.PREPARING, course=2, station_id=grill.id)
++    db.add(legacy); db.commit()
++    conn = db.connection()
++    migrate._backfill_prep_tasks(conn); db.commit()
++    migrate._backfill_prep_tasks(conn); db.commit()   # run twice
++    db.refresh(legacy)
++    check(len(legacy.tasks) == 1, "backfill creates one base task per legacy fired item, and only once")
++    check(legacy.tasks[0].station_id == grill.id and legacy.tasks[0].is_base,
++          "backfilled task uses the legacy station_id snapshot")
++    db.close()
++
++
++def test_payment_gate_unchanged():
++    db = _session(); owner = _owner(db)
++    grill = Station(name="Grill", type="production", is_active=True); db.add(grill); db.flush()
++    ch, cat, mi = _base(db, item_station=grill.id)
++    o, oi = _order_with_item(db, ch, mi)
++    c = _client(db, owner)
++    _fire(c, o.id)
++    db.refresh(o)
++    check(o.kitchen_status == KitchenStatus.PREPARING and o.status == OrderStatus.PREPARING,
++          "after fire the order is preparing (not served) — the payment gate is unaffected")
++    # Existing item-level mark-ready still drives the order to ready (unchanged path).
++    c.post(f"/kitchen/{o.id}/status", data={"status": "ready"}, follow_redirects=False)
++    db.refresh(o)
++    check(o.kitchen_status == KitchenStatus.READY, "existing item-level ready still rolls the order to ready")
++    db.close()
++
++
++if __name__ == "__main__":
++    for fn in (test_single_station_task, test_multi_station_snapshot, test_unassigned_task,
++               test_reroute_after_fire_does_not_move_tasks, test_rollup_all_ready_makes_item_ready,
++               test_rollup_never_sets_served, test_legacy_item_without_tasks_safe,
++               test_held_course_creates_no_task, test_duplicate_fire_is_idempotent,
++               test_backfill_idempotent, test_payment_gate_unchanged):
++        print(f"- {fn.__name__}")
++        fn()
++    if _fail:
++        print(f"\n{len(_fail)} FAILED")
++        sys.exit(1)
++    print("\nall prep-task (B1) tests passed")
+diff --git a/tests/test_stations.py b/tests/test_stations.py
+new file mode 100644
+index 0000000..e04b513
+--- /dev/null
++++ b/tests/test_stations.py
+@@ -0,0 +1,664 @@
++"""Kitchen Stations — Stage A admin CRUD + routing safety.
++
++Covers create/edit/move/deactivate on /admin/stations, the type-conditional
++field handling, validation, and the key safety rule: deactivating a station
++re-routes its menu items to Unassigned (never a silent orphan). Throwaway
++SQLite + dependency overrides. Run: python tests/test_stations.py
++"""
++import os
++import sys
++import tempfile
++import uuid
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++from fastapi.testclient import TestClient
++from sqlalchemy import create_engine, event
++from sqlalchemy.orm import sessionmaker
++
++from app.database import Base
++from app.deps import current_staff, get_db
++from app.main import app
++from app.models import oltp  # noqa: F401
++from app.models.oltp import MenuCategory, MenuItem, Staff, Station
++
++_fail = []
++
++
++def check(cond, label):
++    print(f"  {'ok  ' if cond else 'FAIL'} {label}")
++    if not cond:
++        _fail.append(label)
++
++
++def _session():
++    path = os.path.join(tempfile.gettempdir(), f"stations_{uuid.uuid4().hex}.db")
++    engine = create_engine(f"sqlite:///{path}", future=True)
++
++    @event.listens_for(engine, "connect")
++    def _fk(dbapi, _rec):  # noqa: ANN001
++        dbapi.execute("PRAGMA foreign_keys=ON")
++
++    Base.metadata.create_all(engine)
++    return sessionmaker(bind=engine, future=True)()
++
++
++def _client(db, staff):
++    app.dependency_overrides[get_db] = lambda: db
++    app.dependency_overrides[current_staff] = lambda: staff
++    return TestClient(app)
++
++
++def _owner(db):
++    o = Staff(name="Owner", role="owner", pin_code="x", is_active=True)
++    db.add(o)
++    db.commit()
++    return o
++
++
++def test_create_and_page_renders():
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    r = c.post("/admin/stations/create", data={
++        "name": "Pizza", "type": "production", "color": "#e11d48", "icon": "🍕",
++        "code": "PIZ", "target_prep_min": "12", "printer_ref": "Printer 1",
++        "visible_to_kitchen": 1,
++    }, follow_redirects=False)
++    check(r.status_code == 303, "create redirects")
++    s = db.query(Station).filter(Station.name == "Pizza").one()
++    check(s.type == "production" and s.color == "#e11d48" and s.target_prep_min == 12,
++          "production station stored with prep target + colour")
++    check(s.display_order == 1, "first station gets display_order 1")
++    page = c.get("/admin/stations")
++    check(page.status_code == 200 and "Kitchen stations" in page.text, "stations page renders")
++    check("Stations" in page.text, "nav shows the Stations tab")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_coordination_clears_production_fields():
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    c.post("/admin/stations/create", data={"name": "Expo", "type": "coordination",
++           "target_prep_min": "9", "printer_ref": "P2", "color": "#3b82f6"},
++           follow_redirects=False)
++    s = db.query(Station).filter(Station.name == "Expo").one()
++    check(s.target_prep_min is None and s.printer_ref == "",
++          "a coordination station drops prep target + printer")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_validation():
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    r1 = c.post("/admin/stations/create", data={"name": "  ", "type": "production"},
++                follow_redirects=False)
++    check(r1.status_code == 400, "blank name rejected")
++    r2 = c.post("/admin/stations/create", data={"name": "Bad", "type": "production",
++                "color": "red"}, follow_redirects=False)
++    check(r2.status_code == 400, "non-hex colour rejected")
++    r3 = c.post("/admin/stations/create", data={"name": "Bad2", "type": "wat"},
++                follow_redirects=False)
++    check(r3.status_code == 400, "invalid type rejected")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_move_reorders():
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    for n in ("A", "B", "C"):
++        c.post("/admin/stations/create", data={"name": n, "type": "production"},
++               follow_redirects=False)
++    b = db.query(Station).filter(Station.name == "B").one()
++    c.post(f"/admin/stations/{b.id}/move", data={"dir": "up"}, follow_redirects=False)
++    order = [s.name for s in db.query(Station).order_by(Station.display_order).all()]
++    check(order[:2] == ["B", "A"], "moving B up puts it before A")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_deactivate_reassigns_items_to_unassigned():
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    c.post("/admin/stations/create", data={"name": "Grill", "type": "production"},
++           follow_redirects=False)
++    grill = db.query(Station).filter(Station.name == "Grill").one()
++    cat = MenuCategory(name="Mains"); db.add(cat); db.flush()
++    item = MenuItem(category_id=cat.id, name="Steak", price_cents=2500, station_id=grill.id)
++    db.add(item); db.commit()
++
++    r = c.post(f"/admin/stations/{grill.id}/active", data={"active": 0}, follow_redirects=False)
++    check(r.status_code == 303, "deactivate redirects")
++    db.refresh(grill); db.refresh(item)
++    check(grill.is_active is False, "station is now inactive")
++    check(item.station_id is None, "its routed item is re-routed to Unassigned (no silent orphan)")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_menu_item_routing():
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    c.post("/admin/stations/create", data={"name": "Fryer", "type": "production"},
++           follow_redirects=False)
++    fryer = db.query(Station).filter(Station.name == "Fryer").one()
++    cat = MenuCategory(name="Apps"); db.add(cat); db.commit()
++
++    # Create routed to Fryer.
++    c.post("/admin/menu/items/create", data={
++        "category_id": cat.id, "name": "Wings", "price": "9.00", "station_id": fryer.id,
++    }, follow_redirects=False)
++    item = db.query(MenuItem).filter(MenuItem.name == "Wings").one()
++    check(item.station_id == fryer.id, "new item routes to the chosen station")
++
++    # Edit back to Unassigned (0 -> None).
++    c.post(f"/admin/menu/items/{item.id}/edit", data={
++        "category_id": cat.id, "name": "Wings", "price": "9.00", "station_id": 0,
++    }, follow_redirects=False)
++    db.refresh(item)
++    check(item.station_id is None, "station_id 0 clears routing to Unassigned")
++
++    # Invalid station id is rejected.
++    r = c.post(f"/admin/menu/items/{item.id}/edit", data={
++        "category_id": cat.id, "name": "Wings", "price": "9.00", "station_id": 9999,
++    }, follow_redirects=False)
++    check(r.status_code == 400, "routing to a non-existent station is rejected")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def _kitchen_fixture(db):
++    """A station, a routed item and an un-routed item, plus a dine-in channel."""
++    from app.models.oltp import Channel
++    grill = Station(name="Grill", type="production", color="#f59e0b", is_active=True)
++    ch = Channel(code="dine_in", name="Dine-in", channel_type="dine_in")
++    cat = MenuCategory(name="Mains")
++    db.add_all([grill, ch, cat]); db.flush()
++    steak = MenuItem(category_id=cat.id, name="ZZSteak", price_cents=2500, station_id=grill.id)
++    water = MenuItem(category_id=cat.id, name="ZZWater", price_cents=300, station_id=None)
++    db.add_all([steak, water]); db.commit()
++    return grill, ch, steak, water
++
++
++def test_fire_snapshots_station():
++    from datetime import datetime
++    from app.models.oltp import Order, OrderItem, KitchenStatus, OrderStatus
++    db = _session()
++    owner = _owner(db)
++    grill, ch, steak, water = _kitchen_fixture(db)
++    order = Order(code="ORD-FS-1", channel_id=ch.id, status=OrderStatus.OPEN, guest_count=2,
++                  opened_at=datetime.now())
++    db.add(order); db.flush()
++    line = OrderItem(order_id=order.id, menu_item_id=steak.id, quantity=1,
++                     unit_price_cents=2500, kitchen_status=KitchenStatus.PENDING)
++    db.add(line); db.commit()
++
++    c = _client(db, owner)
++    c.post(f"/orders/{order.id}/send", data={"course": 0}, follow_redirects=False)
++    db.refresh(line)
++    check(line.kitchen_status == KitchenStatus.PREPARING, "firing moves the line to preparing")
++    check(line.station_id == grill.id, "firing snapshots the item's station onto the line")
++
++    # Re-routing the menu item afterwards must not move the already-fired line.
++    steak.station_id = None
++    db.commit()
++    db.refresh(line)
++    check(line.station_id == grill.id, "the fired line keeps its snapshot after re-routing")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_kds_station_filter_and_unassigned():
++    from datetime import datetime
++    from app.models.oltp import Order, OrderItem, KitchenStatus, OrderStatus
++    db = _session()
++    owner = _owner(db)
++    grill, ch, steak, water = _kitchen_fixture(db)
++    order = Order(code="ORD-KF-1", channel_id=ch.id, status=OrderStatus.PREPARING, guest_count=2,
++                  opened_at=datetime.now(), kitchen_status=KitchenStatus.PREPARING,
++                  sent_to_kitchen_at=datetime.now())
++    db.add(order); db.flush()
++    db.add(OrderItem(order_id=order.id, menu_item_id=steak.id, quantity=1, unit_price_cents=2500,
++                     kitchen_status=KitchenStatus.PREPARING, station_id=grill.id))
++    db.add(OrderItem(order_id=order.id, menu_item_id=water.id, quantity=1, unit_price_cents=300,
++                     kitchen_status=KitchenStatus.PREPARING, station_id=None))
++    db.commit()
++
++    c = _client(db, owner)
++    all_board = c.get("/kitchen?station=all").text
++    check("ZZSteak" in all_board and "ZZWater" in all_board, "All board shows every station's lines")
++    check("Unassigned" in all_board, "All board offers the Unassigned tab (un-routed line present)")
++
++    grill_board = c.get(f"/kitchen?station={grill.id}").text
++    check("ZZSteak" in grill_board and "ZZWater" not in grill_board,
++          "the Grill station shows only its own line")
++
++    un = c.get("/kitchen?station=unassigned").text
++    check("ZZWater" in un and "ZZSteak" not in un, "the Unassigned bucket shows only un-routed lines")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_expo_aggregation():
++    from datetime import datetime
++    from app.models.oltp import Order, OrderItem, KitchenStatus, OrderStatus
++    db = _session()
++    owner = _owner(db)
++    grill, ch, steak, water = _kitchen_fixture(db)   # steak -> Grill
++    bar = Station(name="Bar", type="production", is_active=True); db.add(bar); db.flush()
++    cat = db.query(MenuCategory).first()
++    mojito = MenuItem(category_id=cat.id, name="ZZMojito", price_cents=900, station_id=bar.id)
++    db.add(mojito); db.commit()
++
++    order = Order(code="ORD-EX-1", channel_id=ch.id, status=OrderStatus.PREPARING, guest_count=2,
++                  opened_at=datetime.now(), kitchen_status=KitchenStatus.PREPARING,
++                  sent_to_kitchen_at=datetime.now())
++    db.add(order); db.flush()
++    db.add(OrderItem(order_id=order.id, menu_item_id=steak.id, quantity=1, unit_price_cents=2500,
++                     kitchen_status=KitchenStatus.READY, station_id=grill.id, course=2))
++    moj = OrderItem(order_id=order.id, menu_item_id=mojito.id, quantity=1, unit_price_cents=900,
++                    kitchen_status=KitchenStatus.PREPARING, station_id=bar.id, course=2)
++    db.add(moj); db.commit()
++
++    c = _client(db, owner)
++    body = c.get("/expo").text
++    check("Grill" in body and "Bar" in body, "expo card lists every station in the course")
++    check("Waiting on Bar" in body, "overall waits on the station that isn't ready")
++    # "expo-overall ok" is the ready-to-serve banner class (distinct from the
++    # sidebar's own 'Ready to serve' stat row, so match the class, not the words).
++    check("expo-overall ok" not in body, "not ready to serve while the bar is still preparing")
++
++    moj.kitchen_status = KitchenStatus.READY
++    order.kitchen_status = KitchenStatus.READY
++    db.commit()
++    body2 = c.get("/expo").text
++    check("expo-overall ok" in body2, "once every station is ready the course reads ready to serve")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_floor_station_strip():
++    from datetime import datetime
++    from app.models.oltp import (Order, OrderItem, KitchenStatus, OrderStatus,
++                                 Floor, Zone, RestaurantTable, TableStatus)
++    db = _session()
++    owner = _owner(db)
++    grill, ch, steak, water = _kitchen_fixture(db)     # steak -> Grill
++    bar = Station(name="Bar", type="production", is_active=True); db.add(bar); db.flush()
++    cat = db.query(MenuCategory).first()
++    moj = MenuItem(category_id=cat.id, name="ZZMojito", price_cents=900, station_id=bar.id)
++    floor = Floor(name="F1"); db.add_all([moj, floor]); db.flush()
++    zone = Zone(name="Main", floor_id=floor.id, pos_x=100, pos_y=100, width=400, height=300)
++    waiter = Staff(name="W", role="waiter", pin_code="y", is_active=True, color="#ff8800")
++    db.add_all([zone, waiter]); db.flush()
++    t = RestaurantTable(number=1, zone_id=zone.id, zone="Main", capacity=4, pos_x=200, pos_y=200,
++                        status=TableStatus.OCCUPIED, current_waiter_id=waiter.id)
++    db.add(t); db.flush()
++    o = Order(code="ORD-FS", table_id=t.id, channel_id=ch.id, waiter_id=waiter.id,
++              status=OrderStatus.PREPARING, guest_count=2, opened_at=datetime.now(),
++              kitchen_status=KitchenStatus.PREPARING, sent_to_kitchen_at=datetime.now())
++    db.add(o); db.flush()
++    db.add(OrderItem(order_id=o.id, menu_item_id=steak.id, quantity=1, unit_price_cents=2500,
++                     kitchen_status=KitchenStatus.READY, station_id=grill.id))
++    db.add(OrderItem(order_id=o.id, menu_item_id=moj.id, quantity=1, unit_price_cents=900,
++                     kitchen_status=KitchenStatus.PREPARING, station_id=bar.id))
++    db.commit()
++
++    c = _client(db, owner)
++    body = c.get("/").text
++    check('class="tbl-stations"' in body, "occupied card shows the per-station strip")
++    check("Grill · ready" in body, "Grill chip reads ready (its line is up)")
++    check("Bar · preparing" in body, "Bar chip reads preparing (still cooking)")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_routing_template_export():
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    cat = MenuCategory(name="Mains"); db.add(cat); db.flush()
++    it = MenuItem(category_id=cat.id, name="ZZRibeye", price_cents=3200)
++    db.add(it); db.commit()
++    r = c.get("/admin/stations/routing/template")
++    check(r.status_code == 200, "template downloads")
++    check("text/csv" in r.headers.get("content-type", ""), "served as CSV")
++    check("attachment" in r.headers.get("content-disposition", ""), "as a file download")
++    check("item_id" in r.text and "station" in r.text, "template has the header columns")
++    check("ZZRibeye" in r.text and str(it.id) in r.text, "template lists the active item")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_routing_import_applies_and_reports():
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    grill = Station(name="Grill", type="production", is_active=True)
++    db.add(grill); db.flush()
++    cat = MenuCategory(name="Mains"); db.add(cat); db.flush()
++    a = MenuItem(category_id=cat.id, name="Steak", price_cents=2500)
++    b = MenuItem(category_id=cat.id, name="Water", price_cents=200, station_id=grill.id)
++    cc = MenuItem(category_id=cat.id, name="Fries", price_cents=600)
++    db.add_all([a, b, cc]); db.commit()
++
++    csv_text = (
++        "item_id,station\n"
++        f"{a.id},Grill\n"        # assign
++        f"{b.id},\n"             # blank -> clear
++        "999999,Grill\n"          # missing item
++        f"{cc.id},Nope\n"        # unknown station
++    )
++    r = c.post("/admin/stations/routing/import",
++               files={"file": ("routing.csv", csv_text.encode("utf-8"), "text/csv")})
++    check(r.status_code == 200, "import returns the page with a result")
++    db.refresh(a); db.refresh(b); db.refresh(cc)
++    check(a.station_id == grill.id, "row routes the item to the named station")
++    check(b.station_id is None, "a blank station clears routing to Unassigned")
++    check(cc.station_id is None, "an unknown station name is NOT applied")
++    check("Nope" in r.text, "the unknown station name is reported back")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def _make_xlsx(rows):
++    """Minimal .xlsx (shared strings + one sheet) — enough for the importer's
++    stdlib reader. int cells are numeric; everything else a shared string."""
++    import zipfile as _zip
++    NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
++    shared, sidx = [], {}
++
++    def sid(s):
++        if s not in sidx:
++            sidx[s] = len(shared); shared.append(s)
++        return sidx[s]
++
++    def colref(ci):
++        s, ci = "", ci + 1
++        while ci:
++            ci, r = divmod(ci - 1, 26)
++            s = chr(65 + r) + s
++        return s
++
++    sheet_rows = []
++    for ri, row in enumerate(rows, 1):
++        cells = []
++        for ci, val in enumerate(row):
++            ref = f"{colref(ci)}{ri}"
++            if isinstance(val, int):
++                cells.append(f'<c r="{ref}"><v>{val}</v></c>')
++            else:
++                cells.append(f'<c r="{ref}" t="s"><v>{sid(str(val))}</v></c>')
++        sheet_rows.append(f'<row r="{ri}">{"".join(cells)}</row>')
++    sheet_xml = f'<worksheet xmlns="{NS}"><sheetData>{"".join(sheet_rows)}</sheetData></worksheet>'
++    ss = "".join(f"<si><t>{s}</t></si>" for s in shared)
++    ss_xml = f'<sst xmlns="{NS}" count="{len(shared)}" uniqueCount="{len(shared)}">{ss}</sst>'
++    buf = io.BytesIO()
++    with _zip.ZipFile(buf, "w") as z:
++        z.writestr("xl/sharedStrings.xml", ss_xml)
++        z.writestr("xl/worksheets/sheet1.xml", sheet_xml)
++    return buf.getvalue()
++
++
++def test_routing_import_xlsx():
++    import io as _io  # noqa: F401 — io imported at top; alias keeps helper self-contained
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    grill = Station(name="Grill", type="production", is_active=True); db.add(grill); db.flush()
++    cat = MenuCategory(name="Mains"); db.add(cat); db.flush()
++    a = MenuItem(category_id=cat.id, name="Steak", price_cents=2500); db.add(a); db.commit()
++    xlsx = _make_xlsx([["item_id", "station"], [a.id, "Grill"]])
++    r = c.post("/admin/stations/routing/import", files={
++        "file": ("menu_items_with_stations.xlsx", xlsx,
++                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
++    check(r.status_code == 200, "xlsx upload returns the page")
++    db.refresh(a)
++    check(a.station_id == grill.id, "an .xlsx file routes items just like CSV")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++import io  # noqa: E402 — used by _make_xlsx above
++
++
++def test_routing_import_tolerant_header():
++    """A friendly header like 'Item ID' / 'Station' (spaces, caps, extra cols)
++    must map to the right columns — not fall back to reading Category."""
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    grill = Station(name="Grill", type="production", is_active=True); db.add(grill); db.flush()
++    cat = MenuCategory(name="Starters"); db.add(cat); db.flush()
++    a = MenuItem(category_id=cat.id, name="Wings", price_cents=1250); db.add(a); db.commit()
++    csv_text = f"Item ID,Category,Menu Item,Price,Station\n{a.id},Starters,Wings,12.50,Grill\n"
++    c.post("/admin/stations/routing/import",
++           files={"file": ("f.csv", csv_text.encode(), "text/csv")})
++    db.refresh(a)
++    check(a.station_id == grill.id,
++          "a spaced 'Item ID'/'Station' header maps correctly (not to Category)")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_routing_import_headerless():
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    bar = Station(name="Bar", type="production", is_active=True); db.add(bar); db.flush()
++    cat = MenuCategory(name="Drinks"); db.add(cat); db.flush()
++    a = MenuItem(category_id=cat.id, name="Cola", price_cents=300); db.add(a); db.commit()
++    # ChatGPT-style 2-column output, no header.
++    r = c.post("/admin/stations/routing/import",
++               files={"file": ("r.csv", f"{a.id},Bar\n".encode(), "text/csv")})
++    db.refresh(a)
++    check(a.station_id == bar.id, "a headerless item_id,station file also applies")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_strict_item_id_parse():
++    from app.routers.admin import _parse_item_id
++    check(_parse_item_id("12") == 12 and _parse_item_id("12.0") == 12, "accepts 12 and Excel 12.0")
++    check(_parse_item_id("12.5") is None, "rejects 12.5")
++    check(_parse_item_id("1e2") is None, "rejects scientific notation")
++    check(_parse_item_id("-5") is None and _parse_item_id("0") is None, "rejects non-positive")
++
++
++def test_routing_rejects_coordination_station():
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    expo = Station(name="Expo", type="coordination", is_active=True); db.add(expo)
++    cat = MenuCategory(name="Mains"); db.add(cat); db.flush()
++    it = MenuItem(category_id=cat.id, name="Steak", price_cents=2500); db.add(it); db.commit()
++    r = c.post(f"/admin/menu/items/{it.id}/edit", data={
++        "category_id": cat.id, "name": "Steak", "price": "25.00", "station_id": expo.id,
++    }, follow_redirects=False)
++    check(r.status_code == 400, "an item can't be routed to a coordination station")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_duplicate_station_name_rejected():
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    c.post("/admin/stations/create", data={"name": "Grill", "type": "production"}, follow_redirects=False)
++    r = c.post("/admin/stations/create", data={"name": "grill", "type": "production"}, follow_redirects=False)
++    check(r.status_code == 400, "a case-insensitive duplicate station name is rejected")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_import_rejects_oversized():
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    big = b"item_id,station\n" + b"1,Grill\n" * 800000   # ~6.4 MB
++    r = c.post("/admin/stations/routing/import",
++               files={"file": ("big.csv", big, "text/csv")})
++    check("too large" in r.text.lower(), "an oversized upload is rejected")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_kds_filter_before_limit():
++    from datetime import datetime, timedelta
++    from app.models.oltp import Order, OrderItem, KitchenStatus, OrderStatus
++    from app.routers import sales
++    db = _session()
++    owner = _owner(db)
++    grill, ch, steak, water = _kitchen_fixture(db)   # steak->Grill, water->None
++    old = Order(code="OLD", channel_id=ch.id, status=OrderStatus.PREPARING, guest_count=1,
++                opened_at=datetime.now() - timedelta(hours=2), kitchen_status=KitchenStatus.PREPARING,
++                sent_to_kitchen_at=datetime.now() - timedelta(hours=2))
++    db.add(old); db.flush()
++    db.add(OrderItem(order_id=old.id, menu_item_id=steak.id, quantity=1, unit_price_cents=2500,
++                     kitchen_status=KitchenStatus.PREPARING, station_id=grill.id))
++    new = Order(code="NEW", channel_id=ch.id, status=OrderStatus.PREPARING, guest_count=1,
++                opened_at=datetime.now(), kitchen_status=KitchenStatus.PREPARING,
++                sent_to_kitchen_at=datetime.now())
++    db.add(new); db.flush()
++    db.add(OrderItem(order_id=new.id, menu_item_id=water.id, quantity=1, unit_price_cents=300,
++                     kitchen_status=KitchenStatus.PREPARING, station_id=None))
++    db.commit()
++    c = _client(db, owner)
++    orig = sales.KITCHEN_LIMIT
++    sales.KITCHEN_LIMIT = 1                       # force the cap to bite
++    try:
++        body = c.get("/kitchen?station=unassigned").text
++        check("ZZWater" in body and "ZZSteak" not in body,
++              "an Unassigned order shows under its tab even though it isn't the oldest (filter before LIMIT)")
++        allb = c.get("/kitchen?station=all").text
++        check("on the board" in allb, "the board shows the 'of M' truncation note")
++    finally:
++        sales.KITCHEN_LIMIT = orig
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_deactivate_keeps_kds_tab_and_snapshot():
++    from datetime import datetime
++    from app.models.oltp import Order, OrderItem, KitchenStatus, OrderStatus
++    db = _session()
++    owner = _owner(db)
++    grill, ch, steak, water = _kitchen_fixture(db)
++    o = Order(code="O1", channel_id=ch.id, status=OrderStatus.PREPARING, guest_count=1,
++              opened_at=datetime.now(), kitchen_status=KitchenStatus.PREPARING,
++              sent_to_kitchen_at=datetime.now())
++    db.add(o); db.flush()
++    line = OrderItem(order_id=o.id, menu_item_id=steak.id, quantity=1, unit_price_cents=2500,
++                     kitchen_status=KitchenStatus.PREPARING, station_id=grill.id)
++    db.add(line); db.commit()
++    c = _client(db, owner)
++    c.post(f"/admin/stations/{grill.id}/active", data={"active": 0}, follow_redirects=False)
++    db.refresh(line)
++    check(line.station_id == grill.id, "a fired line keeps its station snapshot after deactivation")
++    body = c.get("/kitchen").text
++    check("Grill" in body, "the deactivated station still shows on the KDS while it has live work")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_status_next_redirect_allowlist():
++    from datetime import datetime
++    from app.models.oltp import Order, OrderItem, KitchenStatus, OrderStatus
++    db = _session()
++    owner = _owner(db)
++    grill, ch, steak, water = _kitchen_fixture(db)
++    o = Order(code="O", channel_id=ch.id, status=OrderStatus.PREPARING, guest_count=1,
++              opened_at=datetime.now(), kitchen_status=KitchenStatus.PREPARING,
++              sent_to_kitchen_at=datetime.now())
++    db.add(o); db.flush()
++    db.add(OrderItem(order_id=o.id, menu_item_id=steak.id, quantity=1, unit_price_cents=2500,
++                     kitchen_status=KitchenStatus.PREPARING, station_id=grill.id))
++    db.commit()
++    c = _client(db, owner)
++    r = c.post(f"/kitchen/{o.id}/status", data={"status": "ready", "next": "//evil.com"},
++               follow_redirects=False)
++    check(r.headers["location"] == "/kitchen", "an external next falls back to /kitchen")
++    r2 = c.post(f"/kitchen/{o.id}/status", data={"status": "preparing", "next": "/expo?view=all&mine=0"},
++                follow_redirects=False)
++    check(r2.headers["location"] == "/expo?view=all&mine=0", "an /expo next is honoured")
++    for bad in ("/orders/1", "/expo-whatever", "/kitchenFake", "\\evil"):
++        rb = c.post(f"/kitchen/{o.id}/status", data={"status": "ready", "next": bad},
++                    follow_redirects=False)
++        check(rb.headers["location"] == "/kitchen", f"non-allowlisted next '{bad}' falls back to /kitchen")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++def test_safe_next_board_helper():
++    from app.routers.sales import _safe_next_board
++    for ok in ("/kitchen", "/kitchen?x=1", "/kitchen?station=unassigned", "/expo", "/expo?view=mine"):
++        check(_safe_next_board(ok) == ok, f"allows {ok}")
++    for bad in ("https://evil.com", "//evil.com", "/expo-whatever", "/kitchenFake",
++                "\\evil", "/\\evil", "", "/orders/1", "/kitchen/../x"):
++        check(_safe_next_board(bad) == "/kitchen", f"rejects '{bad}' -> /kitchen")
++
++
++def test_import_station_name_normalization():
++    db = _session()
++    owner = _owner(db)
++    c = _client(db, owner)
++    grill = Station(name="Grill", type="production", is_active=True)
++    accent = Station(name="Grillé", type="production", is_active=True)   # Unicode
++    cat = MenuCategory(name="Mains")
++    db.add_all([grill, accent, cat]); db.flush()
++    a = MenuItem(category_id=cat.id, name="A", price_cents=100)
++    b = MenuItem(category_id=cat.id, name="B", price_cents=100)
++    d = MenuItem(category_id=cat.id, name="C", price_cents=100)
++    e = MenuItem(category_id=cat.id, name="D", price_cents=100)
++    db.add_all([a, b, d, e]); db.commit()
++    csv_text = (
++        "item_id,station\n"
++        f"{a.id}, grill \n"     # surrounding spaces
++        f"{b.id},GRILL\n"       # caps
++        f"{d.id},Grill\n"       # exact
++        f"{e.id},GRILLÉ\n"      # Unicode, casefold
++    )
++    c.post("/admin/stations/routing/import",
++           files={"file": ("r.csv", csv_text.encode("utf-8"), "text/csv")})
++    for it in (a, b, d, e):
++        db.refresh(it)
++    check(a.station_id == grill.id and b.station_id == grill.id and d.station_id == grill.id,
++          "spaces/caps/exact all resolve to the same station (same normalisation as the dup check)")
++    check(e.station_id == accent.id, "a Unicode name matches via casefold (GRILLÉ → Grillé)")
++    app.dependency_overrides.clear()
++    db.close()
++
++
++if __name__ == "__main__":
++    for fn in (test_create_and_page_renders, test_coordination_clears_production_fields,
++               test_strict_item_id_parse, test_routing_rejects_coordination_station,
++               test_duplicate_station_name_rejected, test_import_rejects_oversized,
++               test_kds_filter_before_limit, test_deactivate_keeps_kds_tab_and_snapshot,
++               test_status_next_redirect_allowlist, test_safe_next_board_helper,
++               test_import_station_name_normalization,
++               test_validation, test_move_reorders,
++               test_deactivate_reassigns_items_to_unassigned,
++               test_menu_item_routing,
++               test_fire_snapshots_station,
++               test_kds_station_filter_and_unassigned,
++               test_expo_aggregation,
++               test_floor_station_strip,
++               test_routing_template_export,
++               test_routing_import_applies_and_reports,
++               test_routing_import_xlsx,
++               test_routing_import_tolerant_header,
++               test_routing_import_headerless):
++        print(f"- {fn.__name__}")
++        fn()
++    if _fail:
++        print(f"\n{len(_fail)} FAILED")
++        sys.exit(1)
++    print("\nall station tests passed")
+diff --git a/web/static/app.css b/web/static/app.css
+index 2695f87..cc89d8b 100644
+--- a/web/static/app.css
++++ b/web/static/app.css
+@@ -463,9 +463,23 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+ .menu-thumb-acts form { margin: 0; }
+ 
+ .floor-head { margin: 0 0 10px; font-size: 15px; color: var(--muted); }
+-.floor {
++/* List view: a bordered panel per zone, stacked. The card grid lives inside
++   each panel (.zpanel-grid); the floor just stacks the panels. */
++.floor { display: flex; flex-direction: column; gap: 16px; }
++.zpanel {
++  border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px;
++  background: color-mix(in srgb, var(--panel) 45%, transparent);
++}
++.zpanel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
++.zp-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
++.zp-name { font-size: 17px; }
++.zp-meta { color: var(--muted); font-size: 12px; }
++.zpanel-grid {
+   display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px;
+ }
++/* Map view: the panels dissolve so cards land on the plane by coordinate. */
++.floor.as-map .zpanel, .floor.as-map .zpanel-grid { display: contents; }
++.floor.as-map .zpanel-head { display: none; }
+ .tbl {
+   background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--line);
+   border-radius: var(--radius); padding: 12px; min-height: 112px;
+@@ -475,6 +489,17 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+ .tbl.free { border-left-color: var(--free); }
+ .tbl.occupied { border-left-color: var(--occupied); }
+ .tbl.ready_to_pay { border-left-color: var(--ready); }
++/* Held for a booking: a calm blue with a dashed edge — reads as "incoming, not
++   free, nobody serving yet". Colour comes inline (RESERVED_COLOR); the dashes
++   and faint tint set it apart from a live, solid-bordered table. */
++.tbl.reserved { border-style: dashed; background:
++  linear-gradient(0deg, rgba(59, 130, 246, .06), rgba(59, 130, 246, .06)), var(--panel); }
++/* An occupied table with a booking due inside its hold window: warn staff to
++   turn it before the party arrives. */
++.tbl.due-soon { box-shadow: inset 0 3px 0 var(--warn); }
++.res-due { font-size: 11px; font-weight: 700; color: var(--warn);
++  background: color-mix(in srgb, var(--warn) 15%, transparent); border-radius: 8px;
++  padding: 1px 6px; align-self: flex-start; }
+ .tbl .n { font-weight: 700; font-size: 16px; }
+ .tbl .meta { color: var(--muted); font-size: 12px; }
+ .tbl .tot { margin-top: auto; font-weight: 700; font-variant-numeric: tabular-nums; }
+@@ -1047,7 +1072,10 @@ tr.dim:hover > td { opacity: 1; }
+   display: block; position: relative; width: 100%;
+   height: min(82vh, 1040px); overflow: auto;       /* the whole floor area; scroll to reach it */
+   border: 1px solid var(--line); border-radius: var(--radius);
+-  background: transparent; touch-action: manipulation;
++  /* Not fully transparent — a 70%-opaque panel backing, so the map reads as its
++     own surface without fully hiding the page behind it. */
++  background: color-mix(in srgb, var(--panel) 70%, transparent);
++  touch-action: manipulation;
+ }
+ /* The wrapper is invisible in the list (cards fall straight into the grid) and
+    becomes the positioning plane on the map — the full floor area, so its empty
+@@ -1097,6 +1125,103 @@ tr.dim:hover > td { opacity: 1; }
+   width: 17px; height: 17px; border-radius: 4px;
+   background: var(--zc); border: 2px solid var(--panel); cursor: nwse-resize;
+ }
++/* ---------- floor card: per-station readiness strip ---------- */
++.tbl-stations { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
++.tst { display: inline-flex; align-items: center; gap: 2px; font-size: 10px;
++  font-weight: 700; line-height: 1.4; padding: 0 5px; border-radius: 999px;
++  border: 1px solid var(--sc); color: var(--ink);
++  background: color-mix(in srgb, var(--sc) 14%, transparent); }
++.tst.prep { color: var(--warn); }
++.tst.rdy { color: var(--ok); }
++
++/* ---------- expo (coordination) board ---------- */
++.ticket.expo-ready { border-top-color: var(--ok); }
++.expo-stations { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
++.expo-st { border: 1px solid var(--line); border-radius: 10px; padding: 7px 9px; }
++.expo-st.ready { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); }
++.expo-st.wait { border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
++.expo-st-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
++.expo-st-name { font-weight: 700; font-size: 13px; }
++.expo-st-status { font-size: 15px; }
++.expo-st.wait .expo-st-status { color: var(--warn); }
++.expo-st.ready .expo-st-status { color: var(--ok); }
++.expo-st-lines { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
++.expo-overall { margin-top: 8px; font-weight: 800; font-size: 13px; letter-spacing: .3px;
++  padding: 6px 10px; border-radius: 8px; text-align: center; }
++.expo-overall.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
++.expo-overall.wait { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
++
++/* ---------- kitchen display: station tabs + per-line chips ---------- */
++.station-bar { flex-wrap: wrap; gap: 6px; }
++.station-bar .btn.primary { border-color: var(--sc, var(--accent)); }
++.st-tab-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block;
++  margin-right: 5px; vertical-align: middle; }
++.k-st-chip { display: inline-block; font-size: 10px; font-weight: 700;
++  padding: 0 6px; border-radius: 999px; vertical-align: middle;
++  color: var(--sc, var(--muted)); border: 1px solid var(--sc, var(--line));
++  background: color-mix(in srgb, var(--sc, #64748b) 12%, transparent); }
++.k-st-chip.k-st-none { --sc: var(--warn); }
++
++/* ---------- kitchen stations admin ---------- */
++.st-list { display: flex; flex-direction: column; gap: 10px; }
++.st-card { margin: 0; border-left: 4px solid var(--sc, var(--line)); }
++.st-card.st-off { opacity: .6; }
++.st-row { display: flex; align-items: center; gap: 14px; }
++.st-dot { width: 34px; height: 34px; border-radius: 9px; flex: none;
++  display: inline-flex; align-items: center; justify-content: center; font-size: 17px; }
++.st-main { flex: 1; min-width: 0; }
++.st-name { font-weight: 700; font-size: 16px; }
++.st-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
++.st-type-badge { display: inline-block; padding: 1px 8px; border-radius: 999px;
++  font-size: 11px; font-weight: 700; border: 1px solid var(--line); }
++.st-type-badge.st-production { color: #34d399; border-color: color-mix(in srgb, #34d399 45%, transparent); }
++.st-type-badge.st-coordination { color: #60a5fa; border-color: color-mix(in srgb, #60a5fa 45%, transparent); }
++.pill.warn { background: color-mix(in srgb, var(--warn) 16%, transparent);
++  color: var(--warn); border-radius: 999px; padding: 3px 10px; font-size: 12px;
++  font-weight: 700; text-decoration: none; }
++
++/* ---------- reservation table picker (4.1.5) ---------- */
++/* Bordered zone panels that flow to fill the full width (CSS columns pack them,
++   using all the horizontal space), one floor per tab. Small click-to-select
++   table cards — the picker only needs zone, table number and seat count. */
++.resmap-sec[hidden] { display: none; }
++/* Page split: LEFT = picker + reservation/waitlist lists; RIGHT = the two entry
++   forms (book a reservation, add walk-in). Each column stacks its cards. */
++.res-split { display: grid; grid-template-columns: minmax(0, 1fr) 560px; gap: 18px; align-items: start; }
++.res-split-map, .res-side-forms { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
++/* The two lists sit side by side under the map. */
++.res-lists { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
++@media (max-width: 1200px) { .res-split { grid-template-columns: 1fr; } }
++@media (max-width: 760px) { .res-lists { grid-template-columns: 1fr; } }
++.zflow { columns: 340px; column-gap: 16px; }
++.reszone-panel {
++  break-inside: avoid; -webkit-column-break-inside: avoid; display: inline-block;
++  width: 100%; margin: 0 0 14px;
++}
++.reszone-panel .zpanel-head { flex-wrap: wrap; }
++.reszone-all {
++  margin-left: auto; background: none; border: none; cursor: pointer; font: inherit;
++  font-size: 11px; color: var(--accent); text-decoration: underline; padding: 0;
++}
++.restbl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(94px, 1fr)); gap: 8px; }
++.restbl {
++  display: flex; flex-direction: column; gap: 1px; text-align: left; cursor: pointer;
++  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
++  padding: 7px 9px; font: inherit; color: var(--ink);
++}
++.restbl:hover { border-color: var(--accent); }
++.restbl > * { pointer-events: none; }
++.restbl .rt-n { font-size: 12px; font-weight: 700; white-space: nowrap; }
++.restbl .rt-seats { font-size: 10px; color: var(--muted); }
++.restbl.sel {
++  border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel));
++  box-shadow: 0 0 0 1px var(--accent);
++}
++.restbl.sel .rt-n::after { content: " ✓"; color: var(--accent); font-weight: 800; }
++.res-picked { padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius);
++  color: var(--muted); font-size: 13px; min-height: 38px; display: flex; align-items: center; }
++.res-picked.has { color: var(--ink); font-weight: 600; border-color: var(--accent); }
++
+ .tchip-del {
+   position: absolute; top: -8px; right: -8px; width: 18px; height: 18px;
+   border-radius: 50%; padding: 0; line-height: 15px; font-size: 11px;
+@@ -1133,13 +1258,27 @@ tr.dim:hover > td { opacity: 1; }
+ /* Legend entries double as status filters. */
+ .legend-btn {
+   display: inline-flex; align-items: center; gap: 6px;
+-  background: none; border: 1px solid transparent; border-radius: 999px;
++  background: none; border: 1px solid var(--line); border-radius: 999px;
+   padding: 4px 10px; font: inherit; font-size: 12px; color: var(--muted);
+   cursor: pointer;
+ }
+-.legend-btn:hover { color: var(--ink); border-color: var(--line); }
++.legend-btn:hover { color: var(--ink); border-color: var(--accent); }
+ .legend-btn.on { color: var(--ink); border-color: var(--accent); background: var(--panel-2); }
+ 
++/* Legend bar: zone keys on the left, the waiter key pushed to the right. */
++.legend-bar { align-items: center; }
++.legend-waiters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-left: auto; }
++/* Round initials avatar on a waiter button, ringed in that server's colour. */
++.waiter-btn { padding-left: 4px; }
++.wav {
++  width: 22px; height: 22px; border-radius: 50%; flex: none;
++  display: inline-flex; align-items: center; justify-content: center;
++  font-size: 10px; font-weight: 800; letter-spacing: .3px; color: var(--ink);
++  background: color-mix(in srgb, var(--wc) 22%, transparent);
++  border: 1.5px solid var(--wc);
++}
++.waiter-all { color: var(--muted); }
++
+ .findbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; }
+ .findbar input {
+   flex: 1; max-width: 460px; min-height: 0; padding: 9px 12px;
+diff --git a/web/templates/admin_menu.html b/web/templates/admin_menu.html
+index 38d7940..d89d0e2 100644
+--- a/web/templates/admin_menu.html
++++ b/web/templates/admin_menu.html
+@@ -58,7 +58,7 @@
+       <thead>
+         <tr>
+           <th>Photo</th><th>Item</th><th>Description</th><th class="num">Price</th>
+-          <th>Category</th><th>Shareable</th><th></th>
++          <th>Category</th><th>Station</th><th>Shareable</th><th></th>
+         </tr>
+       </thead>
+       <tbody>
+@@ -99,6 +99,17 @@
+               {% endfor %}
+             </select>
+           </td>
++warning: in the working copy of 'web/templates/admin_stations.html', LF will be replaced by CRLF the next time Git touches it
+          <td>
++            {# Kitchen routing. Defaults to Unassigned — an item is never
++               auto-routed; the manager picks the station here. #}
++            <select form="if{{ i.id }}" name="station_id" style="width:140px">
++              <option value="0" {{ 'selected' if not i.station_id else '' }}>— Unassigned —</option>
++              {% for st in stations %}
++              <option value="{{ st.id }}" {{ 'selected' if st.id == i.station_id else '' }}>{{ st.name }}</option>
++              {% endfor %}
++              {% if i.station and not i.station.is_active %}<option value="{{ i.station.id }}" selected>{{ i.station.name }} (inactive)</option>{% endif %}
++            </select>
++          </td>
+           <td>
+             {# No paired hidden field: duplicate keys make Starlette's form
+                .get() return the first one, which would pin this to 0 forever.
+@@ -123,7 +134,7 @@
+           </td>
+         </tr>
+       {% else %}
+-        <tr><td colspan="7" class="empty">Nothing in this category yet.</td></tr>
++        <tr><td colspan="8" class="empty">Nothing in this category yet.</td></tr>
+       {% endfor %}
+       </tbody>
+     </table>
+@@ -140,6 +151,13 @@
+       <label>Shareable</label>
+       <input type="checkbox" name="is_shareable" value="1" style="width:auto;min-height:0">
+     </div>
++    <div class="field" style="max-width:160px">
++      <label>Station</label>
++      <select name="station_id">
++        <option value="0">— Unassigned —</option>
++        {% for st in stations %}<option value="{{ st.id }}">{{ st.name }}</option>{% endfor %}
++      </select>
++    </div>
+     <button class="btn primary">Add to {{ c.name }}</button>
+   </form>
+ </div>
+diff --git a/web/templates/admin_nav.html b/web/templates/admin_nav.html
+index 094cd4d..f91e3ab 100644
+--- a/web/templates/admin_nav.html
++++ b/web/templates/admin_nav.html
+@@ -7,6 +7,7 @@
+   {% endif %}
+   {% if can('settings') %}
+   <a href="/admin/menu" class="{{ 'on' if request.url.path.startswith('/admin/menu') else '' }}">Menu</a>
++  <a href="/admin/stations" class="{{ 'on' if request.url.path.startswith('/admin/stations') else '' }}">Stations</a>
+   <a href="/admin/day-menus" class="{{ 'on' if request.url.path.startswith('/admin/day-menus') else '' }}">Day menus</a>
+   <a href="/admin/happy-hours" class="{{ 'on' if request.url.path.startswith('/admin/happy-hours') else '' }}">Happy hour</a>
+   <a href="/admin/positions" class="{{ 'on' if request.url.path.startswith('/admin/positions') else '' }}">Positions</a>
+diff --git a/web/templates/admin_stations.html b/web/templates/admin_stations.html
+new file mode 100644
+index 0000000..7f5d9a3
+--- /dev/null
++++ b/web/templates/admin_stations.html
+@@ -0,0 +1,195 @@
++{% extends "base.html" %}
++{% block body %}
++{% include "admin_nav.html" %}
++
++{# Shared create/edit fields. `s` is a Station (or None for the create form). The
++   `prod-only` block is hidden by JS when the type is Coordination. #}
++{% macro station_fields(s) %}
++  <div class="formline">
++    <div class="field" style="flex:2;min-width:160px;margin:0">
++      <label>Name</label>
++      <input type="text" name="name" value="{{ s.name if s else '' }}" placeholder="e.g. Pizza, Grill, Expo" required>
++    </div>
++    <div class="field" style="width:150px;margin:0">
++      <label>Type</label>
++      <select name="type" class="st-type">
++        <option value="production" {{ 'selected' if s and s.type == 'production' else '' }}>Production</option>
++        <option value="coordination" {{ 'selected' if s and s.type == 'coordination' else '' }}>Coordination</option>
++      </select>
++    </div>
++    <div class="field" style="width:110px;margin:0">
++      <label>Code</label>
++      <input type="text" name="code" value="{{ s.code if s else '' }}" placeholder="PIZ" maxlength="12">
++    </div>
++    <div class="field" style="width:90px;margin:0">
++      <label>Colour</label>
++      <input type="color" name="color" value="{{ s.color if s else '#64748b' }}" style="min-height:38px;padding:2px">
++    </div>
++    <div class="field" style="width:90px;margin:0">
++      <label>Icon</label>
++      <input type="text" name="icon" value="{{ s.icon if s else '' }}" placeholder="🍕" maxlength="8">
++    </div>
++  </div>
++  <div class="formline" style="margin-top:10px">
++    <div class="field" style="flex:1;min-width:200px;margin:0">
++      <label>Description (optional)</label>
++      <input type="text" name="description" value="{{ s.description if s else '' }}" placeholder="What this station prepares / coordinates" maxlength="200">
++    </div>
++  </div>
++  <div class="formline" style="margin-top:10px">
++    {# Production-only operational hints — a coordination station coordinates
++       output, so it runs no prep target or printer. #}
++    <div class="field prod-only" style="width:170px;margin:0">
++      <label>Target prep (min)</label>
++      <input type="number" name="target_prep_min" value="{{ s.target_prep_min if s and s.target_prep_min is not none else '' }}" min="0" max="240" placeholder="e.g. 12">
++    </div>
++    <div class="field prod-only" style="width:180px;margin:0">
++      <label>Printer (optional)</label>
++      <input type="text" name="printer_ref" value="{{ s.printer_ref if s else '' }}" placeholder="e.g. Kitchen printer 1" maxlength="60">
++    </div>
++    <div class="field" style="width:180px;margin:0">
++      <label>KDS screen (optional)</label>
++      <input type="text" name="kds_ref" value="{{ s.kds_ref if s else '' }}" placeholder="e.g. Screen 1" maxlength="60">
++    </div>
++  </div>
++  <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:12px">
++    <label class="tick" style="margin:0"><input type="checkbox" name="visible_to_kitchen" value="1" {{ 'checked' if (s.visible_to_kitchen if s else True) else '' }}> Visible to kitchen</label>
++    <label class="tick" style="margin:0"><input type="checkbox" name="visible_to_foh" value="1" {{ 'checked' if (s.visible_to_foh if s else False) else '' }}> Visible to front-of-house</label>
++  </div>
++{% endmacro %}
++
++<div class="between" style="margin-bottom:14px">
++  <div>
++    <h1 style="margin:0">Kitchen stations</h1>
++    <p class="sub" style="margin:2px 0 0">Where each item is prepared. Route menu items to stations from the Menu editor; the kitchen display shows each station only its own work.</p>
++  </div>
++  <div style="display:flex;align-items:center;gap:12px">
++    {% if unassigned %}
++    <a href="/admin/menu" class="pill warn" title="Active items with no station — they land in the KDS Unassigned bucket when fired">{{ unassigned }} unassigned items</a>
++    {% endif %}
++    <details class="edit-menu" id="addStation">
++      <summary class="btn sm primary" style="display:inline-block">+ Add station</summary>
++      <div class="edit-pop" style="width:min(680px,90vw)">
++        <form method="post" action="/admin/stations/create" class="st-form">
++          {{ station_fields(None) }}
++          <button class="btn sm primary" style="width:100%;margin-top:14px">Create station</button>
++        </form>
++      </div>
++    </details>
++  </div>
++</div>
++
++{% if import_result %}
++  {% if import_result.error %}
++  <div class="note" style="margin-bottom:14px;color:var(--warn)">{{ import_result.error }}</div>
++  {% else %}
++  <div class="note" style="margin-bottom:14px">
++    Routing applied: <b>{{ import_result.assigned }}</b> routed · <b>{{ import_result.cleared }}</b> set to Unassigned · {{ import_result.unchanged }} unchanged{% if import_result.missing_items %} · {{ import_result.missing_items }} unknown item id(s) skipped{% endif %}{% if import_result.bad_rows %} · {{ import_result.bad_rows }} malformed row(s) skipped{% endif %}.
++    {% if import_result.truncated %}<br><span style="color:var(--warn)">Only the first {{ 20000 }} rows were processed (file too long).</span>{% endif %}
++    {% if import_result.unknown %}
++    <br><span style="color:var(--warn)">Unknown station name(s), not applied: {% for name, n in import_result.unknown.items() %}“{{ name }}” ({{ n }}){% if not loop.last %}, {% endif %}{% endfor %}. Create/rename those stations or fix the CSV, then re-upload.</span>
++    {% endif %}
++  </div>
++  {% endif %}
++{% endif %}
++
++{# Bulk routing — the venue routes the whole menu at once via a CSV round-trip. #}
++<div class="card" style="margin-bottom:16px">
++  <strong>Bulk routing (CSV or Excel)</strong>
++  <p class="sub" style="margin:2px 0 12px">
++    Route the whole menu in one go. <b>1)</b> Download the template. <b>2)</b> Fill the
++    <b>station</b> column with an exact station name (or leave it blank = Unassigned).
++    <b>3)</b> Upload it back — <b>.csv</b> or <b>.xlsx</b>. Matching is by <b>item_id</b>,
++    so keep that column intact.
++  </p>
++  <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
++    <a class="btn sm" href="/admin/stations/routing/template">↓ Download template</a>
++    <form method="post" action="/admin/stations/routing/import" enctype="multipart/form-data"
++          style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
++      <input type="file" name="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required>
++      <button class="btn sm primary">Upload &amp; apply</button>
++    </form>
++  </div>
++  {% set active_names = stations | selectattr('is_active') | map(attribute='name') | list %}
++  {% if active_names %}
++  <p class="sub" style="font-size:11px;margin-top:10px">Valid station names: {{ active_names | join(', ') }} · or blank/Unassigned.</p>
++  {% endif %}
++</div>
++
++{% if not stations %}
++<div class="card"><p class="empty" style="margin:0">No stations yet. Add your first one — Pizza, Grill, Cold, Dessert, Bar, Expo… whatever your kitchen runs.</p></div>
++{% else %}
++<div class="st-list">
++  {% for s in stations %}
++  <div class="card st-card{{ '' if s.is_active else ' st-off' }}" style="--sc: {{ s.swatch }}">
++    <div class="st-row">
++      <span class="st-dot" style="background: {{ s.swatch }}">{{ s.icon }}</span>
++      <div class="st-main">
++        <div class="st-name">{{ s.name }}{% if s.code %} <span class="sub" style="font-weight:400">· {{ s.code }}</span>{% endif %}</div>
++        <div class="sub" style="font-size:12px">
++          <span class="st-type-badge st-{{ s.type }}">{{ 'Coordination' if s.type == 'coordination' else 'Production' }}</span>
++          {% if s.type == 'coordination' %}
++            · receives all production stations
++          {% else %}
++            · {{ counts.get(s.id, 0) }} menu item{{ '' if counts.get(s.id, 0) == 1 else 's' }}{% if s.target_prep_min is not none %} · target {{ s.target_prep_min }} min{% endif %}
++          {% endif %}
++          {% if s.kds_ref %} · KDS: {{ s.kds_ref }}{% endif %}{% if s.printer_ref %} · {{ s.printer_ref }}{% endif %}
++          {% if not s.is_active %} · <span class="warn">inactive</span>{% endif %}
++        </div>
++        {% if s.description %}<div class="sub" style="font-size:11px;margin-top:2px">{{ s.description }}</div>{% endif %}
++      </div>
++      <div class="st-actions">
++        {% if s.is_active %}
++        <form method="post" action="/admin/stations/{{ s.id }}/move" style="display:inline"><input type="hidden" name="dir" value="up"><button class="btn sm" title="Move up">↑</button></form>
++        <form method="post" action="/admin/stations/{{ s.id }}/move" style="display:inline"><input type="hidden" name="dir" value="down"><button class="btn sm" title="Move down">↓</button></form>
++        {% endif %}
++        <details class="edit-menu">
++          <summary class="btn sm" style="display:inline-block" title="Edit">✎</summary>
++          <div class="edit-pop" style="width:min(680px,90vw)">
++            <form method="post" action="/admin/stations/{{ s.id }}/edit" class="st-form">
++              {{ station_fields(s) }}
++              <button class="btn sm primary" style="width:100%;margin-top:14px">Save changes</button>
++            </form>
++          </div>
++        </details>
++        {% if s.is_active %}
++        {% set n = counts.get(s.id, 0) %}
++        <form method="post" action="/admin/stations/{{ s.id }}/active" style="display:inline"
++              onsubmit="return {{ 'confirwarning: in the working copy of 'web/templates/expo.html', LF will be replaced by CRLF the next time Git touches it
+m(\"Deactivate ' ~ s.name ~ '? ' ~ n ~ ' menu item(s) routed here will become Unassigned until you re-route them.\")' if n else 'true' }};">
++          <input type="hidden" name="active" value="0">
++          <button class="btn sm" title="Deactivate">Deactivate</button>
++        </form>
++        {% else %}
++        <form method="post" action="/admin/stations/{{ s.id }}/active" style="display:inline">
++          <input type="hidden" name="active" value="1">
++          <button class="btn sm primary" title="Reactivate">Activate</button>
++        </form>
++        {% endif %}
++      </div>
++    </div>
++  </div>
++  {% endfor %}
++</div>
++{% endif %}
++{% endblock %}
++
++{% block scripts %}
++<script>
++// Show production-only fields only when the station type is Production. Runs per
++// form (create + each edit popover), and on change.
++(function () {
++  function sync(form) {
++    var t = form.querySelector('.st-type');
++    if (!t) return;
++    var prod = t.value === 'production';
++    form.querySelectorAll('.prod-only').forEach(function (el) { el.style.display = prod ? '' : 'none'; });
++    form.querySelectorAll('.coord-only').forEach(function (el) { el.style.display = 'none'; });
++  }
++  Array.from(document.querySelectorAll('.st-form')).forEach(function (form) {
++    sync(form);
++    var t = form.querySelector('.st-type');
++    if (t) t.addEventListener('change', function () { sync(form); });
++  });
++})();
++</script>
++{% endblock %}
+diff --git a/web/templates/base.html b/web/templates/base.html
+index 4560c26..d54c77b 100644
+--- a/web/templates/base.html
++++ b/web/templates/base.html
+@@ -33,7 +33,8 @@
+       <a href="/schedule" class="{{ 'on' if request.url.path.startswith('/schedule') else '' }}"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span>Schedule</span>{% if pending_requests %}<span class="nav-badge">{{ pending_requests }}</span>{% endif %}</a>
+       {% endif %}
+       {% if can('kitchen.view') %}
+-      <a href="/kitchen" class="{{ 'on' if request.url.path.startswith('/kitchen') else '' }}"><svg viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h6"/></svg><span>Kitchen</span></a>
++      <a href="/kitchen" class="{{ 'on' if request.url.path == '/kitchen' or request.url.path.startswith('/kitchen/') else '' }}"><svg viewBox="0 0 24 24"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h6"/></svg><span>Kitchen</span></a>
++      <a href="/expo" class="{{ 'on' if request.url.path.startswith('/expo') else '' }}"><svg viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/></svg><span>Expo</span></a>
+       {% endif %}
+       {% if can('delivery.view') %}
+       <a href="/delivery" class="{{ 'on' if request.url.path.startswith('/delivery') else '' }}"><svg viewBox="0 0 24 24"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 3v5h-7z"/><circle cx="5.5" cy="18.5" r="2"/><circle cx="18.5" cy="18.5" r="2"/></svg><span>Delivery</span></a>
+diff --git a/web/templates/expo.html b/web/templates/expo.html
+new file mode 100644
+index 0000000..851ad20
+--- /dev/null
++++ b/web/templates/expo.html
+@@ -0,0 +1,81 @@
++{% extends "base.html" %}
++{% block wrap_extra %}wrap-wide{% endblock %}
++{% block body %}
++<div class="between">
++  <div>
++    <h1>Expo</h1>
++    <p class="sub">
++      {{ cards|length }} order{{ '' if cards|length == 1 else 's' }}{% if shown > limit %} shown of {{ shown }} active (most urgent first){% endif %} · auto-refreshes every 15s
++    </p>
++  </div>
++  <div class="catbar" style="margin:0">
++    <a class="btn sm {{ 'primary' if view == 'all' else '' }}" href="/expo?view=all&mine={{ mine }}">All</a>
++    <a class="btn sm {{ 'primary' if view == 'dine_in' else '' }}" href="/expo?view=dine_in&mine={{ mine }}">Dine-in</a>
++    <a class="btn sm {{ 'primary' if view == 'delivery' else '' }}" href="/expo?view=delivery&mine={{ mine }}">Delivery</a>
++    <a class="btn sm {{ 'primary' if mine else '' }}" href="/expo?view={{ view }}&mine={{ 0 if mine else 1 }}" title="Only tables you're serving">My tables</a>
++  </div>
++</div>
++
++{% if not cards %}
++  <div class="card"><p class="empty">
++    {% if view != 'all' or mine %}Nothing matches this filter — <a href="/expo?view=all&mine=0">show everything</a>.
++    {% else %}Nothing to coordinate right now.{% endif %}
++  </p></div>
++{% else %}
++<div class="tickets">
++  {% for t in cards %}
++  <div class="ticket {{ t.urgency }}{{ ' expo-ready' if t.all_ready }}">
++    <div class="between">
++      {% if can('orders.manage') %}
++      <a class="k-order-link" href="/orders/{{ t.order.id }}"><strong>{{ t.where }}</strong> <span class="k-open">↗</span></a>
++      {% else %}<strong>{{ t.where }}</strong>{% endif %}
++      <span class="elapsed">{{ t.elapsed|duration }}</span>
++    </div>
++    <div class="chit-meta">
++      <span>{{ t.order.code }}{% if t.is_delivery %} · <span class="pill open">delivery</span>{% endif %}</span>
++      <span>Server: {{ t.server or '—' }}</span>
++    </div>
++
++    {% for c in t.courses %}
++    <div class="course-block">
++      {% if c.multi %}<div class="course-head"><span>{{ c.label }}</span></div>{% endif %}
++      <ul class="expo-stations">
++        {% for s in c.stations %}
++        <li class="expo-st {{ 'ready' if s.ready else 'wait' }}">
++          <span class="expo-st-head">
++            <span class="expo-st-name">
++              <i class="st-tab-dot" style="background: {{ s.station.swatch if s.station else 'var(--warn)' }}"></i>{{ s.station.icon if s.station else '⚠' }} {{ s.name }}
++            </span>
++            <span class="expo-st-status" title="{{ 'ready' if s.ready else 'still preparing' }}">{{ '✓' if s.ready else '⏳' }}</span>
++          </span>
++          <span class="expo-st-lines">{% for i in s.lines %}{{ i.quantity }}× {{ i.menu_item.name }}{% if not loop.last %} · {% endif %}{% endfor %}</span>
++        </li>
++        {% endfor %}
++      </ul>
++      {% if c.ready %}
++      <div class="expo-overall ok">✓ Ready to serve</div>
++      {% else %}
++      <div class="expo-overall wait">Waiting on {{ c.waiting_on | join(', ') }}</div>
++      {% if can('kitchen.update') %}
++      <form method="post" action="/kitchen/{{ t.order.id }}/status" style="margin-top:6px">
++        <input type="hidden" name="status" value="ready">
++        <input type="hidden" name="course" value="{{ c.course }}">
++        <input type="hidden" name="next" value="/expo?view={{ view }}&mine={{ mine }}">
++        <button class="btn sm" style="width:100%" title="Override: mark every line in this course ready">Mark course ready</button>
++      </form>
++      {% endif %}
++      {% endif %}
++    </div>
++    {% endfor %}
++  </div>
++  {% endfor %}
++</div>
++{% endif %}
++{% endblock %}
++
++{% block scripts %}
++<script>
++  // Same polling model as the kitchen board — recover on the next tick.
++  setTimeout(() => location.reload(), 15000);
++</script>
++{% endblock %}
+diff --git a/web/templates/floor.html b/web/templates/floor.html
+index dc41dbc..521a445 100644
+--- a/web/templates/floor.html
++++ b/web/templates/floor.html
+@@ -9,10 +9,15 @@
+    inline SVG that inherits the text colour. #}
+ {% set CHEF_SVG = '<svg class="chef" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 14.5h10V18a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1v-3.5z"/><path d="M7 14.5a3.2 3.2 0 0 1-.7-6.35 3.5 3.5 0 0 1 6.2-2.6 3.5 3.5 0 0 1 5 2.6 3.2 3.2 0 0 1-.5 6.35"/><path d="M10 15v3.5M14 15v3.5"/></svg>' %}
+ {% set STATUS_ICON = {'free': '🪑', 'seated': '🙋', 'occupied': CHEF_SVG,
+-                      'ready_serve': '🔔', 'served': '✅', 'ready_to_pay': '💳'} %}
++                      'ready_serve': '🔔', 'served': '✅', 'ready_to_pay': '💳',
++                      'reserved': '📅'} %}
+ {% set STATUS_LABEL = {'free': 'free', 'seated': 'seated', 'occupied': 'preparing',
+-                       'ready_serve': 'ready to serve', 'served': 'served', 'ready_to_pay': 'ready to pay'} %}
++                       'ready_serve': 'ready to serve', 'served': 'served', 'ready_to_pay': 'ready to pay',
++                       'reserved': 'reserved'} %}
+ {% set UNCLAIMED = '#8a9bb0' %}
++{# A held (reserved) table is coloured by nobody yet — a distinct calm blue that
++   isn't any waiter's swatch, so the map reads "incoming booking, not free". #}
++{% set RESERVED_COLOR = '#3b82f6' %}
+ <div class="between">
+   <div>
+     <h1>Floor plan</h1>
+@@ -47,6 +52,9 @@
+       <button type="button" class="legend-btn" data-status="ready_to_pay" title="Ready to pay">
+         <span class="sicon">💳</span>Ready to pay <span data-count="ready_to_pay">{{ counts.ready }}</span>
+       </button>
++      <button type="button" class="legend-btn" data-status="reserved" title="Held for a booking — seat from the table">
++        <span class="sicon">📅</span>Reserved <span data-count="reserved">{{ counts.reserved }}</span>
++      </button>
+       {% if delivery_pending %}<span>· <a href="/delivery">{{ delivery_pending }} delivery in queue</a></span>{% endif %}
+     </div>
+   </div>
+@@ -85,24 +93,29 @@
+   {# Only meaningful when several floors show at once (All, or a cross-floor
+      search); the script shows/hides it. A single floor is named by its tab. #}
+   <h3 class="floor-head" {% if not show_all %}hidden{% endif %}>{{ sec.floor.name if sec.floor else 'No floor assigned' }}</h3>
+-  {% if sec.zones %}
+-  <div class="legend" style="margin:0 0 12px">
++  {# One legend bar: zone keys on the left, the waiter colour key on the right
++     (cards are coloured by whoever is covering the table, so this bar — not a
++     name on every card — says who's who and filters to them). Each is a bordered
++     button; waiters carry a round initials avatar in their own colour. #}
++  {% if sec.zones or sec.waiters %}
++  <div class="legend legend-bar" style="margin:0 0 12px">
+     {% for z in sec.zones %}
+     <button type="button" class="legend-btn zone-btn" data-zone="{{ z.id }}">
+       <i class="dot" style="background: {{ z.swatch }}"></i>{{ z.name }}
+     </button>
+     {% endfor %}
+-  </div>
+-  {% endif %}
+-  {# Waiter colour key — cards are coloured by whoever is covering the table, so
+-     this legend (not a name on every card) says who's who, and filters to them. #}
+-  {% if sec.waiters %}
+-  <div class="legend legend-waiters" style="margin:0 0 12px">
+-    {% for w in sec.waiters %}
+-    <button type="button" class="legend-btn waiter-btn" data-waiter="{{ w.id }}">
+-      <i class="dot" style="background: {{ w.swatch }}"></i>{{ w.name }}
+-    </button>
+-    {% endfor %}
++    {% if sec.waiters %}
++    <div class="legend-waiters">
++      {% for w in sec.waiters %}
++      {% set parts = w.name.split() %}
++      {% set initials = (parts[0][0] ~ (parts[1][0] if parts|length > 1 else ''))|upper %}
++      <button type="button" class="legend-btn waiter-btn" data-waiter="{{ w.id }}">
++        <span class="wav" style="--wc: {{ w.swatch }}">{{ initials }}</span>{{ w.name }}
++      </button>
++      {% endfor %}
++      <button type="button" class="legend-btn waiter-all" data-waiter-all title="Show every server">All staff</button>
++    </div>
++    {% endif %}
+   </div>
+   {% endif %}
+ 
+@@ -119,7 +132,18 @@
+     {% if can('settings') %}<span class="fzrect-handle" title="Drag to resize"></span>{% endif %}
+   </div>
+   {% endfor %}
+-  {% for c in sec.cards %}
++  {# List view groups the cards into a bordered panel per zone, headed with the
++     zone name + its table/seat totals. In map view these panels dissolve
++     (display:contents) so the cards fall onto the plane at their coordinates. #}
++  {% for zg in sec.zone_groups %}
++  <div class="zpanel" data-zone-id="{{ zg.zone.id if zg.zone else '' }}">
++    <div class="zpanel-head">
++      <span class="zp-dot" style="background: {{ zg.zone.swatch if zg.zone else UNCLAIMED }}"></span>
++      <strong class="zp-name">{{ zg.zone.name if zg.zone else 'No zone' }}</strong>
++      <span class="zp-meta">{{ zg.tables }} table{{ '' if zg.tables == 1 else 's' }} · {{ zg.seats }} seats</span>
++    </div>
++    <div class="zpanel-grid">
++  {% for c in zg.cards %}
+     {# Everything worth searching on, lowercased once here so the filter is a
+        plain substring test rather than a walk of the DOM. #}
+     {% set haystack = (
+@@ -128,17 +152,21 @@
+          (c.waiter or 'unassigned') ~ ' ' ~
+          c.disp_status.replace('_', ' ') ~ ' ' ~
+          (' ready to serve' if c.ready_count else '') ~ ' ' ~
+-         (c.order.code if c.order else '')
++         (c.order.code if c.order else '') ~ ' ' ~
++         (('reserved ' ~ c.reservation.guest_name) if c.reservation else '')
+        )|lower %}
++    {# Border colour: reserved = calm blue (a booking, nobody serving yet),
++       otherwise the responsible waiter's swatch (grey when unclaimed). #}
++    {% set bc = RESERVED_COLOR if c.disp_status == 'reserved' else (c.waiter_color or UNCLAIMED) %}
+     {% if c.order %}
+-      <a class="tbl {{ c.disp_status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
++      <a class="tbl {{ c.disp_status }}{{ ' due-soon' if c.reservation }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
+          data-id="{{ c.table.id }}" data-shape="{{ c.table.shape }}"
+          data-status="{{ c.disp_status }}" data-floor="{{ sec_floor_id }}"
+          data-mine="{{ '1' if c.table.current_waiter_id == staff.id else '' }}"
+          data-ready="{{ '1' if c.ready_count else '' }}"
+          data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
+          data-waiter="{{ c.waiter_id or '' }}"
+-         style="border-left-color: {{ c.waiter_color or UNCLAIMED }}; --x: {{ (c.table.pos_x / 10)|round(2) }}%; --y: {{ (c.table.pos_y / 10)|round(2) }}%; --wc: {{ c.waiter_color or UNCLAIMED }}"
++         style="border-left-color: {{ bc }}; --x: {{ (c.table.pos_x / 10)|round(2) }}%; --y: {{ (c.table.pos_y / 10)|round(2) }}%; --wc: {{ bc }}"
+          title="Table {{ c.table.number }}{% if c.waiter %} · {{ c.waiter }}{% else %} · unclaimed{% endif %}"
+          href="/orders/{{ c.order.id }}">
+         {# One status icon (no words) carries the state; on "ready to serve" it
+@@ -148,6 +176,20 @@
+                 title="{{ STATUS_LABEL[c.disp_status] }}{% if c.disp_status == 'ready_serve' %} — {{ c.ready_count }} up, run to the table{% endif %}"
+           >{{ STATUS_ICON[c.disp_status]|safe }}{% if c.disp_status == 'ready_serve' %} {{ c.ready_count }}{% endif %}</span></span>
+         <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes|duration }}{% if c.disp_status == 'seated' %} waiting{% endif %}</span>
++        {% if c.reservation %}
++        {# This occupied table is held for an incoming booking — turn it in time. #}
++        <span class="res-due" title="Reserved — {{ c.reservation.guest_name }} · {{ c.reservation.party_size }} guests at {{ c.reservation.at.strftime('%H:%M') }} — turn this table">📅 due {{ c.reservation.at.strftime('%H:%M') }}</span>
++        {% endif %}
++        {% if c.stations %}
++        {# Per-station readiness of what's fired — the detail behind the card's
++           aggregate status (hover a chip for the station name + count). #}
++        <span class="tbl-stations">
++          {% for s in c.stations %}
++          <span class="tst {{ 'rdy' if s.ready else 'prep' }}" style="--sc: {{ s.station.swatch if s.station else '#f59e0b' }}"
++                title="{{ s.name }} · {{ 'ready' if s.ready else 'preparing' }} · {{ s.count }} item{{ '' if s.count == 1 else 's' }}">{{ (s.station.icon if s.station and s.station.icon else s.name[:3]) }} {{ '✓' if s.ready else '⏳' }}</span>
++          {% endfor %}
++        </span>
++        {% endif %}
+         <span class="tot">${{ c.total_cents|money }}</span>
+       </a>
+     {% else %}
+@@ -157,7 +199,28 @@
+          data-mine="{{ '1' if c.table.current_waiter_id == staff.id else '' }}"
+          data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
+          data-waiter="{{ c.waiter_id or '' }}"
+-         style="border-left-color: {{ c.waiter_color or UNCLAIMED }}; --x: {{ (c.table.pos_x / 10)|round(2) }}%; --y: {{ (c.table.pos_y / 10)|round(2) }}%; --wc: {{ c.waiter_color or UNCLAIMED }}">
++         style="border-left-color: {{ bc }}; --x: {{ (c.table.pos_x / 10)|round(2) }}%; --y: {{ (c.table.pos_y / 10)|round(2) }}%; --wc: {{ bc }}">
++        {% if c.reservation %}
++        {# A held table: booking incoming. Tap to seat the guest straight from the
++           map, or release the hold as a no-show — no need for the reservations page. #}
++        {# Name + party stay off the card face — they show on hover (title). #}
++        <summary style="cursor:pointer;list-style:none" title="Reserved — {{ c.reservation.guest_name }} · {{ c.reservation.party_size }} guests · {{ c.reservation.at.strftime('%H:%M') }}">
++          <span class="n">Table {{ c.table.number }}
++            <span class="sicon">{{ STATUS_ICON['reserved']|safe }}</span></span><br>
++          <span class="meta">📅 {{ c.reservation.at.strftime('%H:%M') }}{% if c.reservation.tables|length > 1 %} · {{ c.reservation.tables|length }} tables{% endif %}</span>
++        </summary>
++        {% if can('reservations') %}
++        <form method="post" action="/reservations/{{ c.reservation.id }}/seat-here" style="margin-top:10px">
++          <button class="btn primary sm" style="width:100%">Seat party of {{ c.reservation.party_size }}</button>
++        </form>
++        <form method="post" action="/reservations/{{ c.reservation.id }}/no-show" style="margin-top:6px">
++          <input type="hidden" name="next" value="/?floor={{ sec_floor_id }}">
++          <button class="btn sm" style="width:100%">No-show · release table</button>
++        </form>
++        {% else %}
++          <p class="meta" style="margin-top:8px">Held for {{ c.reservation.guest_name }}.</p>
++        {% endif %}
++        {% else %}
+         <summary style="cursor:pointer;list-style:none">
+           <span class="n">Table {{ c.table.number }}
+             <span class="sicon" title="{{ STATUS_LABEL[c.disp_status] }}">{{ STATUS_ICON[c.disp_status]|safe }}</span></span><br>
+@@ -188,8 +251,12 @@
+         {% if can('settings') %}
+         <form id="del-{{ c.table.id }}" method="post" action="/tables/{{ c.table.id }}/remove" hidden></form>
+         {% endif %}
++        {% endif %}
+       </details>
+     {% endif %}
++  {% endfor %}
++    </div>
++  </div>
+   {% endfor %}
+   </div>
+ </div>
+@@ -335,7 +402,7 @@
+     // A text search or a zone pick reaches across floors; otherwise the active
+     // floor tab scopes the view.
+     const floorFree = searching || zoneFilter !== null;
+-    const avail = { free: 0, seated: 0, occupied: 0, ready_serve: 0, served: 0, ready_to_pay: 0 };
++    const avail = { free: 0, seated: 0, occupied: 0, ready_serve: 0, served: 0, ready_to_pay: 0, reserved: 0 };
+     let shown = 0;
+ 
+     cards.forEach(function (card) {
+@@ -343,7 +410,9 @@
+       const zoneOk = !zoneFilter || card.dataset.zone === zoneFilter;
+       const waiterOk = !waiterFilter || card.dataset.waiter === waiterFilter;
+       const floorOk = floorFree || !activeFloor || card.dataset.floor === activeFloor;
+-      const mineOk = !mineFilter || card.dataset.mine === '1';
++      // Reserved tables stay visible even under "my tables": a booking isn't any
++      // one waiter's yet, but whoever is on the floor seats it from the map.
++      const mineOk = !mineFilter || card.dataset.mine === '1' || card.dataset.status === 'reserved';
+       const readyOk = !readyFilter || card.dataset.ready === '1';
+       const scopeOk = textOk && zoneOk && waiterOk && floorOk && mineOk && readyOk;   // everything but status
+       if (scopeOk && avail.hasOwnProperty(card.dataset.status)) avail[card.dataset.status]++;
+@@ -360,6 +429,12 @@
+     floorTabs.forEach(function (a) { a.classList.toggle('on', a.dataset.floor === activeFloor); });
+     if (mineBtn) mineBtn.classList.toggle('on', mineFilter);
+ 
++    // Hide a zone panel whose cards are all filtered out, so no empty bordered
++    // panel (with just its header) is left behind.
++    document.querySelectorAll('.zpanel').forEach(function (p) {
++      p.hidden = !p.querySelector('.tbl[data-find]:not([hidden])');
++    });
++
+     // Hide any floor section with nothing to show. Floor headings appear only
+     // when more than one floor is on screen at once (All, or a cross-floor
+     // search) — a single floor is already named by its active tab.
+@@ -409,6 +484,20 @@
+     });
+   });
+ 
++  // "All staff" clears the waiter filter, so the floor shows every server again.
++  Array.from(document.querySelectorAll('[data-waiter-all]')).forEach(function (btn) {
++    btn.addEventListener('click', function () { waiterFilter = null; apply(); });
++  });
++
++  // An open card (a table's seat/reservation options) closes when you click
++  // anywhere outside it — the summary that opened it stays inside, so opening
++  // one never closes itself.
++  document.addEventListener('click', function (e) {
++    document.querySelectorAll('details.tbl[open]').forEach(function (d) {
++      if (!d.contains(e.target)) d.removeAttribute('open');
++    });
++  });
++
+   floorTabs.forEach(function (tab) {
+     tab.addEventListener('click', function (e) {
+       e.preventDefault();                 // switch instantly instead of reloading
+diff --git a/web/templates/kitchen.html b/web/templates/kitchen.html
+index 031154a..381a9ab 100644
+--- a/web/templates/kitchen.html
++++ b/web/templates/kitchen.html
+@@ -3,37 +3,54 @@
+ <div class="between">
+   <div>
+     <h1>Kitchen display</h1>
+-    <p class="sub">{{ tickets|length }} active · auto-refreshes every 15s</p>
++    <p class="sub">{{ tickets|length }} shown{% if board_total > limit %} · {{ board_total }} on the board (most urgent {{ limit }} shown){% endif %} · auto-refreshes every 15s</p>
+   </div>
+   <div class="catbar" style="margin:0">
+-    <a class="btn sm {{ 'primary' if view == 'all' else '' }}" href="/kitchen?view=all&kstatus={{ kstatus }}&mine={{ mine }}">All</a>
+-    <a class="btn sm {{ 'primary' if view == 'dine_in' else '' }}" href="/kitchen?view=dine_in&kstatus={{ kstatus }}&mine={{ mine }}">Dine-in</a>
+-    <a class="btn sm {{ 'primary' if view == 'delivery' else '' }}" href="/kitchen?view=delivery&kstatus={{ kstatus }}&mine={{ mine }}">Delivery</a>
++    <a class="btn sm {{ 'primary' if view == 'all' else '' }}" href="/kitchen?view=all&kstatus={{ kstatus }}&station={{ station }}&mine={{ mine }}">All</a>
++    <a class="btn sm {{ 'primary' if view == 'dine_in' else '' }}" href="/kitchen?view=dine_in&kstatus={{ kstatus }}&station={{ station }}&mine={{ mine }}">Dine-in</a>
++    <a class="btn sm {{ 'primary' if view == 'delivery' else '' }}" href="/kitchen?view=delivery&kstatus={{ kstatus }}&station={{ station }}&mine={{ mine }}">Delivery</a>
+   </div>
+ </div>
+ 
++{# Station filter (Kitchen Stations). "All" is the full expo board; each station
++   shows only its own fired lines; "Unassigned" surfaces un-routed lines so they
++   are never lost. The count is what each tab would reveal. #}
++{% if stations or has_unassigned %}
++<div class="catbar station-bar" style="margin:0 0 12px">
++  <a class="btn sm {{ 'primary' if station == 'all' else '' }}" href="/kitchen?view={{ view }}&kstatus={{ kstatus }}&station=all&mine={{ mine }}">All stations {{ station_tab_counts.all }}</a>
++  {% for s in stations %}
++  <a class="btn sm {{ 'primary' if station == s.id|string else '' }}" href="/kitchen?view={{ view }}&kstatus={{ kstatus }}&station={{ s.id }}&mine={{ mine }}" style="--sc: {{ s.swatch }}">
++    <i class="st-tab-dot" style="background: {{ s.swatch }}"></i>{{ s.icon }} {{ s.name }} {{ station_tab_counts[s.id] }}
++  </a>
++  {% endfor %}
++  {% if has_unassigned %}
++  <a class="btn sm {{ 'primary' if station == 'unassigned' else '' }}" href="/kitchen?view={{ view }}&kstatus={{ kstatus }}&station=unassigned&mine={{ mine }}" title="Fired lines with no station routed">⚠ Unassigned {{ station_tab_counts.unassigned }}</a>
++  {% endif %}
++</div>
++{% endif %}
++
+ {# Status filter — the channel view is kept, so All/Dine-in/Delivery and the
+    status choice combine. Server-side, not JS, so it survives the 15s reload. #}
+ <div class="catbar" style="margin:0 0 18px">
+   {# Not a filter but the absence of one, so it never shows as "selected" — only
+      Preparing / Ready light up when actually chosen. #}
+   <a class="btn sm"
+-     href="/kitchen?view={{ view }}&kstatus=all&mine={{ mine }}">All statuses</a>
++     href="/kitchen?view={{ view }}&kstatus=all&station={{ station }}&mine={{ mine }}">All statuses</a>
+   <a class="btn sm {{ 'primary' if kstatus == 'preparing' else '' }}"
+-     href="/kitchen?view={{ view }}&kstatus=preparing&mine={{ mine }}">Preparing {{ status_counts.preparing }}</a>
++     href="/kitchen?view={{ view }}&kstatus=preparing&station={{ station }}&mine={{ mine }}">Preparing {{ status_counts.preparing }}</a>
+   <a class="btn sm {{ 'primary' if kstatus == 'ready' else '' }}"
+-     href="/kitchen?view={{ view }}&kstatus=ready&mine={{ mine }}">Ready {{ status_counts.ready }}</a>
++     href="/kitchen?view={{ view }}&kstatus=ready&station={{ station }}&mine={{ mine }}">Ready {{ status_counts.ready }}</a>
+   {# Waiter's "only my tables" toggle — narrows the board to the orders this
+      person is covering. Sits with the status filters and combines with them. #}
+   <a class="btn sm {{ 'primary' if mine else '' }}"
+-     href="/kitchen?view={{ view }}&kstatus={{ kstatus }}&mine={{ 0 if mine else 1 }}"
++     href="/kitchen?view={{ view }}&kstatus={{ kstatus }}&station={{ station }}&mine={{ 0 if mine else 1 }}"
+      title="Show only tables you're serving">My tables</a>
+ </div>
+ 
+ {% if not tickets %}
+   <div class="card"><p class="empty">
+-    {% if kstatus != 'all' or view != 'all' or mine %}
+-      Nothing matches this filter — <a href="/kitchen?view=all&kstatus=all&mine=0">show everything</a>.
++    {% if kstatus != 'all' or view != 'all' or station != 'all' or mine %}
++      Nothing matches this filter — <a href="/kitchen?view=all&kstatus=all&station=all&mine=0">show everything</a>.
+     {% else %}
+       Nothing in the kitchen right now.
+     {% endif %}
+@@ -76,6 +93,9 @@
+         {% for i in c.lines %}
+         <li class="k-line{% if i.is_new %} k-new{% endif %}{% if i.kitchen_status == 'ready' %} k-done{% endif %}">
+           <div class="k-line-body">
++            {# Station chip (snapshot at fire) — helps the expo see where each
++               line came from on the All board. Unassigned lines are flagged. #}
++            {% if station == 'all' %}{% if i.station %}<span class="k-st-chip" style="--sc: {{ i.station.swatch }}">{{ i.station.icon }} {{ i.station.name }}</span> {% else %}<span class="k-st-chip k-st-none">⚠ Unassigned</span> {% endif %}{% endif %}
+             {% if i.is_new %}<span class="k-new-tag">NEW</span> {% endif %}{{ i.quantity }}× {{ i.menu_item.name }}
+             {% for o in i.options %}<br><span class="sub">+ {{ o.label }}</span>{% endfor %}
+             {% for m in i.modifiers %}<br><span class="sub">+ {{ m.modifier.name }}</span>{% endfor %}

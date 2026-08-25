@@ -80,6 +80,16 @@ def all_settings(db: Session) -> dict[str, str]:
     return _all(db)
 
 
+# Transplanted verbatim from `5ff90b3` (Floor-map line, otherwise excluded from
+# this release) because Kitchen Stations B2 depends on it: the activation gate
+# B2_2_ACTIVE AND kitchen_b2_active AND fired_items_without_tasks == 0 reads the
+# flag through here. Only the helper is taken — the feature defaults that commit
+# also added (show_table_admin, show_zone_waiter) are Floor UI and stay out.
+def flag(db: Session, key: str) -> bool:
+    """A boolean feature setting — '1'/'true'/'yes'/'on' = enabled (default off)."""
+    return _all(db).get(key, "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _rate(raw: str) -> float:
     try:
         return max(0.0, float(raw))

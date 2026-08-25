@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
@@ -26,11 +28,15 @@ from app.models.oltp import (
     MenuCategory,
     MenuItem,
     Modifier,
+    ModifierOption,
     Order,
     OrderItem,
     OrderItemModifier,
     OrderItemOption,
     OrderStatus,
+    PreparationTask,
+    PreparationTaskModifier,
+    PreparationTaskStatus,
     Payment,
     build_allergens,
     order_status_label,
@@ -40,10 +46,12 @@ from app.models.oltp import (
     SeatStatus,
     SharedItemShare,
     Staff,
+    Station,
     TableStatus,
     Zone,
 )
 from app.services import daymenu, happyhour
+from app.services import settings as settings_svc
 from app.services import upsell
 from app.services.payments import balance_panel, ensure_seats, set_shared_item_shares
 
@@ -58,6 +66,32 @@ def _next_code(db: Session) -> str:
 # --------------------------------------------------------------------------
 # 4.1.1  Floor plan
 # --------------------------------------------------------------------------
+
+
+def _order_station_status(order: "Order") -> list[dict]:
+    """Compact per-station readiness for a table card (Kitchen Stations, Stage A).
+
+    Groups the order's fired lines by their station snapshot; each station is
+    ready only when all of its lines are. Returns the small breakdown the floor
+    card shows (Pizza ✓ · Grill ⏳ · Bar ✓) — display only, it never changes the
+    card's aggregate status.
+    """
+    groups: dict = {}
+    for i in order.items:
+        if i.kitchen_status in (KitchenStatus.PREPARING, KitchenStatus.READY):
+            groups.setdefault(i.station_id, []).append(i)
+    out = []
+    for _sid, items in groups.items():
+        st = items[0].station
+        out.append({
+            "station": st,
+            "name": st.name if st else "Unassigned",
+            "ready": all(it.kitchen_status == KitchenStatus.READY for it in items),
+            "count": sum(it.quantity for it in items),
+        })
+    out.sort(key=lambda g: (g["station"].display_order if g["station"] else 999, g["name"]))
+    return out
+
 
 @router.get("/")
 def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db), staff: Staff = Depends(current_staff)):
@@ -78,8 +112,9 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
         )
         # Card total is sum(item.line_total_cents) — a computed property, so the
         # items (and their modifiers) must be loaded; batch them across all
-        # orders instead of one graph load per occupied table.
-        .options(selectinload(Order.items))
+        # orders instead of one graph load per occupied table. Station is
+        # selectinloaded too (the per-station strip reads it, no N+1).
+        .options(selectinload(Order.items).selectinload(OrderItem.station))
     ).scalars().all()
     by_table = {o.table_id: o for o in open_orders}
 
@@ -120,6 +155,9 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
                     int((datetime.now() - order.opened_at).total_seconds() // 60)
                     if order else 0
                 ),
+                # Per-station readiness of what's fired (Pizza ✓ · Grill ⏳ …),
+                # shown as a compact strip on the card. Empty when nothing's fired.
+                "stations": _order_station_status(order) if order else [],
             }
         )
 
@@ -1391,6 +1429,206 @@ def _recompute_kitchen(order: Order, now: datetime) -> None:
         order.kitchen_status = KitchenStatus.PENDING
 
 
+def _create_tasks_for_item(db: Session, item: OrderItem, now: datetime) -> None:
+    """Kitchen Stations B1 — create the PreparationTask set for a line being
+    fired, snapshotting routing at this instant.
+
+    One task per distinct target station: the item's own station (the base task,
+    always present, may be NULL = Unassigned) plus any station its modifiers /
+    options explicitly route to. Modifiers with no station (or the item's station)
+    fold into the base task. The item is NOT duplicated — the sale line stays one
+    `OrderItem`.
+
+    Idempotent: if the line already has tasks it returns immediately, so a
+    repeated/retried fire never double-creates. (No UNIQUE(order_item, station)
+    constraint — a future re-fire/remake may legitimately add same-station tasks;
+    idempotency here is the pending→preparing transition + this guard, serialized
+    by the order row lock the fire routes take.)
+    """
+    if item.tasks:
+        return
+    base_station = item.menu_item.station_id
+    label = item.menu_item.name
+    groups: dict[int | None, list[tuple[str, int, str]]] = {}
+    groups.setdefault(base_station, []).append(("base", item.id, label))
+    for m in item.modifiers:
+        st = m.modifier.station_id if m.modifier else None
+        target = st if (st is not None and st != base_station) else base_station
+        groups.setdefault(target, []).append(
+            ("modifier", m.id, m.modifier.name if m.modifier else "")
+        )
+    for o in item.options:
+        mo = db.get(ModifierOption, o.option_id) if o.option_id else None
+        st = mo.station_id if mo else None
+        target = st if (st is not None and st != base_station) else base_station
+        groups.setdefault(target, []).append(("option", o.id, o.label))
+
+    # The fire-batch number for this line. B1 fires a line exactly once, so this
+    # is 1; a future re-fire/remake would compute the next batch (the DB unique
+    # index on (order_item_id, fire_seq, COALESCE(station_id,-1)) allows a later
+    # batch to reuse a station, and rejects a duplicate WITHIN this batch).
+    fire_seq = 1 + max((t.fire_seq for t in item.tasks), default=0)
+    for station_id, entries in groups.items():
+        task = PreparationTask(
+            order_item_id=item.id, order_id=item.order_id, station_id=station_id,
+            course=item.course, kitchen_status=PreparationTaskStatus.PREPARING,
+            quantity=item.quantity, item_label=label,
+            is_base=(station_id == base_station), fire_seq=fire_seq, fired_at=now,
+        )
+        for kind, sid, lbl in entries:
+            if kind == "base":
+                continue                    # the item itself is already item_label
+            task.details.append(PreparationTaskModifier(
+                source_kind=kind, source_id=sid, label=lbl, station_id=station_id,
+            ))
+        db.add(task)
+        item.tasks.append(task)
+
+
+def rollup_item_kitchen_status(item: OrderItem) -> str:
+    """Derive OrderItem.kitchen_status from its PreparationTasks (Stage B1).
+
+    Rule: ready only when every non-served task is ready; otherwise preparing.
+    NEVER sets served — served is owned by the existing serving flow. A line with
+    no tasks (legacy / not fired) is left untouched, so old behavior is preserved.
+    In B1 this drives only the fire→preparing transition; B2 makes it the live
+    authority once the KDS marks individual tasks.
+    """
+    tasks = item.tasks
+    if not tasks or item.kitchen_status == KitchenStatus.SERVED:
+        return item.kitchen_status
+    active = [t for t in tasks if t.kitchen_status != PreparationTaskStatus.SERVED]
+    if active and all(t.kitchen_status == PreparationTaskStatus.READY for t in active):
+        item.kitchen_status = KitchenStatus.READY
+    elif active:
+        item.kitchen_status = KitchenStatus.PREPARING
+    return item.kitchen_status
+
+
+def _fire_conflict_is_idempotent(db: Session, item_ids: list[int]) -> bool:
+    """Decide whether an IntegrityError raised while committing a fire is the
+    EXPECTED concurrent-duplicate case (safe to treat as an idempotent no-op) or
+    an unrelated failure (must be surfaced). Call AFTER rollback.
+
+    It is only idempotent if the database now shows the state a competing fire
+    would have produced: every line we tried to fire is no longer PENDING AND
+    already has ≥1 PreparationTask. Any other situation (a line still pending, a
+    line with no tasks, missing rows) means the conflict was NOT the expected
+    duplicate fire, so the caller must re-raise."""
+    if not item_ids:
+        return False
+    rows = db.execute(
+        select(OrderItem).where(OrderItem.id.in_(item_ids))
+    ).scalars().all()
+    if len(rows) != len(set(item_ids)):
+        return False
+    for it in rows:
+        if it.kitchen_status == KitchenStatus.PENDING:
+            return False
+        has_tasks = db.execute(
+            select(func.count()).select_from(PreparationTask)
+            .where(PreparationTask.order_item_id == it.id)
+        ).scalar_one()
+        if not has_tasks:
+            return False
+    return True
+
+
+def fired_items_without_tasks(db: Session) -> int:
+    """B2 readiness invariant (Kitchen Stations): how many fired OrderItems
+    (preparing/ready) still have NO PreparationTask. The KDS must NOT be switched
+    to task-based reads (B2) unless this is 0 for the population expected to have
+    tasks — otherwise task-based reads would silently hide that kitchen work.
+    Informational in B1; the B2 slice will gate on it."""
+    return db.execute(
+        select(func.count()).select_from(OrderItem).where(
+            OrderItem.kitchen_status.in_((KitchenStatus.PREPARING, KitchenStatus.READY)),
+            ~OrderItem.tasks.any(),
+        )
+    ).scalar_one()
+
+
+# --------------------------------------------------------------------------
+# Kitchen Stations B2.1 — task-based KDS reads (DORMANT until activated)
+# --------------------------------------------------------------------------
+
+# PreparationTask statuses that put station work on the board (mirrors the
+# OrderItem KITCHEN_STATES). SERVED tasks are off the line.
+TASK_ACTIVE = (PreparationTaskStatus.PREPARING, PreparationTaskStatus.READY)
+
+# Code-level activation guard. Task-based KDS is only safe once the B2.2 slice
+# (per-task READY + the legacy-write compatibility bridge + rollup) exists — the
+# hard gate that made B2.1 non-activatable. B2.2 IS that slice, so it is now True:
+# the per-task READY route and the legacy-write bridge below give task mode a
+# correct write path. Activation still ALSO requires the manual `kitchen_b2_active`
+# setting AND the readiness invariant (fired_items_without_tasks == 0); this guard
+# is the code-level precondition, not the whole gate.
+B2_2_ACTIVE = True
+
+
+def task_kds_active(db: Session) -> bool:
+    """B2.1 activation gate (design v3 §2) — DORMANT, and NOT activatable in B2.1.
+
+    Returns True (task-based KDS reads) ONLY when ALL hold:
+      * `B2_2_ACTIVE` — the code-level B2.2 guard is on (False throughout B2.1, so
+        this alone keeps the board on Stage A regardless of any setting);
+      * the manual `kitchen_b2_active` setting is truthy (missing / false /
+        non-boolean → False; B2.1 ships no UI path to set it); AND
+      * every fired item already has PreparationTasks
+        (`fired_items_without_tasks(db) == 0`).
+    Any of these False → Stage A (never a hybrid). During B2.1 the first condition
+    is always False, so manually flipping the setting cannot activate task mode."""
+    if not B2_2_ACTIVE:
+        return False
+    if not settings_svc.flag(db, "kitchen_b2_active"):
+        return False
+    return fired_items_without_tasks(db) == 0
+
+
+def _task_in_station(task, station_filter) -> bool:
+    """The single, unambiguous station rule (design v3 §3.1): None = every station;
+    "unassigned" = NULL station ONLY; an int = that station ONLY. An Unassigned
+    task never matches a selected station, and a selected station never shows
+    Unassigned."""
+    if station_filter is None:
+        return True
+    if station_filter == "unassigned":
+        return task.station_id is None
+    return task.station_id == station_filter
+
+
+def _task_ticket_courses(order: Order, station_filter=None) -> list[dict]:
+    """An order's items grouped by course for the TASK-mode KDS (design v3 §3.7).
+
+    Each sale OrderItem renders once; its active PreparationTasks matching the
+    station filter become station sub-rows (attached as `item.display_tasks`).
+    The course/line status shown is the rolled-up `OrderItem.kitchen_status`
+    (decision #3), not a per-task status. Only fired items (those with active
+    tasks) appear; held courses have no tasks. Read-only — no mutation here."""
+    first_fire = order.sent_to_kitchen_at
+    groups: dict[int, list] = {}
+    for i in order.items:
+        tks = [t for t in i.tasks
+               if t.kitchen_status in TASK_ACTIVE and _task_in_station(t, station_filter)]
+        if not tks:
+            continue
+        i.is_new = bool(first_fire and i.created_at and i.created_at > first_fire)
+        i.display_tasks = sorted(
+            tks, key=lambda t: (t.station.display_order if t.station else 999, t.id)
+        )
+        groups.setdefault(i.course, []).append(i)
+    out = []
+    for course in sorted(groups):
+        items = groups[course]
+        statuses = {it.kitchen_status for it in items}
+        status = KitchenStatus.READY if statuses == {KitchenStatus.READY} else KitchenStatus.PREPARING
+        out.append({
+            "course": course, "label": course_label(course),
+            "lines": items, "status": status, "multi": len(groups) > 1,
+        })
+    return out
+
+
 @router.post("/orders/{order_id}/send")
 def send_to_kitchen(
     order_id: int,
@@ -1406,21 +1644,42 @@ def send_to_kitchen(
     order = db.get(Order, order_id)
     if order is None:
         raise HTTPException(404, "Order not found")
+    # Serialize concurrent fires of the same order (Postgres row lock; no-op on
+    # SQLite, which already serializes writers) so two in-flight fires can't both
+    # create the same line's tasks. The idempotency guard is the pending→preparing
+    # transition: the loser re-reads no pending items and creates nothing.
+    db.execute(select(Order).where(Order.id == order_id).with_for_update())
     pending = [i for i in order.items if i.kitchen_status == KitchenStatus.PENDING]
     if course:
         pending = [i for i in pending if i.course == course]
     if not pending:
         raise HTTPException(400, "Nothing new to fire to the kitchen.")
+    pending_ids = [i.id for i in pending]
 
     now = datetime.now()
     # Lock happy-hour pricing at the fire: anything whose grace has passed un-fired
     # goes back to full price before it's committed to the kitchen.
     happyhour.revert_expired(db, order, now)
     for item in pending:
-        item.kitchen_status = KitchenStatus.PREPARING
+        # Snapshot the routing at fire time (Kitchen Stations): the KDS/Expo read
+        # this, not the live MenuItem, so re-routing later never moves work that's
+        # already on the line. NULL menu_item.station_id → Unassigned bucket.
+        item.station_id = item.menu_item.station_id
+        # Stage B1: create the preparation tasks (base + modifier stations) and
+        # derive the line status from them (all tasks preparing → preparing).
+        _create_tasks_for_item(db, item, now)
+        rollup_item_kitchen_status(item)
     order.sent_to_kitchen_at = order.sent_to_kitchen_at or now
     _recompute_kitchen(order, now)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Only an EXPECTED concurrent-duplicate fire is treated as idempotent —
+        # verified against the DB state, not the error text. An unrelated
+        # integrity failure is re-raised, not hidden as a successful fire.
+        db.rollback()
+        if not _fire_conflict_is_idempotent(db, pending_ids):
+            raise
     return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
@@ -1446,13 +1705,24 @@ def fire_item(
     if item.kitchen_status != KitchenStatus.PENDING:
         raise HTTPException(400, "That item has already been fired.")
 
+    db.execute(select(Order).where(Order.id == order_id).with_for_update())  # serialize fires
     now = datetime.now()
     happyhour.revert_expired(db, order, now)   # lock at full price if grace passed
     seat = item.seat.seat_number if item.seat else 0
-    item.kitchen_status = KitchenStatus.PREPARING
+    item.station_id = item.menu_item.station_id     # snapshot routing at fire time
+    _create_tasks_for_item(db, item, now)           # Stage B1 tasks
+    rollup_item_kitchen_status(item)                # tasks preparing → line preparing
     order.sent_to_kitchen_at = order.sent_to_kitchen_at or now
     _recompute_kitchen(order, now)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        # Idempotent only if a competing fire actually produced the expected
+        # state for this line; otherwise surface the (unrelated) error.
+        if not _fire_conflict_is_idempotent(db, [item_id]):
+            raise
+        return RedirectResponse(f"/orders/{order_id}?seat={seat}", status_code=303)
     # Stay on the seat you were working — don't collapse it.
     return RedirectResponse(f"/orders/{order_id}?seat={seat}", status_code=303)
 
@@ -1461,11 +1731,17 @@ def fire_item(
 # 4.1.3  Kitchen display
 # --------------------------------------------------------------------------
 
+# Cap how many tickets the board renders (oldest-fired first). Keeps the page
+# responsive under an unusually large open-order set; the rest are counted.
+KITCHEN_LIMIT = 80
+
+
 @router.get("/kitchen")
 def kitchen_display(
     request: Request,
     view: str = "all",
     kstatus: str = "all",
+    station: str = "all",
     mine: int | None = None,
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("kitchen.view")),
@@ -1480,9 +1756,33 @@ def kitchen_display(
     if kstatus != "all" and kstatus not in KITCHEN_STATES:
         kstatus = "all"
 
+    # Station filter (Kitchen Stations, Stage A): "all" = the full board;
+    # "unassigned" = fired lines with no routing; else a station id. Reads the
+    # snapshot on the order line, never the live MenuItem.
+    if station == "unassigned":
+        station_filter: str | int | None = "unassigned"
+    elif station not in ("all", ""):
+        try:
+            station_filter = int(station)
+        except ValueError:
+            station_filter, station = None, "all"
+    else:
+        station_filter = None
+
     # "My tables" defaults on for anyone actually serving tables; unset in the URL
     # (first visit) means "decide by coverage", an explicit 0/1 (the toggle) wins.
     mine = (1 if _covers_tables(db, staff) else 0) if mine is None else (1 if mine else 0)
+
+    # Kitchen Stations B2.1 — task-based reads are DORMANT and NOT activatable until
+    # B2.2. The code-level B2_2_ACTIVE guard gates everything: while it is False
+    # (all of B2.1), task mode can never switch on even if `kitchen_b2_active` is set
+    # manually, and the blocked notice does not apply (there is no activation to
+    # block). Single authority: TASK mode ONLY when B2.2 is present AND the flag is
+    # on AND every fired item has tasks; otherwise the COMPLETE Stage A board.
+    b2_flag = B2_2_ACTIVE and settings_svc.flag(db, "kitchen_b2_active")
+    b2_missing = fired_items_without_tasks(db) if b2_flag else 0
+    task_mode = b2_flag and b2_missing == 0
+    b2_blocked = b2_flag and b2_missing > 0
 
     # Self-heal: an order left SERVED while it still has food on the line
     # (preparing/ready items) is inconsistent — re-derive so its cooking items
@@ -1502,39 +1802,127 @@ def kitchen_display(
             _recompute_kitchen(o, datetime.now())
         db.commit()
 
-    q = select(Order).where(
+    _on_board = [
         Order.kitchen_status.in_(KITCHEN_STATES),
         # Served orders have been delivered — off the kitchen's plate.
         Order.status.not_in(
             (OrderStatus.SERVED, OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED)
         ),
-    )
-    orders = db.execute(q).scalars().all()
+    ]
 
-    # Counts reflect the channel view but not the status filter, so each status
-    # button can show how many it would reveal — the number must not drop to
-    # zero just because a different status is currently selected.
+    def _view_mine(stmt):
+        """Apply the channel view + 'my tables' in SQL, so they narrow the set
+        BEFORE the LIMIT — a valid order must never be pushed past the cap and
+        silently vanish (e.g. an Unassigned order at position 81)."""
+        if view in ("dine_in", "delivery"):
+            stmt = stmt.join(Channel, Channel.id == Order.channel_id).where(
+                Channel.channel_type == "delivery" if view == "delivery"
+                else Channel.channel_type != "delivery"
+            )
+        if mine:
+            stmt = stmt.where(Order.waiter_id == staff.id)
+        return stmt
+
+    # Status tallies over the board (view/mine applied, but NOT the status or
+    # station filter) so each status button shows what it would reveal.
+    status_counts = {KitchenStatus.PREPARING: 0, KitchenStatus.READY: 0}
+    for st, n in db.execute(
+        _view_mine(select(Order.kitchen_status, func.count()).where(*_on_board))
+        .group_by(Order.kitchen_status)
+    ):
+        status_counts[st] = n
+
+    # Fired lines per station (+ explicit "unassigned"), over the same board —
+    # the station tab badges. Aggregated in SQL, not by scanning a capped page.
+    station_line_counts: dict = {}
+    if task_mode:
+        # Badges count active PreparationTasks (station-work units) over the SAME
+        # order universe/view/mine AND the same kstatus filter as the board
+        # (design v3 §3.3), so a tab's count matches exactly what selecting it
+        # would reveal. Only the station filter is replaced by GROUP BY station.
+        cq = _view_mine(
+            select(PreparationTask.station_id, func.count())
+            .select_from(PreparationTask).join(Order, Order.id == PreparationTask.order_id)
+            .where(*_on_board, PreparationTask.kitchen_status.in_(TASK_ACTIVE))
+        )
+        if kstatus != "all":
+            cq = cq.where(Order.kitchen_status == kstatus)
+        for sid, n in db.execute(cq.group_by(PreparationTask.station_id)):
+            station_line_counts[sid if sid is not None else "unassigned"] = n
+    else:
+        for sid, n in db.execute(
+            _view_mine(
+                select(OrderItem.station_id, func.count())
+                .select_from(OrderItem).join(Order, Order.id == OrderItem.order_id)
+                .where(*_on_board, OrderItem.kitchen_status.in_(KITCHEN_STATES))
+            ).group_by(OrderItem.station_id)
+        ):
+            station_line_counts[sid if sid is not None else "unassigned"] = n
+
+    # The rendered set: view/mine + the status and station filters, ALL in SQL,
+    # oldest-fired first, then capped. board_total counts the SAME filtered set
+    # (no LIMIT) so "showing N of M" is honest.
+    tq = _view_mine(select(Order).where(*_on_board))
+    if kstatus != "all":
+        tq = tq.where(Order.kitchen_status == kstatus)
+    if station_filter is not None:
+        if task_mode:
+            # Task-mode membership from PreparationTask.station_id ONLY (the fire
+            # snapshot), single-rule (design v3 §3.1): selected station = that id;
+            # Unassigned = NULL; the two are mutually exclusive.
+            conds = [
+                PreparationTask.order_id == Order.id,
+                PreparationTask.kitchen_status.in_(TASK_ACTIVE),
+                PreparationTask.station_id.is_(None) if station_filter == "unassigned"
+                else PreparationTask.station_id == station_filter,
+            ]
+            tq = tq.where(select(PreparationTask.id).where(*conds).exists())
+        else:
+            sub = select(OrderItem.id).where(
+                OrderItem.order_id == Order.id,
+                OrderItem.kitchen_status.in_(KITCHEN_STATES),
+                OrderItem.station_id.is_(None) if station_filter == "unassigned"
+                else OrderItem.station_id == station_filter,
+            )
+            tq = tq.where(sub.exists())
+    board_total = db.execute(
+        select(func.count()).select_from(tq.subquery())
+    ).scalar_one()
+    # Task mode also eager-loads each item's tasks + their station (station
+    # sub-rows) so rendering stays one SELECT per level, no N+1.
+    load_opts = [selectinload(Order.items).selectinload(OrderItem.station)]
+    if task_mode:
+        load_opts.append(
+            selectinload(Order.items).selectinload(OrderItem.tasks).selectinload(PreparationTask.station)
+        )
+    orders = db.execute(
+        tq.options(*load_opts)
+        .order_by(Order.sent_to_kitchen_at).limit(KITCHEN_LIMIT)
+    ).scalars().all()
+
     now = datetime.now()
     tickets = []
-    status_counts = {KitchenStatus.PREPARING: 0, KitchenStatus.READY: 0}
     for o in orders:
         is_delivery = o.channel.channel_type == "delivery"
-        if view == "dine_in" and is_delivery:
-            continue
-        if view == "delivery" and not is_delivery:
-            continue
-        # "Only my tables": a waiter narrows the board to the orders they're
-        # covering. Applied with the channel view (before the counts) so the
-        # status tallies match the narrowed set.
-        if mine and o.waiter_id != staff.id:
-            continue
-        status_counts[o.kitchen_status] = status_counts.get(o.kitchen_status, 0) + 1
-        if kstatus != "all" and o.kitchen_status != kstatus:
+        # Items grouped by course, scoped to the chosen station. Task mode groups
+        # by PreparationTask (one sale line, task station sub-rows); Stage A keeps
+        # the line-snapshot grouping.
+        courses = (_task_ticket_courses(o, station_filter) if task_mode
+                   else _ticket_courses(o, station_filter))
+        if station_filter is not None and not courses:
             continue
         sent_at = o.sent_to_kitchen_at or o.opened_at
         elapsed = int((now - sent_at).total_seconds() // 60)
         # Colour-coded urgency (4.1.3).
         urgency = "ok" if elapsed < 10 else ("warn" if elapsed < 20 else "late")
+        # total_items is SALE-item quantity (never a station-work/task count). In
+        # task mode and any station-scoped view it sums the shown OrderItems' qty.
+        if task_mode or station_filter is not None:
+            total_items = sum(i.quantity for c in courses for i in c["lines"])
+        else:
+            total_items = sum(
+                i.quantity for i in o.items if i.kitchen_status != KitchenStatus.SERVED
+            )
         tickets.append({
             "order": o,
             "elapsed": elapsed,
@@ -1546,12 +1934,8 @@ def kitchen_display(
             "server": o.waiter.name if o.waiter else None,
             # Field 5: the line count the expo checks the plated tray against —
             # only what's still on the line (served items have left the kitchen).
-            "total_items": sum(
-                i.quantity for i in o.items if i.kitchen_status != KitchenStatus.SERVED
-            ),
-            # Items grouped by course, each with an aggregate status so the line
-            # can mark a whole course up at once (4.1.3 coursing).
-            "courses": _ticket_courses(o),
+            "total_items": total_items,
+            "courses": courses,
             "where": (
                 f"Table {o.table.number}" if o.table
                 else f"{o.channel.name}"
@@ -1560,19 +1944,60 @@ def kitchen_display(
         })
     tickets.sort(key=lambda t: (-t["elapsed"],))
 
+    # Station tabs: active stations PLUS any inactive station that still has
+    # fired lines on the board — so a just-deactivated station's live work stays
+    # reachable (its lines keep their snapshot; they don't move to Unassigned).
+    tab_ids = {sid for sid in station_line_counts if isinstance(sid, int)}
+    stations = db.execute(
+        select(Station).where(or_(Station.is_active.is_(True), Station.id.in_(tab_ids)))
+        .order_by(Station.display_order, Station.name)
+    ).scalars().all()
+
+    # Station tab counts: total on the board (All) plus per station / unassigned.
+    station_tab_counts = {
+        "all": sum(station_line_counts.values()),
+        "unassigned": station_line_counts.get("unassigned", 0),
+    }
+    for s in stations:
+        station_tab_counts[s.id] = station_line_counts.get(s.id, 0)
+
     return render(request, "kitchen.html", {
         "db": db, "staff": staff, "tickets": tickets, "view": view,
         "kstatus": kstatus, "mine": 1 if mine else 0, "status_counts": status_counts,
+        "stations": stations, "station": station,
+        "station_tab_counts": station_tab_counts,
+        # Only offer the Unassigned tab when something un-routed is actually on
+        # the board — but never hide those lines: the All board still shows them.
+        "has_unassigned": station_line_counts.get("unassigned", 0) > 0,
+        "board_total": board_total, "limit": KITCHEN_LIMIT,
+        # Kitchen Stations B2.1: task_mode drives task station sub-rows + read-only
+        # rendering; b2_blocked shows the "activation blocked" operator notice while
+        # the board falls back to complete Stage A.
+        "task_mode": task_mode, "b2_blocked": b2_blocked, "b2_missing": b2_missing,
         "title": "Kitchen display",
     })
 
 
-def _ticket_courses(order: Order) -> list[dict]:
+def _line_in_station(item: OrderItem, station_filter) -> bool:
+    """Whether a line belongs to the selected station filter (Kitchen Stations).
+
+    None = every station (the full expo board); "unassigned" = un-routed lines;
+    an int = that station id. Matches the snapshot on the line, not live routing.
+    """
+    if station_filter is None:
+        return True
+    if station_filter == "unassigned":
+        return item.station_id is None
+    return item.station_id == station_filter
+
+
+def _ticket_courses(order: Order, station_filter=None) -> list[dict]:
     """An order's items grouped by course for the kitchen display, in meal order.
 
     Only fired items (preparing/ready) reach the kitchen, so a held course
     simply doesn't appear until the waiter fires it. Each group's status is the
     least-advanced item in it — a course is 'ready' only when all its items are.
+    A station_filter scopes the lines to one station (or the Unassigned bucket).
     """
     # A line added after the order was first fired is a later addition — flag it
     # so the line can tell a new item apart from what it already made/plated
@@ -1581,6 +2006,8 @@ def _ticket_courses(order: Order) -> list[dict]:
     groups: dict[int, list] = {}
     for i in order.items:
         if i.kitchen_status in (KitchenStatus.PREPARING, KitchenStatus.READY):
+            if not _line_in_station(i, station_filter):
+                continue
             i.is_new = bool(first_fire and i.created_at and i.created_at > first_fire)
             groups.setdefault(i.course, []).append(i)
     out = []
@@ -1598,46 +2025,269 @@ def _ticket_courses(order: Order) -> list[dict]:
     return out
 
 
+def _expo_courses(order: Order) -> list[dict]:
+    """An order's fired lines grouped by course, then by station — the Expo's
+    coordination view (Kitchen Stations, Stage A).
+
+    Reads the station snapshot on each line. Per station: ready only when all of
+    its lines are ready. Per course: ready only when every station is — else it
+    is "waiting on" the stations that aren't. Coursing is preserved, so a held
+    later course never blocks an earlier one from reading ready.
+    """
+    by_course: dict[int, dict] = {}
+    for i in order.items:
+        if i.kitchen_status in (KitchenStatus.PREPARING, KitchenStatus.READY):
+            by_course.setdefault(i.course, {}).setdefault(i.station_id, []).append(i)
+    out = []
+    for course in sorted(by_course):
+        st_groups, waiting = [], []
+        all_ready = True
+        for _sid, items in by_course[course].items():
+            ready = all(it.kitchen_status == KitchenStatus.READY for it in items)
+            st = items[0].station                      # snapshot relationship
+            name = st.name if st else "Unassigned"
+            if not ready:
+                all_ready = False
+                waiting.append(name)
+            st_groups.append({"station": st, "name": name, "ready": ready, "lines": items})
+        st_groups.sort(key=lambda g: (g["station"].display_order if g["station"] else 999, g["name"]))
+        waiting.sort()
+        out.append({
+            "course": course, "label": course_label(course),
+            "stations": st_groups, "ready": all_ready, "waiting_on": waiting,
+            "multi": len(by_course) > 1,
+        })
+    return out
+
+
+# The Expo board caps how many orders it renders — with a large open-order set a
+# full render would be unusable. Oldest-fired first (most urgent), rest counted.
+EXPO_LIMIT = 60
+
+
+@router.get("/expo")
+def expo_display(
+    request: Request,
+    view: str = "all",
+    mine: int | None = None,
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("kitchen.view")),
+):
+    """Coordination board: per table/course, which stations are ready and the
+    overall 'waiting on X' → 'ready to serve'. Reuses the per-item kitchen status
+    and the station snapshot; no new state (Kitchen Stations, Stage A)."""
+    mine = (1 if _covers_tables(db, staff) else 0) if mine is None else (1 if mine else 0)
+
+    # Channel view + "my tables" applied in SQL, before the LIMIT, so the cap
+    # never drops a valid order off the end.
+    board = select(Order).where(
+        Order.kitchen_status.in_((KitchenStatus.PREPARING, KitchenStatus.READY)),
+        Order.status.not_in(
+            (OrderStatus.SERVED, OrderStatus.PAID, OrderStatus.CLOSED, OrderStatus.CANCELLED)
+        ),
+    )
+    if view in ("dine_in", "delivery"):
+        board = board.join(Channel, Channel.id == Order.channel_id).where(
+            Channel.channel_type == "delivery" if view == "delivery"
+            else Channel.channel_type != "delivery"
+        )
+    if mine:
+        board = board.where(Order.waiter_id == staff.id)
+
+    total = db.execute(select(func.count()).select_from(board.subquery())).scalar_one()
+    orders = db.execute(
+        board.options(selectinload(Order.items).selectinload(OrderItem.station))
+        .order_by(Order.sent_to_kitchen_at).limit(EXPO_LIMIT)
+    ).scalars().all()
+
+    now = datetime.now()
+    cards = []
+    for o in orders:
+        is_delivery = o.channel.channel_type == "delivery"
+        courses = _expo_courses(o)
+        if not courses:
+            continue
+        sent_at = o.sent_to_kitchen_at or o.opened_at
+        elapsed = int((now - sent_at).total_seconds() // 60)
+        urgency = "ok" if elapsed < 10 else ("warn" if elapsed < 20 else "late")
+        cards.append({
+            "order": o, "courses": courses, "elapsed": elapsed, "urgency": urgency,
+            "is_delivery": is_delivery,
+            "server": o.waiter.name if o.waiter else None,
+            "all_ready": o.kitchen_status == KitchenStatus.READY,
+            "where": (
+                f"Table {o.table.number}" if o.table
+                else f"{o.channel.name}"
+                + (f" · {o.delivery.platform_ref}" if o.delivery and o.delivery.platform_ref else "")
+            ),
+        })
+    cards.sort(key=lambda t: (-t["elapsed"],))
+
+    return render(request, "expo.html", {
+        "db": db, "staff": staff, "cards": cards, "view": view,
+        "mine": 1 if mine else 0, "shown": total, "limit": EXPO_LIMIT,
+        "title": "Expo",
+    })
+
+
+def _safe_next_board(target: str) -> str:
+    """Allowlist the post-action redirect. The only legitimate destinations in
+    Stage A are the kitchen and expo boards, so the PATH must be exactly
+    "/kitchen" or "/expo" (the query string may ride along). Everything else —
+    an external URL, "//host", a backslash, or a look-alike like "/expo-x" —
+    falls back to "/kitchen". Validated with urlsplit, not startswith."""
+    if not target or "\\" in target:
+        return "/kitchen"
+    parts = urlsplit(target)
+    if parts.scheme or parts.netloc or parts.path not in ("/kitchen", "/expo"):
+        return "/kitchen"
+    return urlunsplit(("", "", parts.path, parts.query, ""))
+
+
 @router.post("/kitchen/{order_id}/status")
 def kitchen_status(
     order_id: int,
     status: str = Form(...),
     course: int = Form(0),
     item_id: int = Form(0),
+    next: str = Form(""),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("kitchen.update")),
 ):
     """Advance items to Pending/Preparing/Ready (4.1.3).
 
     item_id marks a single line; else course marks one stage; else (course=0)
-    the whole order. The order/table state is then re-derived — Ready to Pay
-    only once everything is up (see _recompute_kitchen).
+    the whole order. For task-backed items (Kitchen Stations B2.2) the request is
+    translated through their PreparationTasks so the tasks and the OrderItem rollup
+    can never contradict — the item's kitchen_status is never written directly.
+    Two-phase under the parent Order lock: every target is VALIDATED before any
+    mutation, so an unsupported request (PENDING on a task-backed item) rejects the
+    whole request with no partial update. Legacy items with no tasks keep the
+    Stage A direct write.
     """
+    if status not in (KitchenStatus.PENDING, KitchenStatus.PREPARING, KitchenStatus.READY):
+        raise HTTPException(400, "Invalid kitchen status.")
     order = db.get(Order, order_id)
     if order is None:
         raise HTTPException(404, "Order not found")
-    if status not in (KitchenStatus.PENDING, KitchenStatus.PREPARING, KitchenStatus.READY):
-        raise HTTPException(400, "Invalid kitchen status.")
+    # Serialize against concurrent task READYs / kitchen writes on this order, then
+    # work only from post-lock refreshed state (never pre-lock objects).
+    db.execute(select(Order.id).where(Order.id == order_id).with_for_update()).first()
+    db.refresh(order, ["items"])
 
     if item_id:
         targets = [i for i in order.items if i.id == item_id]
     elif course:
         targets = [i for i in order.items if i.course == course]
     else:
-        targets = order.items
-    for item in targets:
-        # Already-served items are delivered — a course-level "Ready" must not
-        # drag them back onto the line.
-        if item.kitchen_status == KitchenStatus.SERVED:
-            continue
-        item.kitchen_status = status
+        targets = list(order.items)
+    for i in targets:
+        db.refresh(i, ["tasks"])            # fresh sibling task state per target
 
     now = datetime.now()
+    # PHASE 1 — validate EVERY task-backed target against the requested transition
+    # BEFORE any mutation, so an invalid target rejects the whole request with no
+    # partial commit (design v3 §5.1).
+    for item in targets:
+        if item.kitchen_status == KitchenStatus.SERVED:
+            continue                        # delivered; a course-level action skips it
+        if not item.tasks:
+            continue                        # legacy no-task item — Stage A direct write
+        if status == KitchenStatus.PENDING:
+            # Un-firing tasked work needs the deferred re-fire model.
+            db.rollback()
+            raise HTTPException(409, "A fired kitchen item cannot be set back to pending.")
+        # READY / PREPARING act on the item's ACTIVE (non-served) tasks, which must
+        # EACH be in a state the per-task READY route supports (PREPARING or READY).
+        # No active task (e.g. all SERVED), or any non-served task in an unsupported
+        # state (e.g. an unexpected PENDING), means there is no valid transition —
+        # reject the whole request rather than silently ignoring it in Phase 2.
+        non_served = [t for t in item.tasks if t.kitchen_status != PreparationTaskStatus.SERVED]
+        if not non_served or any(t.kitchen_status not in TASK_ACTIVE for t in non_served):
+            db.rollback()
+            raise HTTPException(409, "This kitchen item has no valid task transition.")
+
+    # PHASE 2 — apply. Task-backed items route through their tasks + rollup; legacy
+    # (no-task) items keep the Stage A direct write.
+    for item in targets:
+        if item.kitchen_status == KitchenStatus.SERVED:
+            continue
+        if item.tasks:
+            active = [t for t in item.tasks if t.kitchen_status != PreparationTaskStatus.SERVED]
+            if status == KitchenStatus.READY:
+                for t in active:
+                    if t.kitchen_status == PreparationTaskStatus.PREPARING:
+                        t.kitchen_status = PreparationTaskStatus.READY
+                        t.ready_at = t.ready_at or now      # preserve an existing ready_at
+                rollup_item_kitchen_status(item)
+            elif status == KitchenStatus.PREPARING:
+                # Coarse "un-ready this item" (design v3 §5.3) — DESTRUCTIVE: clears
+                # READY at EVERY station of the item.
+                for t in active:
+                    t.kitchen_status = PreparationTaskStatus.PREPARING
+                    t.ready_at = None
+                rollup_item_kitchen_status(item)
+        else:
+            item.kitchen_status = status
+
     if status == KitchenStatus.PREPARING:
         order.sent_to_kitchen_at = order.sent_to_kitchen_at or now
     _recompute_kitchen(order, now)
     db.commit()
-    return RedirectResponse("/kitchen", status_code=303)
+    # Return to the board the action came from — allowlisted to /kitchen or /expo.
+    return RedirectResponse(_safe_next_board(next), status_code=303)
+
+
+@router.post("/kitchen/tasks/{task_id}/ready")
+def task_ready(
+    task_id: int,
+    next: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("kitchen.update")),
+):
+    """Kitchen Stations B2.2 — mark one PreparationTask READY, then roll its
+    OrderItem up.
+
+    PreparationTask is the prep-state authority for task-backed items;
+    `OrderItem.kitchen_status` is a rollup result (never written directly here) and
+    becomes READY only when every non-served task is READY. Tasks never own SERVED,
+    so this never serves the item and the payment gate is unchanged.
+
+    Concurrency: the parent Order is locked FOR UPDATE, then the task and its sibling
+    tasks are RE-SELECTED from committed state — the transition and rollup use only
+    that refreshed state, never the pre-lock object. `PREPARING → READY` sets
+    `ready_at`; `READY → READY` is an idempotent no-op that preserves the original
+    `ready_at`; a SERVED (or otherwise unexpected) task is rejected.
+    """
+    task = db.get(PreparationTask, task_id)
+    if task is None:
+        raise HTTPException(404, "Preparation task not found")
+    order_id = task.order_id
+    # Lock the parent order, then discard the pre-lock view and reselect fresh.
+    if db.execute(select(Order.id).where(Order.id == order_id).with_for_update()).first() is None:
+        raise HTTPException(404, "Order not found")
+    task = db.execute(
+        select(PreparationTask).where(PreparationTask.id == task_id)
+        .execution_options(populate_existing=True)
+    ).scalars().first()
+    if task is None:
+        raise HTTPException(409, "Preparation task no longer exists.")
+    item = task.order_item
+    db.refresh(item, ["tasks"])             # fresh sibling set for the rollup
+
+    now = datetime.now()
+    if task.kitchen_status == PreparationTaskStatus.READY:
+        pass                                # idempotent — keep the original ready_at
+    elif task.kitchen_status == PreparationTaskStatus.PREPARING:
+        task.kitchen_status = PreparationTaskStatus.READY
+        task.ready_at = task.ready_at or now
+    else:                                   # SERVED or anything unexpected
+        raise HTTPException(409, "This task cannot be marked ready from its current state.")
+
+    rollup_item_kitchen_status(item)        # item READY only when ALL non-served tasks READY
+    _recompute_kitchen(item.order, now)
+    db.commit()
+    return RedirectResponse(_safe_next_board(next), status_code=303)
 
 
 # --------------------------------------------------------------------------

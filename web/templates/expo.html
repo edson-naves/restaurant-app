@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block wrap_extra %}wrap-wide{% endblock %}
+{% block body %}
+<div class="between">
+  <div>
+    <h1>Expo</h1>
+    <p class="sub">
+      {{ cards|length }} order{{ '' if cards|length == 1 else 's' }}{% if shown > limit %} shown of {{ shown }} active (most urgent first){% endif %} · auto-refreshes every 15s
+    </p>
+  </div>
+  <div class="catbar" style="margin:0">
+    <a class="btn sm {{ 'primary' if view == 'all' else '' }}" href="/expo?view=all&mine={{ mine }}">All</a>
+    <a class="btn sm {{ 'primary' if view == 'dine_in' else '' }}" href="/expo?view=dine_in&mine={{ mine }}">Dine-in</a>
+    <a class="btn sm {{ 'primary' if view == 'delivery' else '' }}" href="/expo?view=delivery&mine={{ mine }}">Delivery</a>
+    <a class="btn sm {{ 'primary' if mine else '' }}" href="/expo?view={{ view }}&mine={{ 0 if mine else 1 }}" title="Only tables you're serving">My tables</a>
+  </div>
+</div>
+
+{% if not cards %}
+  <div class="card"><p class="empty">
+    {% if view != 'all' or mine %}Nothing matches this filter — <a href="/expo?view=all&mine=0">show everything</a>.
+    {% else %}Nothing to coordinate right now.{% endif %}
+  </p></div>
+{% else %}
+<div class="tickets">
+  {% for t in cards %}
+  <div class="ticket {{ t.urgency }}{{ ' expo-ready' if t.all_ready }}">
+    <div class="between">
+      {% if can('orders.manage') %}
+      <a class="k-order-link" href="/orders/{{ t.order.id }}"><strong>{{ t.where }}</strong> <span class="k-open">↗</span></a>
+      {% else %}<strong>{{ t.where }}</strong>{% endif %}
+      <span class="elapsed">{{ t.elapsed|duration }}</span>
+    </div>
+    <div class="chit-meta">
+      <span>{{ t.order.code }}{% if t.is_delivery %} · <span class="pill open">delivery</span>{% endif %}</span>
+      <span>Server: {{ t.server or '—' }}</span>
+    </div>
+
+    {% for c in t.courses %}
+    <div class="course-block">
+      {% if c.multi %}<div class="course-head"><span>{{ c.label }}</span></div>{% endif %}
+      <ul class="expo-stations">
+        {% for s in c.stations %}
+        <li class="expo-st {{ 'ready' if s.ready else 'wait' }}">
+          <span class="expo-st-head">
+            <span class="expo-st-name">
+              <i class="st-tab-dot" style="background: {{ s.station.swatch if s.station else 'var(--warn)' }}"></i>{{ s.station.icon if s.station else '⚠' }} {{ s.name }}
+            </span>
+            <span class="expo-st-status" title="{{ 'ready' if s.ready else 'still preparing' }}">{{ '✓' if s.ready else '⏳' }}</span>
+          </span>
+          <span class="expo-st-lines">{% for i in s.lines %}{{ i.quantity }}× {{ i.menu_item.name }}{% if not loop.last %} · {% endif %}{% endfor %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% if c.ready %}
+      <div class="expo-overall ok">✓ Ready to serve</div>
+      {% else %}
+      <div class="expo-overall wait">Waiting on {{ c.waiting_on | join(', ') }}</div>
+      {% if can('kitchen.update') %}
+      <form method="post" action="/kitchen/{{ t.order.id }}/status" style="margin-top:6px">
+        <input type="hidden" name="status" value="ready">
+        <input type="hidden" name="course" value="{{ c.course }}">
+        <input type="hidden" name="next" value="/expo?view={{ view }}&mine={{ mine }}">
+        <button class="btn sm" style="width:100%" title="Override: mark every line in this course ready">Mark course ready</button>
+      </form>
+      {% endif %}
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Same polling model as the kitchen board — recover on the next tick.
+  setTimeout(() => location.reload(), 15000);
+</script>
+{% endblock %}

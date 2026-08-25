@@ -58,7 +58,7 @@
       <thead>
         <tr>
           <th>Photo</th><th>Item</th><th>Description</th><th class="num">Price</th>
-          <th>Category</th><th>Shareable</th><th></th>
+          <th>Category</th><th>Station</th><th>Shareable</th><th></th>
         </tr>
       </thead>
       <tbody>
@@ -100,6 +100,17 @@
             </select>
           </td>
           <td>
+            {# Kitchen routing. Defaults to Unassigned — an item is never
+               auto-routed; the manager picks the station here. #}
+            <select form="if{{ i.id }}" name="station_id" style="width:140px">
+              <option value="0" {{ 'selected' if not i.station_id else '' }}>— Unassigned —</option>
+              {% for st in stations %}
+              <option value="{{ st.id }}" {{ 'selected' if st.id == i.station_id else '' }}>{{ st.name }}</option>
+              {% endfor %}
+              {% if i.station and not i.station.is_active %}<option value="{{ i.station.id }}" selected>{{ i.station.name }} (inactive)</option>{% endif %}
+            </select>
+          </td>
+          <td>
             {# No paired hidden field: duplicate keys make Starlette's form
                .get() return the first one, which would pin this to 0 forever.
                An unchecked box simply omits the key and the route defaults. #}
@@ -123,7 +134,7 @@
           </td>
         </tr>
       {% else %}
-        <tr><td colspan="7" class="empty">Nothing in this category yet.</td></tr>
+        <tr><td colspan="8" class="empty">Nothing in this category yet.</td></tr>
       {% endfor %}
       </tbody>
     </table>
@@ -139,6 +150,13 @@
     <div class="field" style="max-width:110px">
       <label>Shareable</label>
       <input type="checkbox" name="is_shareable" value="1" style="width:auto;min-height:0">
+    </div>
+    <div class="field" style="max-width:160px">
+      <label>Station</label>
+      <select name="station_id">
+        <option value="0">— Unassigned —</option>
+        {% for st in stations %}<option value="{{ st.id }}">{{ st.name }}</option>{% endfor %}
+      </select>
     </div>
     <button class="btn primary">Add to {{ c.name }}</button>
   </form>

@@ -12,6 +12,7 @@ service history. Run on every startup; a fully migrated database is a no-op.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -92,6 +93,17 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("order_item", "hh_full_cents", "INTEGER"),
     ("order_item", "hh_hold_until", "TIMESTAMP"),
     ("order_item", "hh_reverted", "BOOLEAN NOT NULL DEFAULT 0"),
+    # Kitchen Stations (Stage A). The `station` table itself is created by
+    # create_all; these two columns route/snapshot items to it. Both NULL by
+    # default = Unassigned, so existing menus and open orders are untouched (no
+    # item is silently auto-routed — the manager assigns stations explicitly).
+    ("menu_item", "station_id", "INTEGER REFERENCES station(id)"),
+    ("order_item", "station_id", "INTEGER REFERENCES station(id)"),
+    # Kitchen Stations (Stage B1) — modifier-level routing config (NULL = prepared
+    # with the item). The preparation_task / preparation_task_modifier tables are
+    # created by create_all. Additive; existing menus/orders untouched.
+    ("modifier", "station_id", "INTEGER REFERENCES station(id)"),
+    ("modifier_option", "station_id", "INTEGER REFERENCES station(id)"),
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW
@@ -133,6 +145,18 @@ def run(engine: Engine) -> list[str]:
             applied.append(f"{table}.{column}")
 
         applied.extend(_backfill_locations(conn))
+    # The fire-batch unique index is a REQUIRED invariant — run it in its own
+    # transaction (after the additive column work has committed) so that if it
+    # halts on pre-existing duplicates, it does not roll back the column adds.
+    with engine.begin() as conn:
+        _ensure_prep_task_index(conn)
+    # The backfill is best-effort but OBSERVABLE: a real failure is reported in the
+    # applied log (not silently converted to no rows), while it never blocks startup.
+    try:
+        with engine.begin() as conn:
+            applied.extend(_backfill_prep_tasks(conn))
+    except Exception as exc:                    # noqa: BLE001 — surface, never block
+        applied.append(f"SKIPPED prep-task backfill: {exc}")
     # SQLite does not enforce VARCHAR length, so no column ever needs widening
     # there — the model's new size applies to fresh databases via create_all.
     return applied
@@ -225,7 +249,271 @@ def _run_postgres(engine: Engine) -> list[str]:
             applied.append(f"widened {table}.{column} -> {ddl}")
         except Exception as exc:               # noqa: BLE001 — never block startup
             applied.append(f"SKIPPED widen {table}.{column}: {exc}")
+    # Required invariant — NOT swallowed (halts if pre-existing duplicates make
+    # the unique index impossible).
+    with engine.begin() as conn:
+        _ensure_prep_task_index(conn)
+    # The backfill itself stays best-effort (a missing legacy task is caught by
+    # the B2 readiness invariant, not a silent unprotected duplicate risk).
+    try:
+        with engine.begin() as conn:
+            applied.extend(_backfill_prep_tasks(conn))
+    except Exception as exc:                    # noqa: BLE001 — never block startup
+        applied.append(f"SKIPPED prep-task backfill: {exc}")
     return applied
+
+
+def _table_exists(conn, name: str) -> bool:
+    if conn.dialect.name == "sqlite":
+        return conn.execute(
+            text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:n"), {"n": name}
+        ).first() is not None
+    return conn.execute(
+        text("SELECT 1 FROM information_schema.tables "
+             "WHERE table_name=:n AND table_schema=current_schema()"), {"n": name}
+    ).first() is not None
+
+
+def _index_exists(conn, name: str, table: str | None = None) -> bool:
+    """Does an index named `name` exist? On Postgres this MUST be scoped to
+    current_schema() (and the given table, when supplied) so an identically-named
+    index in another schema — or on another table — is not mistaken for this one:
+    the same scope `_prep_task_index_ok` uses. Otherwise `_ensure_prep_task_index`
+    could see a foreign-schema index as a same-name/wrong-definition collision and
+    halt startup when nothing is wrong with the current schema."""
+    if conn.dialect.name == "sqlite":
+        sql = "SELECT 1 FROM sqlite_master WHERE type='index' AND name=:n"
+        params = {"n": name}
+        if table is not None:
+            sql += " AND tbl_name=:t"          # SQLite has no schemas; scope by table
+            params["t"] = table
+        return conn.execute(text(sql), params).first() is not None
+    sql = "SELECT 1 FROM pg_indexes WHERE schemaname=current_schema() AND indexname=:n"
+    params = {"n": name}
+    if table is not None:
+        sql += " AND tablename=:t"
+        params["t"] = table
+    return conn.execute(text(sql), params).first() is not None
+
+
+_EXPECTED_INDEX_KEYS = ["order_item_id", "fire_seq", "coalesce(station_id,-1)"]
+
+
+def _sqlite_index_keylist(sql: str) -> list[str] | None:
+    """Paren-aware split of a CREATE INDEX's key list, so COALESCE(station_id,-1)
+    stays one key (its inner comma is not a separator). Returns the ordered key
+    expressions, or None if the statement can't be parsed."""
+    m = re.search(r"\bon\b\s+\S+\s*\(", sql, re.IGNORECASE)
+    if not m:
+        return None
+    depth = 0
+    parts: list[str] = []
+    cur: list[str] = []
+    for ch in sql[m.end() - 1:]:
+        if ch == "(":
+            depth += 1
+            if depth == 1:
+                continue                     # skip the outer '('
+            cur.append(ch)
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                parts.append("".join(cur).strip())
+                return [p for p in parts if p]
+            cur.append(ch)
+        elif ch == "," and depth == 1:
+            parts.append("".join(cur).strip())
+            cur = []
+        else:
+            cur.append(ch)
+    return None                              # unbalanced parens
+
+
+def _strip_wrapping_parens(s: str) -> str:
+    """Drop paren pair(s) that enclose the WHOLE expression, so
+    '(coalesce(station_id,-1))' == 'coalesce(station_id,-1)'. A paren that does
+    not wrap the entire string (an arithmetic sub-group like the '(...+course)'
+    in a tampered key) is left intact, so that key stays distinguishable."""
+    while len(s) >= 2 and s.startswith("(") and s.endswith(")"):
+        depth = 0
+        wraps = True
+        for i, ch in enumerate(s):
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0 and i != len(s) - 1:
+                    wraps = False           # closed before the end → not a full wrap
+                    break
+        if not wraps:
+            break
+        s = s[1:-1]
+    return s
+
+
+def _pg_norm_key(defn: str) -> str:
+    """Normalise a single pg_get_indexdef(idx, n, true) key expression for an
+    EXACT compare: lowercase, drop spaces, strip ::type casts and quotes, then
+    remove parens that wrap the whole expression. So `COALESCE(station_id,
+    '-1'::integer)` and `(COALESCE(station_id, -1))` both become
+    `coalesce(station_id,-1)`, while `(COALESCE(station_id,-1) + course)` and
+    `ABS(COALESCE(station_id,-1))` normalise to something else and are rejected."""
+    s = (defn or "").lower().replace(" ", "")
+    s = re.sub(r"::[a-z0-9_\[\]]+", "", s)      # '-1'::integer -> '-1'
+    s = s.replace("'", "").replace('"', "")
+    return _strip_wrapping_parens(s)
+
+
+def _prep_task_index_ok(conn) -> bool:
+    """Prove the index enforces EXACTLY the fire-batch identity invariant —
+    UNIQUE, non-partial, on preparation_task, keyed on exactly
+    (order_item_id, fire_seq, COALESCE(station_id, -1)) with no extra key column
+    and no other expression. Verifies the actual key structure, not substrings —
+    so an extra key column, a partial index, or a wrong COALESCE expression is
+    rejected even though the expected words appear in the DDL."""
+    if conn.dialect.name == "sqlite":
+        found = unique = partial = False
+        for row in conn.execute(text("PRAGMA index_list('preparation_task')")):
+            # (seq, name, unique, origin, partial)
+            if row[1] == "uq_prep_task_batch":
+                found, unique = True, bool(row[2])
+                partial = bool(row[4]) if len(row) > 4 and row[4] is not None else False
+                break
+        if not found or not unique or partial:
+            return False
+        sql = conn.execute(text(
+            "SELECT sql FROM sqlite_master WHERE type='index' "
+            "AND name='uq_prep_task_batch' AND tbl_name='preparation_task'"
+        )).scalar_one_or_none()
+        if not sql or " where " in sql.lower():          # reject partial (belt)
+            return False
+        keys = _sqlite_index_keylist(sql)
+        if keys is None:
+            return False
+        return [k.lower().replace(" ", "") for k in keys] == _EXPECTED_INDEX_KEYS
+
+    # Postgres — inspect each index KEY individually via the catalog, never a
+    # substring of the whole indexdef. `indnkeyatts` is the number of uniqueness
+    # key columns (Postgres >= 11); `indnatts` includes any INCLUDE columns.
+    # Requiring both = 3 means exactly three key columns and NO INCLUDE columns —
+    # so an extra key or an INCLUDE payload is rejected.
+    row = conn.execute(text(
+        "SELECT i.indisunique, (i.indpred IS NULL) AS not_partial, "
+        "       i.indnkeyatts, i.indnatts, i.indexrelid "
+        "FROM pg_index i "
+        "JOIN pg_class c ON c.oid = i.indexrelid "
+        "JOIN pg_class t ON t.oid = i.indrelid "
+        "JOIN pg_namespace n ON n.oid = t.relnamespace "
+        "WHERE c.relname = 'uq_prep_task_batch' AND t.relname = 'preparation_task' "
+        "AND n.nspname = current_schema()"
+    )).first()
+    if row is None:
+        return False
+    is_unique, not_partial, nkeyatts, natts, idxoid = row
+    if not is_unique or not not_partial or nkeyatts != 3 or natts != 3:
+        return False
+    # Reconstruct each key on its own — an arithmetic wrap, a wrapping function,
+    # an extra fallback, or a wrong fallback all change one of these three and fail.
+    keys = conn.execute(text(
+        "SELECT pg_get_indexdef(:oid, 1, true), "
+        "       pg_get_indexdef(:oid, 2, true), "
+        "       pg_get_indexdef(:oid, 3, true)"
+    ), {"oid": idxoid}).first()
+    if keys is None or any(k is None for k in keys):
+        return False
+    k1, k2, k3 = (_pg_norm_key(k) for k in keys)
+    if k1 != "order_item_id" or k2 != "fire_seq":
+        return False
+    return k3 in ("coalesce(station_id,-1)", "coalesce(station_id,(-1))")
+
+
+def _ensure_prep_task_index(conn) -> None:
+    """Establish the REQUIRED fire-batch uniqueness index — the durable guard B1
+    depends on. NOT best-effort:
+
+      * pre-existing duplicate identities → HALT (raise), nothing deleted/merged;
+      * a same-name index with the WRONG definition → HALT (do not silently drop);
+      * after CREATE, verify the index BY DEFINITION (unique + the exact columns),
+        not merely that a name exists → HALT if it isn't right.
+
+    (create_all builds this index on a fresh DB; here we add it to an existing one.)
+    """
+    if not _table_exists(conn, "preparation_task"):
+        return                                   # create_all owns a not-yet-made table
+    dups = conn.execute(text(
+        "SELECT COUNT(*) FROM (SELECT 1 FROM preparation_task "
+        "GROUP BY order_item_id, fire_seq, COALESCE(station_id, -1) HAVING COUNT(*) > 1) d"
+    )).scalar_one()
+    if dups:
+        raise RuntimeError(
+            f"Kitchen Stations B1: {dups} duplicate PreparationTask fire-batch "
+            "identity(ies) already exist — the required unique index "
+            "uq_prep_task_batch (order_item_id, fire_seq, COALESCE(station_id,-1)) "
+            "cannot be created. No rows were changed. Resolve the duplicates, then "
+            "restart. Startup halted."
+        )
+    # A name collision with a wrong definition would make CREATE IF NOT EXISTS a
+    # no-op, leaving the invariant unenforced — halt instead of silently dropping.
+    if _index_exists(conn, "uq_prep_task_batch", "preparation_task") and not _prep_task_index_ok(conn):
+        raise RuntimeError(
+            "Kitchen Stations B1: an index named uq_prep_task_batch exists but does "
+            "NOT enforce UNIQUE(order_item_id, fire_seq, COALESCE(station_id,-1)). "
+            "It was not dropped automatically. Resolve it manually, then restart. "
+            "Startup halted."
+        )
+    conn.execute(text(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_prep_task_batch "
+        "ON preparation_task (order_item_id, fire_seq, COALESCE(station_id, -1))"
+    ))
+    if not _prep_task_index_ok(conn):
+        raise RuntimeError(
+            "Kitchen Stations B1: the required unique fire-batch index is not present "
+            "by definition after creation — the duplicate-task guard is not in place. "
+            "Startup halted."
+        )
+
+
+def _backfill_prep_tasks(conn) -> list[str]:
+    """Kitchen Stations B1 — create one base PreparationTask per already-fired
+    OrderItem (preparing/ready) that has none yet, from its legacy station_id
+    snapshot. Idempotent (guarded on NOT EXISTS); never touches order_item, never
+    re-reads current menu routing, preserves Unassigned as NULL station. Safe to
+    run repeatedly. (The preparation_task table itself is made by create_all.)
+    """
+    # A legitimately absent table is a safe no-op; any OTHER database error is
+    # allowed to propagate to the caller (surfaced/logged), not hidden as "[]".
+    if not _table_exists(conn, "preparation_task"):
+        return []
+    pending = conn.execute(text(
+        "SELECT COUNT(*) FROM order_item oi "
+        "WHERE oi.kitchen_status IN ('preparing','ready') "
+        "AND NOT EXISTS (SELECT 1 FROM preparation_task pt WHERE pt.order_item_id = oi.id)"
+    )).scalar_one()
+    if not pending:
+        return []
+    now = datetime.now()
+    # Concurrency-safe against two startup processes racing: NOT EXISTS is the
+    # sequential guard; a conflict-safe INSERT (OR IGNORE on SQLite / ON CONFLICT
+    # DO NOTHING on Postgres) against the uq_prep_task_batch index is the durable
+    # one — so a duplicate base task can never be inserted, even under a race.
+    is_sqlite = conn.dialect.name == "sqlite"
+    head = "INSERT OR IGNORE INTO" if is_sqlite else "INSERT INTO"
+    tail = "" if is_sqlite else " ON CONFLICT DO NOTHING"
+    conn.execute(text(
+        head + ' preparation_task '
+        '(order_item_id, order_id, station_id, course, kitchen_status, quantity, '
+        ' item_label, is_base, fire_seq, fired_at, ready_at, served_at, created_at, updated_at) '
+        'SELECT oi.id, oi.order_id, oi.station_id, oi.course, oi.kitchen_status, oi.quantity, '
+        "       COALESCE((SELECT name FROM menu_item WHERE id = oi.menu_item_id), ''), :is_base, 1, "
+        '       COALESCE((SELECT sent_to_kitchen_at FROM "order" WHERE id = oi.order_id), :now), '
+        "       CASE WHEN oi.kitchen_status = 'ready' THEN :now ELSE NULL END, "
+        '       NULL, :now, :now '
+        'FROM order_item oi '
+        "WHERE oi.kitchen_status IN ('preparing','ready') "
+        'AND NOT EXISTS (SELECT 1 FROM preparation_task pt WHERE pt.order_item_id = oi.id)'
+        + tail
+    ), {"now": now, "is_base": True})
+    return [f"backfilled up to {pending} preparation_task(s) from fired order items"]
 
 
 def _backfill_locations(conn) -> list[str]:

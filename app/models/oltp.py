@@ -18,6 +18,8 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    literal_column,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -371,6 +373,73 @@ class Channel(Base):
     is_third_party: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
+class StationType:
+    """A station either prepares work or coordinates it (Kitchen Stations).
+
+    PRODUCTION stations make food/drink (Pizza, Grill, Fryer, Cold, Dessert,
+    Bar) and have menu items routed to them. COORDINATION stations (Expo,
+    Delivery/Takeout) don't prepare — they aggregate what the production
+    stations produce. The distinction drives which fields/UI a station shows.
+    """
+    PRODUCTION = "production"
+    COORDINATION = "coordination"
+    ALL = (PRODUCTION, COORDINATION)
+
+
+class Station(Base):
+    """A configurable kitchen station (Kitchen Stations — Stage A).
+
+    Reusable and restaurant-configurable: the venue creates, renames, colours,
+    reorders and deactivates its own stations, and routes menu items to them.
+    No station names are hardcoded in business logic. Single-tenant today, so
+    there is no restaurant_id/location_id yet — both are a trivial nullable
+    ADD COLUMN if a Location entity is introduced later.
+
+    Stations are soft-deactivated (is_active), never deleted, so historical
+    order snapshots (OrderItem.station_id) always resolve.
+    """
+    __tablename__ = "station"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(60), nullable=False)
+    # Short code/label for compact KDS chips (e.g. "PIZ", "GRL"). Optional.
+    code: Mapped[str] = mapped_column(String(12), default="", nullable=False)
+    description: Mapped[str] = mapped_column(String(200), default="", nullable=False)
+    type: Mapped[str] = mapped_column(
+        String(20), default=StationType.PRODUCTION, nullable=False
+    )
+    # Accent colour (hex) used as a station chip/badge on the KDS and menu editor.
+    color: Mapped[str] = mapped_column(String(7), default="#64748b", nullable=False)
+    # Optional emoji/glyph shown beside the name.
+    icon: Mapped[str] = mapped_column(String(8), default="", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Production-only operational hints (nullable / ignored for coordination).
+    target_prep_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Free-text references to a printer / KDS screen, kept as strings so no
+    # hardware tables are needed yet. Optional throughout.
+    printer_ref: Mapped[str] = mapped_column(String(60), default="", nullable=False)
+    kds_ref: Mapped[str] = mapped_column(String(60), default="", nullable=False)
+    # Visibility flags for future KDS/FOH surfaces (default: visible to kitchen).
+    visible_to_foh: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    visible_to_kitchen: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now, nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "type IN ('production','coordination')", name="ck_station_type"
+        ),
+        Index("ix_station_active_order", "is_active", "display_order"),
+    )
+
+    @property
+    def swatch(self) -> str:
+        return self.color or "#64748b"
+
+
 class MenuCategory(Base):
     __tablename__ = "menu_category"
 
@@ -399,8 +468,16 @@ class MenuItem(Base):
     is_shareable: Mapped[bool] = mapped_column(Boolean, default=False)
     # A photo for the item row (4.1.2). Empty falls back to a category emoji.
     image_url: Mapped[str] = mapped_column(String(300), default="")
+    # Kitchen Stations routing (Stage A): which station prepares this item.
+    # Nullable = Unassigned — never silently routed; the manager assigns it, and
+    # until then a fired line shows in the KDS's explicit Unassigned bucket.
+    station_id: Mapped[int | None] = mapped_column(
+        ForeignKey("station.id"), nullable=True
+    )
 
     category: Mapped["MenuCategory"] = relationship(back_populates="items")
+    # Lazy by default (the routing target). The menu editor selectinloads it.
+    station: Mapped["Station | None"] = relationship("Station", lazy="select")
 
     @property
     def thumb_emoji(self) -> str:
@@ -430,6 +507,10 @@ class Modifier(Base):
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     price_delta_cents: Mapped[int] = mapped_column(Integer, default=0)
     category_id: Mapped[int | None] = mapped_column(ForeignKey("menu_category.id"), nullable=True)
+    # Kitchen Stations Stage B (config only): which production station prepares
+    # this modifier's work (e.g. "add fries" → Fryer). NULL = prepared with the
+    # item (folds into the base task). Snapshotted onto PreparationTask at fire.
+    station_id: Mapped[int | None] = mapped_column(ForeignKey("station.id"), nullable=True)
 
 
 class ModifierGroup(Base):
@@ -476,6 +557,9 @@ class ModifierOption(Base):
     name: Mapped[str] = mapped_column(String(80), nullable=False)
     price_delta_cents: Mapped[int] = mapped_column(Integer, default=0)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # Kitchen Stations Stage B (config only): station that prepares this option's
+    # work. NULL = prepared with the item. Snapshotted onto PreparationTask.
+    station_id: Mapped[int | None] = mapped_column(ForeignKey("station.id"), nullable=True)
 
     group: Mapped["ModifierGroup"] = relationship(back_populates="options")
 
@@ -758,6 +842,13 @@ class OrderItem(Base):
     # prominently. Comma-separated; empty when none.
     allergens: Mapped[str] = mapped_column(String(200), default="")
     kitchen_status: Mapped[str] = mapped_column(String(20), default=KitchenStatus.PENDING)
+    # Kitchen Stations (Stage A): station this line was routed to, SNAPSHOTTED
+    # when the line is fired to the kitchen (not read live from MenuItem), so the
+    # KDS/Expo stay correct even if the item's routing is changed afterwards.
+    # NULL = fired while Unassigned; it shows in the explicit Unassigned bucket.
+    station_id: Mapped[int | None] = mapped_column(
+        ForeignKey("station.id"), nullable=True
+    )
     # Section 4.1.3 — coursing. Which stage of the meal this line belongs to, so
     # the kitchen fires starters, then mains, then dessert rather than all at
     # once. Defaults to Mains (2): an untagged item is treated as a main and
@@ -796,7 +887,17 @@ class OrderItem(Base):
         "Order", foreign_keys=[merged_from_order_id], lazy="joined"
     )
     menu_item: Mapped["MenuItem"] = relationship(lazy="joined")
+    # The snapshotted routing station (Kitchen Stations). Lazy by default so it
+    # is NOT loaded on every OrderItem query (checkout, reports, …); the KDS /
+    # Expo / floor queries that need it selectinload it explicitly.
+    station: Mapped["Station | None"] = relationship("Station", lazy="select")
     seat: Mapped["Seat | None"] = relationship(back_populates="items")
+    # Kitchen Stations Stage B — the preparation work this line generated at fire
+    # (one task per target station). Lazy by default (not loaded on billing /
+    # reports); the KDS/Expo/floor selectinload it in B2+.
+    tasks: Mapped[list["PreparationTask"]] = relationship(
+        back_populates="order_item", cascade="all, delete-orphan", lazy="select",
+    )
     modifiers: Mapped[list["OrderItemModifier"]] = relationship(
         cascade="all, delete-orphan", lazy="selectin"
     )
@@ -854,6 +955,110 @@ class OrderItemOption(Base):
     group_name: Mapped[str] = mapped_column(String(80), default="")
     label: Mapped[str] = mapped_column(String(80), default="")
     price_delta_cents: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class PreparationTaskStatus:
+    """Task lifecycle (Kitchen Stations Stage B). Minimal set for B1, mirroring
+    the OrderItem kitchen lifecycle; richer states (accepted/started/…) are a
+    later, additive slice."""
+    PREPARING = "preparing"
+    READY = "ready"
+    SERVED = "served"
+
+
+class PreparationTask(Base):
+    """A unit of kitchen preparation work for one fired order line at one station
+    (Kitchen Stations Stage B). One OrderItem can produce several — its own
+    station plus any station its modifiers route to — WITHOUT duplicating the
+    sale line. Routing is snapshotted at fire and never moves afterwards.
+
+    B1 introduces the model + creation/snapshot + backfill only; the KDS/Expo/
+    floor do not read tasks yet (that is B2/B3). OrderItem.kitchen_status stays
+    the source of truth for the order/payment flow.
+    """
+    __tablename__ = "preparation_task"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    order_item_id: Mapped[int] = mapped_column(
+        ForeignKey("order_item.id", ondelete="CASCADE"), nullable=False
+    )
+    # Denormalized for cheap board grouping/scoping (B2+).
+    order_id: Mapped[int] = mapped_column(ForeignKey("order.id", ondelete="CASCADE"), nullable=False)
+    # Routing snapshot at fire. NULL = Unassigned (kept explicit, never hidden).
+    station_id: Mapped[int | None] = mapped_column(ForeignKey("station.id"), nullable=True)
+    # Snapshot of the line's course at fire (coursing).
+    course: Mapped[int] = mapped_column(Integer, default=2, nullable=False)
+    kitchen_status: Mapped[str] = mapped_column(
+        String(20), default=PreparationTaskStatus.PREPARING, nullable=False
+    )
+    quantity: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # Snapshot of the item name — receipt-stable, survives later menu edits.
+    item_label: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    # True = the item's own station task; False = a modifier-only task.
+    is_base: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Which fire produced this task (1 for the first fire of a line). NOT a
+    # uniqueness key — future re-fire/remake may add same-(item,station) tasks;
+    # this only records the batch. Idempotency is transactional (see sales.py).
+    fire_seq: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    fired_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    ready_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    served_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.now, onupdate=datetime.now, nullable=False
+    )
+
+    order_item: Mapped["OrderItem"] = relationship(back_populates="tasks")
+    station: Mapped["Station | None"] = relationship("Station", lazy="select")
+    details: Mapped[list["PreparationTaskModifier"]] = relationship(
+        back_populates="task", cascade="all, delete-orphan", lazy="selectin",
+        order_by="PreparationTaskModifier.id",
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "kitchen_status IN ('preparing','ready','served')",
+            name="ck_prep_task_status",
+        ),
+        Index("ix_prep_task_order", "order_id"),
+        Index("ix_prep_task_item", "order_item_id"),
+        Index("ix_prep_task_station_status", "station_id", "kitchen_status"),
+        # Durable idempotency: one task per (line, fire batch, station). This is
+        # the FINAL defense against duplicate task creation under concurrency —
+        # not UNIQUE(order_item_id, station_id), so a future re-fire/remake (a new
+        # fire_seq) can legitimately add another task at the same station.
+        # COALESCE(station_id, -1) makes the rule apply to the NULL/Unassigned base
+        # task too (SQLite and Postgres both treat bare NULLs as distinct).
+        Index(
+            "uq_prep_task_batch",
+            literal_column("order_item_id"),
+            literal_column("fire_seq"),
+            text("COALESCE(station_id, -1)"),
+            unique=True,
+        ),
+    )
+
+
+class PreparationTaskModifier(Base):
+    """Snapshotted detail line on a PreparationTask — the item and/or the
+    modifiers this task is responsible for (e.g. the Fryer task's "Fries").
+    Normalized (no arrays / CSV of station ids anywhere)."""
+    __tablename__ = "preparation_task_modifier"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    preparation_task_id: Mapped[int] = mapped_column(
+        ForeignKey("preparation_task.id", ondelete="CASCADE"), nullable=False
+    )
+    # 'base' | 'modifier' | 'option' — where the label came from.
+    source_kind: Mapped[str] = mapped_column(String(10), default="modifier", nullable=False)
+    # id of the OrderItemModifier / OrderItemOption / OrderItem it snapshots
+    # (informational; NULL for a free-text/base entry).
+    source_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    label: Mapped[str] = mapped_column(String(120), default="", nullable=False)
+    # Station this detail was routed to at fire (snapshot; matches its task).
+    station_id: Mapped[int | None] = mapped_column(ForeignKey("station.id"), nullable=True)
+
+    task: Mapped["PreparationTask"] = relationship(back_populates="details")
 
 
 class SharedItemShare(Base):

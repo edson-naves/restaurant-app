@@ -51,6 +51,26 @@ from app.services import schedule as _schedule_svc  # noqa: E402
 with SessionLocal() as _db:
     _schedule_svc.ensure_default_positions(_db)
 
+# Kitchen Stations B2.1 — surface the task-KDS activation-readiness state at
+# startup so a BLOCKED activation (flag on, but fired work still lacks tasks) is
+# visible in the service logs. Reuses the existing stdout logging; no new infra.
+# The runtime gate in kitchen_display is what actually keeps the board on the
+# complete Stage A path — this is only an operator-visible heads-up.
+from app.services import settings as _settings_svc  # noqa: E402
+with SessionLocal() as _db:
+    if _settings_svc.flag(_db, "kitchen_b2_active"):
+        if not sales.B2_2_ACTIVE:
+            # B2.1: the code-level guard keeps task KDS off regardless of the flag.
+            print("[kitchen-b2] kitchen_b2_active is set but task-based KDS is INERT "
+                  "until B2.2 — serving the full Stage A KDS", flush=True)
+        else:
+            _missing = sales.fired_items_without_tasks(_db)
+            if _missing:
+                print(f"[kitchen-b2] activation BLOCKED: {_missing} fired item(s) without "
+                      "PreparationTasks — serving the full Stage A KDS", flush=True)
+            else:
+                print("[kitchen-b2] task-based KDS active (flag on, no missing tasks)", flush=True)
+
 app.mount("/static", StaticFiles(directory=str(WEB_DIR / "static")), name="static")
 app.include_router(auth.router)
 app.include_router(sales.router)

@@ -30,3 +30,7 @@ env.yaml
 
 # Local image-upload staging (source images; linked copies live in web/static/img/menu)
 mvp_menu_upload/
+.codex_pptx_build/
+.coverage
+db/*.bak*
+restaurant-app-review.zip
