@@ -11,6 +11,8 @@ service history. Run on every startup; a fully migrated database is a no-op.
 """
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -136,15 +138,36 @@ def run(engine: Engine) -> list[str]:
     return applied
 
 
+def _pg_boolean_ddl(ddl: str) -> str:
+    """Rewrite a SQLite-style boolean default to valid Postgres for the PG branch.
+
+    The ADDED_COLUMNS DDL is authored for SQLite, where a BOOLEAN column takes an
+    integer default (`DEFAULT 0` / `DEFAULT 1`). Postgres has a real boolean type
+    and rejects an integer default on it ("column is of type boolean but default
+    expression is of type integer", DatatypeMismatch) — which silently SKIPs the
+    ADD COLUMN, so the column never lands and every query touching it 500s. Here
+    we translate the default to its boolean literal (`false` / `true`) for boolean
+    columns only; non-boolean DDL and already-boolean literals pass through
+    untouched. Applied on the Postgres branch alone — SQLite keeps the raw DDL.
+    """
+    if "BOOLEAN" not in ddl.upper():
+        return ddl
+    ddl = re.sub(r"(DEFAULT\s+)1\b", r"\1true", ddl, flags=re.IGNORECASE)
+    ddl = re.sub(r"(DEFAULT\s+)0\b", r"\1false", ddl, flags=re.IGNORECASE)
+    return ddl
+
+
 def _run_postgres(engine: Engine) -> list[str]:
     """Additive ADD COLUMN for an existing Postgres database (Render).
 
     Only columns that are genuinely missing are added, checked against
     information_schema. Every column already present (a fresh DB has them all
     from create_all) is skipped, so in practice this only ever adds the newest
-    columns — all of which use cross-compatible DDL (INTEGER NOT NULL DEFAULT 0).
-    Each ALTER runs in its own transaction and is guarded, so one failure can't
-    abort the others or block startup.
+    columns. The ADDED_COLUMNS DDL is authored for SQLite, so boolean defaults
+    are translated to Postgres literals via _pg_boolean_ddl before each ALTER (an
+    integer default on a boolean column is a Postgres DatatypeMismatch). Each
+    ALTER runs in its own transaction and is guarded, so one failure can't abort
+    the others or block startup.
     """
     applied: list[str] = []
     for table, column, ddl in ADDED_COLUMNS:
@@ -171,7 +194,7 @@ def _run_postgres(engine: Engine) -> list[str]:
         try:
             with engine.begin() as conn:
                 conn.execute(
-                    text(f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS {column} {ddl}')
+                    text(f'ALTER TABLE "{table}" ADD COLUMN IF NOT EXISTS {column} {_pg_boolean_ddl(ddl)}')
                 )
             applied.append(f"{table}.{column}")
         except Exception as exc:               # noqa: BLE001 — never block startup
