@@ -34,6 +34,12 @@ Core invariants:
 - no hybrid task/legacy KDS authority
 - payment-gate semantics remain unchanged
 
+## Integration state
+
+Release A is integrated into local `main` at `7225c6e` (`97bed73` + `7225c6e`,
+no squash). Not pushed, not deployed; `origin/main` remains `045dfd5`.
+Authoritative checkpoint: [[docs/03_CURRENT_WORK]].
+
 ## Stage status
 
 ### Stage A

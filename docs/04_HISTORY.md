@@ -266,6 +266,38 @@ After the B2.2 evidence was captured, canonical docs and MOCs were reconciled so
 
 The next governance milestone is independent-auditor handoff preparation.
 
+## 2026-08-26 — Kitchen Release A integrated into local `main`
+
+Kitchen Stage A / B1 / B2 / B2.2 was reconstructed from `feat/floor-map` onto the
+`045dfd5` base — not cherry-picked — through seven enumerated cut points that
+excluded ~40 unapproved Floor UI commits, two unauthorized Reservations commits,
+and all uncommitted work. Integrated into local `main` by fast-forward, both
+commits preserved without squash:
+
+```text
+97bed73  feat(kitchen): Release A — Stage A/B1/B2/B2.2 reconstructed onto 045dfd5
+7225c6e  fix(kitchen): take the Order fire lock on the scalar id and decide post-lock
+```
+
+Each was independently reviewed (`APPROVED WITH NON-BLOCKING NOTES`); the fire fix
+was reproduced by the reviewer in a separate PostgreSQL database.
+
+`7225c6e` records a defect class worth remembering: both fire routes locked the
+Order *entity*, whose eager relationships become outer joins, and PostgreSQL
+refuses `FOR UPDATE` on the nullable side of one — so both routes returned HTTP 500
+on the engine production runs while passing all eleven SQLite suites. SQLite treats
+`FOR UPDATE` as a no-op, so no SQLite test can detect this by construction. It was
+found only by the T3.5 UI smoke against PostgreSQL. The routes now lock the scalar
+id and revalidate existence, ownership and the PENDING precondition after the lock.
+
+First live-PostgreSQL execution of the B1 catalog-introspection path, closing the
+largest evidence gap carried since B1 closure. Also closed the smoke item open
+since the `045dfd5` hotfix: login → Home/Pedidos with no 500.
+
+State at this entry: `origin/main` unchanged at `045dfd5`; nothing pushed;
+production not updated. Verified production backup and confirmation of the
+deployed SHA remain outstanding and block push/deploy.
+
 ## Deferred / Future Work
 
 Kitchen: B3/B4, `OrderItem.station_id` cleanup, task SERVED/reporting, remake/re-fire, richer task states, WebSocket/SSE.

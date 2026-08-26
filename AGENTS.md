@@ -150,12 +150,19 @@ Important current status:
 - Kitchen B2.1 — APPROVED
 - Kitchen B2.2 — APPROVED / CLOSED
 - Kitchen B3/B4 — DEFERRED / NOT AUTHORIZED
+- Kitchen Release A — INTEGRATED INTO LOCAL `main` (`7225c6e`), NOT PUSHED, NOT DEPLOYED
 - Payment/Security Stage 1 — APPROVED BUT UNMERGED
 - Payment/Security Stage 2a — APPROVED BUT UNMERGED
 - Payment/Security Stage 2b — APPROVED BUT UNMERGED
 - Payment Stage 2c — WIP / AUTHORIZED-NOT-CLOSED
 
 Do not describe approved-but-unmerged architecture as current runtime behavior.
+
+Do not describe Kitchen Release A as production behavior either: it is integrated
+into local `main` only. `origin/main` is still `045dfd5` and production has not
+been updated. Pushing to `main` triggers Render auto-deploy, so push and deploy
+are one decision, gated on a verified production backup and confirmation of the
+deployed SHA.
 
 Do not interpret branch divergence as architectural rejection or supersession.
 

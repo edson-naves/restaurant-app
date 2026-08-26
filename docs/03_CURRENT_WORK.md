@@ -10,10 +10,12 @@ Last consolidated: 2026-08-22.
 
 ## Repository / Branch Reality
 
-Current line for this release:
+Current line:
 
 ```text
-release/kitchen-sync   (base: 045dfd5 = origin/main)
+main (local)           7225c6e   Release A integrated by fast-forward
+release/kitchen-sync   7225c6e   the integration branch, same commit
+origin/main            045dfd5   UNCHANGED — nothing pushed
 ```
 
 `feat/floor-map` remains the historical Floor/Kitchen development line. It is NOT
@@ -33,13 +35,19 @@ f4dd079  fix(docs): B2.2 status consistency  ← independently re-audited: APPRO
 its subject is mislabelled — `active_holds()` is called only from `floor_plan()`,
 never from Kitchen code, so it is Reservations work, not a Kitchen dependency.
 
-On `release/kitchen-sync` the Kitchen slice is **reconstructed onto `045dfd5`**, not
-cherry-picked, because those commits sit on top of ~40 unapproved Floor UI commits.
-Seven enumerated cut points separate them. `8a0e349` is a superseded historical HEAD
-on the old line, not the current tip of anything.
+The Kitchen slice is **reconstructed onto `045dfd5`**, not cherry-picked, because
+those commits sit on top of ~40 unapproved Floor UI commits. Seven enumerated cut
+points separate them. `8a0e349` is a superseded historical HEAD on the old line,
+not the current tip of anything.
 
-This branch is **not merged, not pushed, and not deployed**. Nothing here describes
-production runtime.
+A later corrective slice (`7225c6e`) fixed a PostgreSQL-only defect that the SQLite
+suites cannot detect by construction: both fire routes locked the Order entity,
+whose eager relationships become outer joins, and Postgres refuses `FOR UPDATE` on
+the nullable side of one. The routes now lock the scalar id and revalidate after
+the lock.
+
+Release A is integrated into **local `main` only**. It is **not pushed and not
+deployed**; nothing here describes production runtime.
 
 Floor and Reservations work is **entirely absent from this branch**. It remains on
 `feat/floor-map` (committed there, plus uncommitted work in that worktree), unapproved
@@ -272,13 +280,29 @@ shared table, Order, BusinessDay, permissions, migration, payment, or timezone b
 The Kitchen closure recorded above (Stage A / B1 / B2 and B2.2 = APPROVED / CLOSED;
 B3/B4 = DEFERRED / NOT AUTHORIZED) and the Payment/Security statuses remain unchanged.
 
-## Release A — integration state
+## Release A — INTEGRATED LOCALLY INTO `main`, NOT PUSHED
 
-Kitchen Stage A / B1 / B2 / B2.2 has been reconstructed onto `045dfd5` on
-`release/kitchen-sync`, per the owner-authorized Rev 3 integration design (Codex:
-`APPROVED WITH NON-BLOCKING NOTES`).
+Kitchen Stage A / B1 / B2 / B2.2 was reconstructed onto `045dfd5` per the
+owner-authorized Rev 3 integration design, then fast-forwarded into local `main`.
+Both commits are preserved — no squash:
 
-Schema delta introduced by this branch, and nothing else:
+```text
+7225c6e  fix(kitchen): take the Order fire lock on the scalar id and decide post-lock
+97bed73  feat(kitchen): Release A — Stage A/B1/B2/B2.2 reconstructed onto 045dfd5
+045dfd5  (base — origin/main)
+```
+
+Each was independently reviewed by Codex: `APPROVED WITH NON-BLOCKING NOTES`.
+The fire fix was additionally reproduced by the reviewer in its own PostgreSQL
+database.
+
+```text
+local main   = 7225c6e     ahead of origin/main by 2 commits
+origin/main  = 045dfd5     UNCHANGED — nothing has been pushed
+production   = NOT UPDATED — see below
+```
+
+Schema delta introduced by the release, and nothing else:
 
 ```text
 4 columns   station_id on menu_item, order_item, modifier, modifier_option
@@ -290,15 +314,46 @@ Schema delta introduced by this branch, and nothing else:
 
 `_pg_boolean_ddl` from the `045dfd5` base is preserved unchanged.
 
+### Verification carried by this checkpoint
+
+```text
+SQLite       11 suites PASS
+PostgreSQL   boolean-default translation, fresh bootstrap, index by catalog
+             definition, pre-release upgrade, migration idempotence,
+             fresh==upgrade convergence, B2.2 two-session concurrency,
+             backfill with real fired data incl. a contended race
+Fire routes  both routes proven on PostgreSQL, with real lock contention
+UI smoke     T3.5 complete, 40/40 PASS against a PostgreSQL database upgraded
+             from a pre-release schema
+```
+
+Pre-existing and unrelated: `test_security`, `test_admin` and `test_schedule`
+fail for want of a `waiter` fixture — identically on the untouched `045dfd5`
+base. Not a regression of this release.
+
+### What this release does NOT claim
+
+Nothing here describes production runtime. The release has not been pushed, not
+deployed, and production still runs whatever was live before it.
+
+Still open, and blocking push/deploy:
+
+```text
+backup       no verified production pg_dump with a rehearsed restore
+deployed SHA not confirmed — to be read from the Render dashboard first
+```
+
+Pushing to `main` triggers Render auto-deploy, so push and deploy are one
+decision and will be authorized together, only once both items above are met.
+
 ## Next Authorized Action
 
 ```text
-NONE — awaiting independent Codex review of the integrated branch
+NONE — awaiting owner decision on push/deploy, gated on backup and SHA confirmation
 ```
 
-Not authorized: push, merge into `main`, deployment, or any production mutation.
-PostgreSQL verification (fresh bootstrap, pre-release upgrade, concurrency proof)
-has NOT been executed and is a precondition for release approval.
+Not authorized: push, deployment, production mutation, Render configuration
+changes, or Release B.
 
 Do not start B3/B4, reopen B2, begin Payment/Security integration (Release B), or
 integrate Floor/Reservations without a new authorized slice.

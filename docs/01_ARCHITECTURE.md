@@ -163,8 +163,9 @@ Compatibility retained:
 - `OrderItem.kitchen_status`;
 - PreparationTask does not own SERVED.
 
-B1 is APPROVED / CLOSED. It was authored on `feat/floor-map` and is carried into
-this release by reconstruction onto `045dfd5` (branch `release/kitchen-sync`).
+B1 is APPROVED / CLOSED. It was authored on `feat/floor-map`, reconstructed onto
+`045dfd5` for Release A, and is now integrated into local `main` at `7225c6e`.
+Integrated locally only — not pushed, not deployed.
 
 ## Kitchen Stage B2 — Current Approved Architecture
 

@@ -64,6 +64,10 @@ KDS filtering occurs before board limits. KDS remains polling-based unless expli
 
 ### Current Floor/Kitchen development line
 
+Kitchen Release A is integrated into local `main` at `7225c6e`; `origin/main` is
+still `045dfd5` and production has not been updated. Floor UI and Reservations
+remain on `feat/floor-map`, unapproved and unmerged.
+
 The current development line uses:
 
 - `Payment`;
@@ -153,6 +157,7 @@ A branch containing approved work is not automatically current runtime architect
 - Kitchen B2.1 — APPROVED
 - Kitchen B2.2 — APPROVED / CLOSED
 - Kitchen B3/B4 — DEFERRED / NOT AUTHORIZED
+- Kitchen Release A — INTEGRATED INTO LOCAL `main` (`7225c6e`), NOT PUSHED, NOT DEPLOYED
 - Payment/Security Stage 1 — APPROVED BUT UNMERGED
 - Payment/Security Stage 2a — APPROVED BUT UNMERGED
 - Payment/Security Stage 2b — APPROVED BUT UNMERGED

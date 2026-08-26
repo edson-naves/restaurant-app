@@ -86,3 +86,8 @@ When a structural change is approved:
 6. update the relevant domain MOC
 
 Avoid duplicating the full architecture in MOCs.
+
+## Integration state
+
+Kitchen Release A is integrated into local `main` at `7225c6e`. Not pushed,
+not deployed; `origin/main` remains `045dfd5`. See [[docs/03_CURRENT_WORK]].
