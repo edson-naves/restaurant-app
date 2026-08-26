@@ -1641,14 +1641,28 @@ def send_to_kitchen(
     course=0 fires every held item; a specific course fires only that stage, so
     a waiter sends the starters now and holds the mains until the table is ready.
     """
-    order = db.get(Order, order_id)
-    if order is None:
-        raise HTTPException(404, "Order not found")
     # Serialize concurrent fires of the same order (Postgres row lock; no-op on
     # SQLite, which already serializes writers) so two in-flight fires can't both
     # create the same line's tasks. The idempotency guard is the pending→preparing
     # transition: the loser re-reads no pending items and creates nothing.
-    db.execute(select(Order).where(Order.id == order_id).with_for_update())
+    #
+    # Lock on the scalar id, never on the entity: selecting Order pulls its
+    # eager-loaded relationships into LEFT OUTER JOINs, and Postgres refuses
+    # FOR UPDATE on the nullable side of an outer join. Same shape as task_ready.
+    if db.execute(
+        select(Order.id).where(Order.id == order_id).with_for_update()
+    ).first() is None:
+        raise HTTPException(404, "Order not found")
+    # Nothing read before the lock may inform a decision — the competing fire we
+    # just waited on may have moved these very lines. Discard any pre-lock view
+    # and reselect the order and its items fresh, then derive `pending` from that.
+    order = db.execute(
+        select(Order).where(Order.id == order_id)
+        .execution_options(populate_existing=True)
+    ).scalars().first()
+    if order is None:
+        raise HTTPException(404, "Order not found")
+    db.refresh(order, ["items"])
     pending = [i for i in order.items if i.kitchen_status == KitchenStatus.PENDING]
     if course:
         pending = [i for i in pending if i.course == course]
@@ -1696,16 +1710,30 @@ def fire_item(
     without sending its course-mates. It's just the send path scoped to one item,
     so the order/table state is re-derived the same way afterwards.
     """
-    order = db.get(Order, order_id)
+    # Lock the parent order first, on the scalar id (an entity select would drag
+    # the eager relationships into LEFT OUTER JOINs, which Postgres refuses to
+    # lock). Every check below then runs on post-lock state: a competing fire may
+    # have taken this line while we were waiting, so existence, ownership and the
+    # PENDING precondition are all revalidated after the lock, never before it.
+    if db.execute(
+        select(Order.id).where(Order.id == order_id).with_for_update()
+    ).first() is None:
+        raise HTTPException(404, "Order not found")
+    order = db.execute(
+        select(Order).where(Order.id == order_id)
+        .execution_options(populate_existing=True)
+    ).scalars().first()
     if order is None:
         raise HTTPException(404, "Order not found")
-    item = db.get(OrderItem, item_id)
+    item = db.execute(
+        select(OrderItem).where(OrderItem.id == item_id)
+        .execution_options(populate_existing=True)
+    ).scalars().first()
     if item is None or item.order_id != order.id:
         raise HTTPException(404, "Item not on this order")
     if item.kitchen_status != KitchenStatus.PENDING:
         raise HTTPException(400, "That item has already been fired.")
 
-    db.execute(select(Order).where(Order.id == order_id).with_for_update())  # serialize fires
     now = datetime.now()
     happyhour.revert_expired(db, order, now)   # lock at full price if grace passed
     seat = item.seat.seat_number if item.seat else 0
