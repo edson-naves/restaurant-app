@@ -26,7 +26,20 @@ services:
 
   app:
     build: .
+    # Compose reads .env for ${...} interpolation below, but that does NOT put
+    # those values inside the container. env_file does. The app refuses to boot
+    # without a usable SECRET_KEY (app/security.py), so the documented
+    # `cp .env.example .env && docker compose up` flow needs this line to work.
+    # Nothing secret is baked into the image: .env stays on the host and is read
+    # at container start.
+    #
+    # On-prem / production: set a real SECRET_KEY in .env and DELETE the
+    # ALLOW_INSECURE_DEV_SECRET line from it. The opt-out is for local
+    # development only.
+    env_file: .env
     environment:
+      # Explicit values win over env_file, so the compose-internal database host
+      # is used rather than any DATABASE_URL a developer left in .env.
       DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-rms}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-restaurant}
       # Used only to seed the owner on a brand-new database (idempotent).
       OWNER_PIN: ${OWNER_PIN:-}

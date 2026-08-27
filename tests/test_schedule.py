@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
 from fastapi.testclient import TestClient
+import _env  # noqa: F401  — declares the test opt-out before app imports
 from app.main import app
 from app.database import SessionLocal
 from app.models.oltp import (

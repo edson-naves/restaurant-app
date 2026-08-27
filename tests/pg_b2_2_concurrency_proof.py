@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
+import _env  # noqa: F401  — declares the test opt-out before app imports
 
 from app.database import Base
 from app.models.oltp import (

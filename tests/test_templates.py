@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from jinja2 import TemplateSyntaxError
+import _env  # noqa: F401  — declares the test opt-out before app imports
 
 from app.deps import WEB_DIR, templates
 

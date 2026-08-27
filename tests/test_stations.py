@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
+import _env  # noqa: F401  — declares the test opt-out before app imports
 
 from app.database import Base
 from app.deps import current_staff, get_db

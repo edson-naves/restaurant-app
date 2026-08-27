@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import select  # noqa: E402
+import _env  # noqa: F401  — declares the test opt-out before app imports
 
 from app.database import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402

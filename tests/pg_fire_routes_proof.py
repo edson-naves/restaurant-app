@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from fastapi import HTTPException                       # noqa: E402
 from fastapi.testclient import TestClient               # noqa: E402
 from sqlalchemy import event, select, text        # noqa: E402
+import _env  # noqa: F401  — declares the test opt-out before app imports
 
 from app.database import SessionLocal, engine           # noqa: E402
 from app.main import app                                # noqa: E402

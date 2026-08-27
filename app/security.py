@@ -13,11 +13,23 @@ Two jobs, both previously left as v1 placeholders:
    login (see ``is_legacy_pin``).
 
 The secret comes from ``SECRET_KEY`` in the environment (set it on Render and in
-.env). With nothing set it falls back to a fixed development key so the app runs
-zero-config locally — that key is public and MUST NOT be used in production. A
-real deployment sets ``SECRET_KEY`` to a long random value; rotating it simply
+.env). It is **required**: without it the app refuses to start. Rotating it simply
 signs everyone out (their next request fails verification and redirects to
 /login), which is the safe failure mode.
+
+The public development key below is reachable only behind an explicit opt-out,
+``ALLOW_INSECURE_DEV_SECRET=1``, so a local checkout still runs zero-config. That
+opt-out is deliberately narrow: it is not an environment selector, and only the
+literal ``"1"`` enables it. Anything else — a missing variable, a typo, "true",
+"yes", "0" — leaves the secret mandatory.
+
+This is a fail-CLOSED design, chosen after the alternative failed in production:
+the deployment held a variable named ``Security_Key`` while this module reads
+``SECRET_KEY``. Environment variable names are case-sensitive, so the value was
+never read, and sessions were signed with the public key below for as long as that
+went unnoticed. Nothing failed, nothing logged, nothing broke — which is exactly
+why it went unnoticed. A misconfiguration should take the app down, loudly, rather
+than quietly leave every session forgeable.
 """
 from __future__ import annotations
 
@@ -26,16 +38,86 @@ import hmac
 import os
 import secrets
 
-# Public, non-secret default so local dev needs no configuration. Production
-# overrides it with a real SECRET_KEY; if it is ever left as this in prod, the
-# sessions are only as safe as a value printed in the source — hence the name.
+# Public, non-secret default so local dev needs no configuration. Reachable ONLY
+# under the explicit ALLOW_INSECURE_DEV_SECRET=1 opt-out — never as a fallback for
+# a missing SECRET_KEY. Its value is printed in this source file, so sessions
+# signed with it are not secret at all; hence the name.
 _DEV_SECRET = "dev-insecure-secret-set-SECRET_KEY-in-production"
+
+# Minimum length of a real secret, in BYTES of its UTF-8 encoding — not
+# characters. Length is a floor, not a guarantee: a 32-byte value of "aaaa…"
+# passes this check and is still weak. Generating a strong secret is an
+# operational responsibility; use a cryptographic source, e.g.
+# ``python -c "import secrets; print(secrets.token_urlsafe(48))"``.
+_MIN_SECRET_BYTES = 32
+
+_INSECURE_OPT_OUT = "ALLOW_INSECURE_DEV_SECRET"
+
+
+class InsecureSecretKey(RuntimeError):
+    """Raised at import when SECRET_KEY is missing or unusable.
+
+    Deliberately fatal: the process must not start rather than serve forgeable
+    sessions. The message never includes the secret, not even in part.
+    """
 
 
 def _secret() -> bytes:
-    # Read at call time so a changed env var takes effect without touching import
-    # order, mirroring how the Square client reads its config.
-    return (os.environ.get("SECRET_KEY") or _DEV_SECRET).encode("utf-8")
+    """The HMAC key, validated on every call.
+
+    Read at call time so a changed env var takes effect without touching import
+    order, mirroring how the Square client reads its config. Validation lives
+    here rather than in a separate import-time check so there is exactly one
+    decision path — a runtime change cannot slip past a check that ran once.
+    """
+    raw = os.environ.get("SECRET_KEY")
+    opted_out = os.environ.get(_INSECURE_OPT_OUT) == "1"
+
+    # The opt-out only covers a genuinely ABSENT variable. A present-but-unusable
+    # value is a configuration error in any environment, and is never accepted
+    # silently just because someone is in dev.
+    if raw is None:
+        if opted_out:
+            return _DEV_SECRET.encode("utf-8")
+        raise InsecureSecretKey(
+            "SECRET_KEY is not set. Set it to a long random value "
+            f"(at least {_MIN_SECRET_BYTES} bytes) — session cookies are signed "
+            "with it. For local development only, set "
+            f"{_INSECURE_OPT_OUT}=1 to fall back to the public development key."
+        )
+
+    # The key is opaque cryptographic material: never normalise it. Stripping and
+    # then signing with the stripped value would make " abc " and "abc" the same
+    # key, silently, and a later fix to the whitespace would invalidate every
+    # session with no visible cause. strip() is used ONLY to detect blanks and to
+    # reject stray whitespace; the value that is counted and returned is `raw`.
+    if not raw.strip():
+        raise InsecureSecretKey("SECRET_KEY is set but empty or whitespace only.")
+    if raw != raw.strip():
+        raise InsecureSecretKey(
+            "SECRET_KEY has leading or trailing whitespace. It is used verbatim "
+            "as key material, so this is rejected rather than trimmed — a "
+            "silently trimmed key would change if the whitespace were ever "
+            "cleaned up, signing every session out. Remove the whitespace."
+        )
+    if raw == _DEV_SECRET:
+        raise InsecureSecretKey(
+            "SECRET_KEY is set to the public development key from the source "
+            f"code. Use a real random value, or set {_INSECURE_OPT_OUT}=1 and "
+            "leave SECRET_KEY unset for local development."
+        )
+    if len(raw.encode("utf-8")) < _MIN_SECRET_BYTES:
+        raise InsecureSecretKey(
+            f"SECRET_KEY is shorter than {_MIN_SECRET_BYTES} bytes (UTF-8). "
+            "Use a longer random value."
+        )
+    return raw.encode("utf-8")
+
+
+# Validate once at import so a misconfigured deployment fails at STARTUP rather
+# than on the first login. Every later call re-validates through the same code,
+# which also covers a variable changed while the process is running.
+_secret()
 
 
 def cookie_secure() -> bool:

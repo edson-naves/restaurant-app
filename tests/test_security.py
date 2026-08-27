@@ -14,6 +14,7 @@ load_dotenv(ROOT / ".env")
 
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+import _env  # noqa: F401  — declares the test opt-out before app imports
 
 from app.main import app
 from app.database import SessionLocal
