@@ -15,14 +15,23 @@ _DEV_ENVS = {"development", "dev", "local", "test", "testing", "ci"}
 
 
 def app_env() -> str:
-    """The deployment environment, from ``APP_ENV``. Defaults to development so
-    the app still runs zero-config locally and in the test suite."""
-    return os.environ.get("APP_ENV", "development").strip().lower()
+    """The deployment environment, from ``APP_ENV``.
+
+    Absent or blank means PRODUCTION. A deployment that never declares what it is
+    gets the strict reading, never the permissive one: the failure mode of a
+    forgotten variable must be "refuses to start", not "runs insecure and
+    silent". Local and test runs opt into the lenient path explicitly — the test
+    suite does it in ``tests/_env.py``, compose in ``.env``.
+
+    This is the single source of the answer. ``is_production()`` derives from it,
+    so a log line, an error message and a branch can never disagree about which
+    environment this is.
+    """
+    return os.environ.get("APP_ENV", "").strip().lower() or "production"
 
 
 def is_production() -> bool:
-    """True for any environment that is not explicitly a dev/test one. Used to
-    decide when to fail closed on missing secrets/config."""
+    """True for any environment that is not explicitly a dev/test one."""
     return app_env() not in _DEV_ENVS
 
 

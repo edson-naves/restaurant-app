@@ -1,7 +1,16 @@
 """Test-suite environment — import this BEFORE any ``app`` import.
 
+Two production defaults have to be opted out of before the app can be imported
+by a test.
+
 ``app.security`` refuses to import without a usable ``SECRET_KEY`` (see the
-fail-closed rationale there). The suites are run directly as scripts
+fail-closed rationale there). Separately, ``app.config.app_env()`` treats an
+absent ``APP_ENV`` as production, so ``app.main`` would call
+``validate_startup_config()`` and demand a real ``SECRET_KEY`` — and that guard
+deliberately does NOT honour ``ALLOW_INSECURE_DEV_SECRET``, because the two
+guards protect different things (a signing key, and a deployment's
+configuration). Declaring ``APP_ENV=test`` is what lets the nine entrypoints
+that import ``app.main`` load at all. The suites are run directly as scripts
 (``python tests/test_x.py``), so there is no pytest ``conftest.py`` to hook and no
 package ``__init__`` to execute — this module is the single place that declares
 the opt-out for local test runs.
@@ -20,4 +29,5 @@ under test, and a global opt-out would make the "no opt-out" cases untestable.
 """
 import os
 
+os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("ALLOW_INSECURE_DEV_SECRET", "1")
