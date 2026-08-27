@@ -13,9 +13,12 @@ Last consolidated: 2026-08-22.
 Current line:
 
 ```text
-main (local)           7225c6e   Release A integrated by fast-forward
-release/kitchen-sync   7225c6e   the integration branch, same commit
-origin/main            045dfd5   UNCHANGED — nothing pushed
+main (local)           9bd8743   Release A, DEPLOYED
+release/kitchen-sync   9bd8743   the integration branch, same commit
+origin/main            9bd8743   pushed 2026-08-26; production runs this
+
+045dfd5 was the base at reconstruction time, and was origin/main until the
+push. It is history now, not current state.
 ```
 
 `feat/floor-map` remains the historical Floor/Kitchen development line. It is NOT
@@ -46,8 +49,9 @@ whose eager relationships become outer joins, and Postgres refuses `FOR UPDATE` 
 the nullable side of one. The routes now lock the scalar id and revalidate after
 the lock.
 
-Release A is integrated into **local `main` only**. It is **not pushed and not
-deployed**; nothing here describes production runtime.
+Release A is **deployed**: `origin/main` is `9bd8743` and production runs it —
+see "Release A is DEPLOYED" below. The reconstruction described in this section is
+history, recorded for provenance.
 
 Floor and Reservations work is **entirely absent from this branch**. It remains on
 `feat/floor-map` (committed there, plus uncommitted work in that worktree), unapproved
@@ -191,7 +195,9 @@ Do not:
 ## Current Risk / Evidence Backlog
 
 ### High
-- current `SECRET_KEY` production fallback risk;
+- `SECRET_KEY` fallback — operational exposure mitigated in production by the
+  correctly-named variable; the deployed code remains fail-open until `feff3b8`
+  is integrated and deployed;
 - Square charge durability window;
 - card refunds are local-only.
 
@@ -280,7 +286,7 @@ shared table, Order, BusinessDay, permissions, migration, payment, or timezone b
 The Kitchen closure recorded above (Stage A / B1 / B2 and B2.2 = APPROVED / CLOSED;
 B3/B4 = DEFERRED / NOT AUTHORIZED) and the Payment/Security statuses remain unchanged.
 
-## Release A — INTEGRATED LOCALLY INTO `main`, NOT PUSHED
+## Release A — integration history (now DEPLOYED)
 
 Kitchen Stage A / B1 / B2 / B2.2 was reconstructed onto `045dfd5` per the
 owner-authorized Rev 3 integration design, then fast-forwarded into local `main`.
@@ -297,9 +303,12 @@ The fire fix was additionally reproduced by the reviewer in its own PostgreSQL
 database.
 
 ```text
-local main   = 7225c6e     ahead of origin/main by 2 commits
-origin/main  = 045dfd5     UNCHANGED — nothing has been pushed
-production   = NOT UPDATED — see below
+STATE AT THE TIME OF INTEGRATION — superseded, kept for provenance:
+  local main   = 7225c6e     ahead of origin/main by 2 commits
+  origin/main  = 045dfd5     the base; nothing pushed yet at that point
+  production   = not yet updated
+
+CURRENT STATE: origin/main = 9bd8743, deployed, production healthy.
 ```
 
 Schema delta introduced by the release, and nothing else:
@@ -331,29 +340,97 @@ Pre-existing and unrelated: `test_security`, `test_admin` and `test_schedule`
 fail for want of a `waiter` fixture — identically on the untouched `045dfd5`
 base. Not a regression of this release.
 
-### What this release does NOT claim
+### Release A is DEPLOYED
 
-Nothing here describes production runtime. The release has not been pushed, not
-deployed, and production still runs whatever was live before it.
+`origin/main` = `9bd8743`, pushed 2026-08-26; Render auto-deploy went live at
+20:11:07 PDT. Production is healthy.
 
-Still open, and blocking push/deploy:
+Post-deploy smoke, approved: both fire paths returned 303 rather than the 500 they
+gave on PostgreSQL before `7225c6e`; re-sends were rejected with 400; CSV routing
+applied with the unrouted item left Unassigned; the KDS station filter
+discriminated (Grill 1 ticket, Bar 0, Unassigned 8); Expo aggregated; the floor
+card showed its per-station strip; READY and SERVED stayed distinct transitions;
+twelve pages and sixteen open orders returned no 5xx.
+
+Test data was left in production deliberately: stations `SMOKE Grill` / `SMOKE
+Bar`, two routed menu items, and orders 17 and 18 (18 partially fired, which is
+the state the coursing check needs). Removing it would be a separate authorised
+operation.
+
+### Gates closed before the push
 
 ```text
-backup       no verified production pg_dump with a rehearsed restore
-deployed SHA not confirmed — to be read from the Render dashboard first
+deployed SHA   read from the Render dashboard, and corroborated by behaviour:
+               /expo and /admin/stations answered 404 on 045dfd5
+backup         pg_dump of production restored into a disposable PostgreSQL 18.6;
+               exact COUNT(*) identical across all 50 tables; the release
+               migration then ran on that restore over real production data,
+               backfilling 33 PreparationTasks with no data loss
+credentials    Neon role and Owner PIN both rotated, each revocation proven by
+               a failed authentication attempt; SECRET_KEY created under its
+               correct name after `Security_Key` was found never to be read
 ```
 
-Pushing to `main` triggers Render auto-deploy, so push and deploy are one
-decision and will be authorized together, only once both items above are met.
+## Slices committed after Release A — reviewed, NOT integrated
+
+Neither is merged into `main`, and neither has been pushed. Both branch from
+`9bd8743`.
+
+```text
+8cd7b2f  docs/deploy-reality
+         docs(deploy): record Neon production reality and secret-key incident
+         RENDER.md now says what it is — a from-scratch guide, not a description
+         of the live system — names Neon as the production database, points at
+         DATABASE_URL on the Environment tab as the only authority, and documents
+         the Internal vs External split that sent one backup to an empty database.
+         PROJECT_ARCHITECTURE_FACTS_FOR_DOCS.md promotes two INFERRED facts to
+         CONFIRMED and records that the SECRET_KEY fail-open was live in
+         production, not theoretical.
+
+feff3b8  fix/secret-key-fail-closed
+         fix(security): fail closed when the session secret is unsafe
+         SECRET_KEY is required; the public development key is reachable only
+         behind ALLOW_INSECURE_DEV_SECRET=1, and only that literal. A key that is
+         present but empty, whitespace-padded, equal to the public value or under
+         32 UTF-8 bytes is rejected in every environment. The key is returned
+         verbatim, never trimmed. Validation lives in _secret() and is invoked at
+         module import, so a misconfigured deployment dies at startup instead of
+         on the first login. Twelve test entrypoints reach app.security and each
+         imports tests/_env.py; docker-compose.yml gains env_file so the
+         documented Compose flow still boots.
+         Verified: 17-case matrix in subprocesses, 12 SQLite suites, both
+         PostgreSQL proofs, and a real Compose boot in three shapes.
+```
+
+**The production `SECRET_KEY` was measured at 62 bytes**, above the 32-byte
+minimum, so `feff3b8` will not refuse the current deployment. Re-check this before
+any future deploy that changes the variable.
+
+## Known debt, not fixed
+
+```text
+CRLF / .gitattributes
+  core.autocrlf=true converts docker-entrypoint.sh on Windows checkout, and the
+  container's sh rejects `set -e\r` with "Illegal option -". The documented
+  `cp .env.example .env && docker compose up` flow is broken on such a checkout.
+  PRE-EXISTING — reproduced on untouched 9bd8743, not introduced by either slice.
+  Fix is `.gitattributes` with `*.sh text eol=lf`, as its own slice.
+```
+
+Further debt — the `_DEV_SECRET` fail-open now closed by `feff3b8`, `COOKIE_SECURE`
+and the `DATABASE_URL` SQLite fallback still open, the inert `Security_Key`
+variable, the empty Render Postgres instance with an exposed credential — is
+recorded in the Release A checkpoint package.
 
 ## Next Authorized Action
 
 ```text
-NONE — awaiting owner decision on push/deploy, gated on backup and SHA confirmation
+Prepare a LINEAR integration of the two slices above — 8cd7b2f and feff3b8 — for
+review. Present it; do not push.
 ```
 
 Not authorized: push, deployment, production mutation, Render configuration
-changes, or Release B.
+changes, cleanup of the smoke data, or Release B.
 
 Do not start B3/B4, reopen B2, begin Payment/Security integration (Release B), or
 integrate Floor/Reservations without a new authorized slice.
