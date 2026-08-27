@@ -304,7 +304,7 @@ ADR-012 (filter-before-limit) is CODE-CONFIRMED in the KDS. No EXPLAIN/query-pla
     exact name and a strong value; all existing sessions were invalidated, which is the
     documented safe failure mode. **The code remains fail-open** — a future install with the
     variable missing or misspelled would boot insecure and silent. A design to make it
-    fail-closed is approved and pending implementation. 
+    fail-closed is approved and pending implementation.
   - `DATABASE_URL` — **FAIL-OPEN.** Defaults to local SQLite if unset (`database.py:27`); a misconfigured prod would silently run on an ephemeral file DB. 
   - `COOKIE_SECURE` — defaults **off** (`security.py:41`); must be set in prod. 
   - Square partial config — **FAIL-CLOSED (feature off)**. 

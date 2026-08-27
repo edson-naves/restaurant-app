@@ -196,8 +196,10 @@ Do not:
 
 ### High
 - `SECRET_KEY` fallback — operational exposure mitigated in production by the
-  correctly-named variable; the deployed code remains fail-open until `feff3b8`
-  is integrated and deployed;
+  correctly-named variable. The guard is integrated on this candidate as
+  `7e1b812`, but the DEPLOYED code remains fail-open: production runs `9bd8743`,
+  which predates it. Closes only when this candidate is advanced, pushed and
+  deployed;
 - Square charge durability window;
 - card refunds are local-only.
 
@@ -371,10 +373,27 @@ credentials    Neon role and Owner PIN both rotated, each revocation proven by
                correct name after `Security_Key` was found never to be read
 ```
 
-## Slices committed after Release A — reviewed, NOT integrated
+## Slices committed after Release A — integrated into the CANDIDATE, not `main`
 
-Neither is merged into `main`, and neither has been pushed. Both branch from
-`9bd8743`.
+Both slices are integrated on `release/post-a-hardening`, a linear cherry-pick
+onto `9bd8743` with no squash and no merge commit. That branch is a **candidate**:
+`main`, `origin/main` and production all remain at `9bd8743`, and nothing has been
+pushed or deployed.
+
+```text
+integrated on the candidate      provenance (original commits)
+45a7942  docs(deploy)            8cd7b2f  on docs/deploy-reality
+7e1b812  fix(security)           feff3b8  on fix/secret-key-fail-closed
+54f7a67  docs(governance)        793f45f  on docs/deploy-reality
+```
+
+The SHAs differ because cherry-pick rewrites them; the originals are kept on their
+branches so provenance stays checkable.
+
+Verified on the candidate itself, not only on the source slices: the 17-case
+SECRET_KEY matrix, the 12 SQLite suites, and both PostgreSQL proofs. The
+accumulated diff against `9bd8743` is 20 files, and equals the two slices with no
+overlap — 3 documentation files and 17 security files.
 
 ```text
 8cd7b2f  docs/deploy-reality
@@ -403,8 +422,14 @@ feff3b8  fix/secret-key-fail-closed
 ```
 
 **The production `SECRET_KEY` was measured at 62 bytes**, above the 32-byte
-minimum, so `feff3b8` will not refuse the current deployment. Re-check this before
-any future deploy that changes the variable.
+minimum, so the hardening slice will not refuse the deployment when it eventually
+ships. Re-check this before any future deploy that changes the variable.
+
+**The deployed code is still fail-open.** `7e1b812` exists only on this candidate;
+production runs `9bd8743`, which predates it. The operational exposure is mitigated
+by the correctly-named variable, but the guard itself reaches production only when
+this candidate is advanced, pushed and deployed — three decisions that have not
+been taken.
 
 ## Known debt, not fixed
 
@@ -425,9 +450,13 @@ recorded in the Release A checkpoint package.
 ## Next Authorized Action
 
 ```text
-Prepare a LINEAR integration of the two slices above — 8cd7b2f and feff3b8 — for
-review. Present it; do not push.
+NONE — integration candidate ready; awaiting owner decision on main
+advancement/push/deploy
 ```
+
+`release/post-a-hardening` is prepared and verified. Advancing `main` to it,
+pushing, and the Render auto-deploy that a push triggers are separate decisions,
+none of them taken.
 
 Not authorized: push, deployment, production mutation, Render configuration
 changes, cleanup of the smoke data, or Release B.
