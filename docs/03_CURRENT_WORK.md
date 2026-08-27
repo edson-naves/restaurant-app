@@ -6,19 +6,20 @@ Authoritative execution checkpoint.
 
 Read this file before modifying production code.
 
-Last consolidated: 2026-08-22.
+Last consolidated: 2026-08-27, after the post-A hardening deploy and the SECRET_KEY incident.
 
 ## Repository / Branch Reality
 
 Current line:
 
 ```text
-main (local)           9bd8743   Release A, DEPLOYED
-release/kitchen-sync   9bd8743   the integration branch, same commit
-origin/main            9bd8743   pushed 2026-08-26; production runs this
+main (local)             7068bb4   Release A + post-A hardening, DEPLOYED
+origin/main              7068bb4   pushed 2026-08-27; production runs this
+release/post-a-hardening 7068bb4   the integration branch, same commit
+release/kitchen-sync     9bd8743   Release A only; superseded, kept for history
 
-045dfd5 was the base at reconstruction time, and was origin/main until the
-push. It is history now, not current state.
+045dfd5 was the base at reconstruction time; 9bd8743 was Release A alone and was
+origin/main from 08-26 to 08-27. Both are history, not current state.
 ```
 
 `feat/floor-map` remains the historical Floor/Kitchen development line. It is NOT
@@ -49,9 +50,9 @@ whose eager relationships become outer joins, and Postgres refuses `FOR UPDATE` 
 the nullable side of one. The routes now lock the scalar id and revalidate after
 the lock.
 
-Release A is **deployed**: `origin/main` is `9bd8743` and production runs it —
-see "Release A is DEPLOYED" below. The reconstruction described in this section is
-history, recorded for provenance.
+Release A is **deployed**, and has since been superseded by the post-A hardening:
+`origin/main` is `7068bb4` and production runs it. The reconstruction described in
+this section is history, recorded for provenance.
 
 Floor and Reservations work is **entirely absent from this branch**. It remains on
 `feat/floor-map` (committed there, plus uncommitted work in that worktree), unapproved
@@ -195,11 +196,10 @@ Do not:
 ## Current Risk / Evidence Backlog
 
 ### High
-- `SECRET_KEY` fallback — operational exposure mitigated in production by the
-  correctly-named variable. The guard is integrated on this candidate as
-  `7e1b812`, but the DEPLOYED code remains fail-open: production runs `9bd8743`,
-  which predates it. Closes only when this candidate is advanced, pushed and
-  deployed;
+- `SECRET_KEY` fallback — CLOSED 2026-08-27 11:19. See the incident below: the
+  earlier claim that this was mitigated on 08-26 was false, and production signed
+  session cookies with the public source-code key until the deploy of `7068bb4`
+  forced the misconfiguration into the open;
 - Square charge durability window;
 - card refunds are local-only.
 
@@ -310,7 +310,7 @@ STATE AT THE TIME OF INTEGRATION — superseded, kept for provenance:
   origin/main  = 045dfd5     the base; nothing pushed yet at that point
   production   = not yet updated
 
-CURRENT STATE: origin/main = 9bd8743, deployed, production healthy.
+CURRENT STATE: origin/main = 7068bb4, deployed 2026-08-27, production healthy.
 ```
 
 Schema delta introduced by the release, and nothing else:
@@ -344,8 +344,9 @@ base. Not a regression of this release.
 
 ### Release A is DEPLOYED
 
-`origin/main` = `9bd8743`, pushed 2026-08-26; Render auto-deploy went live at
-20:11:07 PDT. Production is healthy.
+Release A shipped as `9bd8743`, pushed 2026-08-26, live at 20:11:07 PDT. It was
+superseded on 08-27 by `7068bb4`, which is what production runs now — see the
+post-A hardening section. The evidence below is Release A's own, and stands.
 
 Post-deploy smoke, approved: both fire paths returned 303 rather than the 500 they
 gave on PostgreSQL before `7225c6e`; re-sends were rejected with 400; CSV routing
@@ -369,19 +370,27 @@ backup         pg_dump of production restored into a disposable PostgreSQL 18.6;
                migration then ran on that restore over real production data,
                backfilling 33 PreparationTasks with no data loss
 credentials    Neon role and Owner PIN both rotated, each revocation proven by
-               a failed authentication attempt; SECRET_KEY created under its
-               correct name after `Security_Key` was found never to be read
+               a failed authentication attempt. The SECRET_KEY part of that
+               rotation FAILED SILENTLY and was believed successful for a day —
+               see the incident section below
 ```
 
-## Slices committed after Release A — integrated into the CANDIDATE, not `main`
+## Post-A hardening — DEPLOYED as `7068bb4`
 
-Both slices are integrated on `release/post-a-hardening`, a linear cherry-pick
-onto `9bd8743` with no squash and no merge commit. That branch is a **candidate**:
-`main`, `origin/main` and production all remain at `9bd8743`, and nothing has been
-pushed or deployed.
+Both slices reached production on 2026-08-27. `release/post-a-hardening` was a
+linear cherry-pick onto `9bd8743`, no squash and no merge commit; `main` was
+fast-forwarded to it, pushed, and the Render auto-deploy carried it live.
 
 ```text
-integrated on the candidate      provenance (original commits)
+main = origin/main = release/post-a-hardening = production = 7068bb4
+```
+
+The deploy did not go cleanly: the SECRET_KEY guard refused to boot because no
+correctly-named variable existed, and the service was down for 51 minutes. See the
+incident section.
+
+```text
+integrated and deployed          provenance (original commits)
 45a7942  docs(deploy)            8cd7b2f  on docs/deploy-reality
 7e1b812  fix(security)           feff3b8  on fix/secret-key-fail-closed
 54f7a67  docs(governance)        793f45f  on docs/deploy-reality
@@ -390,7 +399,7 @@ integrated on the candidate      provenance (original commits)
 The SHAs differ because cherry-pick rewrites them; the originals are kept on their
 branches so provenance stays checkable.
 
-Verified on the candidate itself, not only on the source slices: the 17-case
+Verified on the integration branch itself, not only on the source slices: the 17-case
 SECRET_KEY matrix, the 12 SQLite suites, and both PostgreSQL proofs. The
 accumulated diff against `9bd8743` is 20 files, and equals the two slices with no
 overlap — 3 documentation files and 17 security files.
@@ -421,15 +430,90 @@ feff3b8  fix/secret-key-fail-closed
          PostgreSQL proofs, and a real Compose boot in three shapes.
 ```
 
-**The production `SECRET_KEY` was measured at 62 bytes**, above the 32-byte
-minimum, so the hardening slice will not refuse the deployment when it eventually
-ships. Re-check this before any future deploy that changes the variable.
+**Superseded 2026-08-27 — kept as evidence of how the check failed.** The text
+below stood here as the deploy pre-condition:
 
-**The deployed code is still fail-open.** `7e1b812` exists only on this candidate;
-production runs `9bd8743`, which predates it. The operational exposure is mitigated
-by the correctly-named variable, but the guard itself reaches production only when
-this candidate is advanced, pushed and deployed — three decisions that have not
-been taken.
+> The production `SECRET_KEY` was measured at 62 bytes, above the 32-byte
+> minimum, so the hardening slice will not refuse the deployment when it
+> eventually ships.
+
+The measurement was accurate and the conclusion was wrong. Those 62 bytes belonged
+to **`SECRET_KEU`** — an inert variable the application never read, because the code
+reads `SECRET_KEY`. Measuring it validated nothing about the variable that matters,
+and could not support the conclusion drawn from it: the deploy *was* refused, and
+the service stayed down for 51 minutes.
+
+The pre-condition was proven only on **2026-08-27 at 11:19**, when `7068bb4`
+completed its boot with a correctly-named `SECRET_KEY`. A finished boot is the
+proof, because `_secret()` runs on the import path; a byte count read off a
+dashboard is not, unless the name is verified first.
+
+Re-check before any future deploy that changes the variable — and check the NAME
+before the length.
+
+**Superseded 2026-08-27.** This paragraph claimed the operational exposure was
+mitigated by a correctly-named variable. It was not: no correctly-named variable
+existed. `7068bb4` is deployed, the guard is live, and the exposure closed only at
+11:19 on 08-27. See the incident section.
+
+## Incident 2026-08-27 — SECRET_KEY was never read; two rotations failed silently
+
+Production signed session cookies with `_DEV_SECRET`, the key printed in this
+repository, from before 2026-08-26 until **2026-08-27 11:19**. Anyone holding a
+checkout could forge a session cookie and arrive as the owner without a PIN.
+
+Three variables existed on the Render service. None had the name the code reads:
+
+```text
+Security_Key   the original      never read
+SECRET_KEU     the 08-26 "fix"   never read — a typo, Y written as U
+SECRET_KEY     2026-08-27 11:19  the first one actually read
+```
+
+Environment variable names are case- and character-sensitive. `os.environ.get`
+returned `None` every time, and the pre-`7068bb4` code answered that with a silent
+fallback to the public key. Nothing failed, nothing logged.
+
+### Why the 08-26 rotation was believed to have worked
+
+After creating what was thought to be `SECRET_KEY`, the deployment was validated by
+`/healthz`, a login, and the staff list rendering on `/login`. **None of those
+touch the signing key in a way that distinguishes a real secret from the public
+one.** The login succeeded because the PIN hash verifies independently of
+`SECRET_KEY`; the staff list is an ordinary `SELECT`. The checks passed, and would
+have passed identically with no key at all.
+
+That is the whole failure: the verification could not observe what it claimed to
+verify. The checkpoint and commits `54f7a67` and `feff3b8` state the exposure was
+mitigated on 08-26. That statement was false when written.
+
+### The outage, and what it bought
+
+```text
+10:26   7068bb4 pushed; Render auto-deploy starts
+10:28:09  last healthy response from the old instance
+10:28:40  502 — the new instance boots, _secret() raises, the worker dies
+          Gunicorn exits 3, "Worker failed to boot", and retries in a loop
+11:19:44  SECRET_KEY corrected on Render; the instance boots and serves
+```
+
+51 minutes unavailable. The deploy did not introduce a defect — it made an existing
+one impossible to ignore. `7e1b812` calls `_secret()` at module import, so a
+misconfiguration takes the process down instead of quietly weakening every session.
+
+### What a healthy boot now proves
+
+Before `7068bb4`, `/healthz` answering 200 said nothing about configuration: the app
+booted identically on the public key. Now the guard runs on the import path, so a
+worker that finishes booting has necessarily passed all five rules — present, not
+empty, not whitespace-padded, not the public value, at least 32 UTF-8 bytes. The
+evidence is the code path, not an inference from behaviour.
+
+### Not authorized
+
+`Security_Key` and `SECRET_KEU` both remain on the Render service. Both are inert:
+nothing reads either name. **Removing them is not authorized** and is recorded here
+so that a future reader does not mistake their presence for configuration in use.
 
 ## Known debt, not fixed
 
@@ -450,16 +534,14 @@ recorded in the Release A checkpoint package.
 ## Next Authorized Action
 
 ```text
-NONE — integration candidate ready; awaiting owner decision on main
-advancement/push/deploy
+NONE — post-A hardening is deployed and production is healthy at 7068bb4
 ```
 
-`release/post-a-hardening` is prepared and verified. Advancing `main` to it,
-pushing, and the Render auto-deploy that a push triggers are separate decisions,
-none of them taken.
+Nothing is pending. Production has been healthy since 2026-08-27 11:19:44.
 
-Not authorized: push, deployment, production mutation, Render configuration
-changes, cleanup of the smoke data, or Release B.
+Not authorized: NEW pushes, NEW deployments, production mutation, Render
+configuration changes, removal of the inert `Security_Key` / `SECRET_KEU`
+variables, cleanup of the smoke data, or Release B.
 
 Do not start B3/B4, reopen B2, begin Payment/Security integration (Release B), or
 integrate Floor/Reservations without a new authorized slice.

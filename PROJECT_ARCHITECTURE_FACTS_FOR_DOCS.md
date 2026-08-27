@@ -1,5 +1,9 @@
 # PROJECT_ARCHITECTURE_FACTS_FOR_DOCS.md
 
+> **HISTORICAL SNAPSHOT — primarily reflects the 2026-08-20 inspection.**
+> Later factual corrections are retained only when explicitly dated.
+> For current execution/deployment status, use `docs/03_CURRENT_WORK.md`.
+
 Read-only architecture fact-finding for the Restaurant App, per MASTER PROMPT V2.
 No source, docs, tests, schema, data, or git state were modified. Findings are
 evidence-classified (CODE-CONFIRMED file:line · TEST-CONFIRMED command+result ·
@@ -300,11 +304,14 @@ ADR-012 (filter-before-limit) is CODE-CONFIRMED in the KDS. No EXPLAIN/query-pla
     environment held a variable named `Security_Key`, while the code reads `SECRET_KEY` —
     environment variables are case-sensitive, so the value was never read and production
     signed session cookies with the public source-code default. Discovered incidentally
-    during pre-deploy work, not by any check. Mitigated by creating `SECRET_KEY` with the
-    exact name and a strong value; all existing sessions were invalidated, which is the
-    documented safe failure mode. **The code remains fail-open** — a future install with the
-    variable missing or misspelled would boot insecure and silent. A design to make it
-    fail-closed is approved and pending implementation.
+    during pre-deploy work, not by any check.
+    **[FACTUAL CORRECTION — 2026-08-27]** **CLOSED 2026-08-27 11:19**, and later than
+    first believed: the 08-26 attempt created `SECRET_KEU` — a typo, Y written as U — which
+    was never read either, so production kept signing with the public key for another day.
+    The code is no longer fail-open: `7068bb4` makes a missing or unusable `SECRET_KEY`
+    refuse the boot, which is how the typo was finally found. Rotating the key invalidates
+    all sessions, the documented safe failure mode. `Security_Key` and `SECRET_KEU` remain
+    on the service, inert; their removal is not authorized.
   - `DATABASE_URL` — **FAIL-OPEN.** Defaults to local SQLite if unset (`database.py:27`); a misconfigured prod would silently run on an ephemeral file DB. 
   - `COOKIE_SECURE` — defaults **off** (`security.py:41`); must be set in prod. 
   - Square partial config — **FAIL-CLOSED (feature off)**. 
