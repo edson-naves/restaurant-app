@@ -28,9 +28,9 @@ The payment reconciliation is evidence for branch containment/divergence.
 Neither artifact by itself authorizes implementation.
 
 ## Domain maps
-- [[docs/moc/MOC_KITCHEN]]
-- [[docs/moc/MOC_PAYMENTS]]
-- [[docs/moc/MOC_AUDITS]]
+- [[docs/MOC/MOC_KITCHEN]]
+- [[docs/MOC/MOC_PAYMENTS]]
+- [[docs/MOC/MOC_AUDITS]]
 
 Add another domain MOC only when the domain has enough architecture/evidence to justify one.
 
@@ -82,7 +82,7 @@ When a structural change is approved:
 2. update [[docs/03_CURRENT_WORK]]
 3. add/update ADR only when a durable decision changed
 4. update [[docs/04_HISTORY]] for meaningful milestones
-5. add the review/evidence artifact to [[docs/moc/MOC_AUDITS]]
+5. add the review/evidence artifact to [[docs/MOC/MOC_AUDITS]]
 6. update the relevant domain MOC
 
 Avoid duplicating the full architecture in MOCs.
