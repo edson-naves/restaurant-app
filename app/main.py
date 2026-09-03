@@ -15,12 +15,20 @@ load_dotenv()
 # Run every date/time calculation in the restaurant's local timezone. Render's
 # servers are UTC, so without this "today" flips to tomorrow in the evening for a
 # Pacific venue — the schedule's Today button and default day land a day ahead.
-# Overridable via the TZ environment variable; tzset applies it on Unix (guarded
-# for Windows dev, which has no tzset).
+# An operator-provided TZ is never overwritten.
+#
+# We set TZ only where we can also APPLY it right away, with tzset. Where tzset
+# is missing (Windows) an unapplied TZ is NOT inert: the MS C runtime reads the
+# variable itself, on its first local-time conversion, and cannot parse an IANA
+# name — it resolved "America/Vancouver" as UTC+1 and ran the whole process 8h
+# ahead of the machine. So on Windows we leave TZ alone and inherit the system
+# zone. On Windows this split the server and the test suite across different
+# close-out days, producing an incomplete report and a false $28.16 cash
+# variance; tests/test_timezone.py holds the line on both branches.
 import os as _os
 import time as _time
-_os.environ.setdefault("TZ", "America/Vancouver")
 if hasattr(_time, "tzset"):
+    _os.environ.setdefault("TZ", "America/Vancouver")
     _time.tzset()
 
 from fastapi import FastAPI, Request
