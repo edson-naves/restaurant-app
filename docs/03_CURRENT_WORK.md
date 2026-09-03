@@ -6,17 +6,18 @@ Authoritative execution checkpoint.
 
 Read this file before modifying production code.
 
-Last consolidated: 2026-08-27, after the post-A hardening deploy and the SECRET_KEY incident.
+Last consolidated: 2026-09-02, after Release B gates G1-G5 passed locally.
 
 ## Repository / Branch Reality
 
 Current line:
 
 ```text
-main (local)             7068bb4   Release A + post-A hardening, DEPLOYED
-origin/main              7068bb4   pushed 2026-08-27; production runs this
-release/post-a-hardening 7068bb4   the integration branch, same commit
-release/kitchen-sync     9bd8743   Release A only; superseded, kept for history
+main (local)              b0ab8e7  deployed code plus incident correction; local only
+origin/main               7068bb4  pushed 2026-08-27; production runs this
+release/payment-security HEAD     Release B candidate; code tip f608119; local only
+release/post-a-hardening  7068bb4  deployed integration branch, kept for history
+release/kitchen-sync      9bd8743  Release A only; superseded, kept for history
 
 045dfd5 was the base at reconstruction time; 9bd8743 was Release A alone and was
 origin/main from 08-26 to 08-27. Both are history, not current state.
@@ -61,7 +62,7 @@ router's import of it was removed as part of the reconstruction.
 
 Important:
 
-- payment/security remediation is on a separate divergent branch;
+- payment/security remediation is integrated on the local Release B candidate;
 - inspect current `git status`, current branch, and relevant files before any new implementation or integration work.
 
 ## Kitchen Status
@@ -148,24 +149,36 @@ The proof used real PostgreSQL 16 with two independent sessions. Session B block
 - richer task states;
 - WebSocket/SSE.
 
-## Payment / Security — Approved but Unmerged
+## Payment / Security — Release B candidate passed G1-G5
 
-Separate branch:
+Integration branch:
 
 ```text
-fix/p0-security-and-payments
+release/payment-security  (code tip f608119; this checkpoint commit on top)
 ```
 
 Status:
 
 ```text
-Stage 1  — APPROVED BUT UNMERGED
-Stage 2a — APPROVED BUT UNMERGED
-Stage 2b — APPROVED BUT UNMERGED
-Stage 2c — WIP / AUTHORIZED-NOT-CLOSED
+Stage 1  — IN CANDIDATE; G1-G5 PASSED
+Stage 2a — IN CANDIDATE; G1-G5 PASSED
+Stage 2b — IN CANDIDATE; G1-G5 PASSED
+Stage 2c — EXCLUDED / WIP
 ```
 
-Stage 1/2a/2b remain approved target architecture. Their absence from the current branch is divergence, not rejection.
+The candidate code is 29 linear commits over `b0ab8e7`: 26 approved source commits,
+the APP_ENV and `.env.example` integration amendments, and the Windows timezone
+fix `f608119`. `app/security.py` remains byte-for-byte identical to `b0ab8e7`.
+
+G3 passed all required SQLite entrypoints after the timezone correction. G4
+independently passed both PostgreSQL suites with zero SKIP. G5 restored the
+retained PostgreSQL 18.6 production dump locally: financial row counts stayed
+unchanged, `card_terminal` became `square_terminal`, both new attempt tables were
+empty, and the second strict migration run returned `[]`.
+
+Stage 1/2a/2b are still dormant foundations: no live router invokes the new
+attempt/provider/refund services. The Square durability window and external
+refund wiring remain open until a separately approved later stage.
 
 Stage 2c is not part of the approved baseline.
 
@@ -534,14 +547,16 @@ recorded in the Release A checkpoint package.
 ## Next Authorized Action
 
 ```text
-NONE — post-A hardening is deployed and production is healthy at 7068bb4
+G6 — owner may authorize fast-forwarding local main to release/payment-security
 ```
 
-Nothing is pending. Production has been healthy since 2026-08-27 11:19:44.
+G1-G5 are complete. Production remains healthy at `7068bb4`; the Release B
+candidate is local only. Passing G5 does not authorize G6, and advancing local
+`main` does not authorize push/deploy.
 
 Not authorized: NEW pushes, NEW deployments, production mutation, Render
 configuration changes, removal of the inert `Security_Key` / `SECRET_KEU`
-variables, cleanup of the smoke data, or Release B.
+variables, or cleanup of the smoke data.
 
-Do not start B3/B4, reopen B2, begin Payment/Security integration (Release B), or
-integrate Floor/Reservations without a new authorized slice.
+Do not start Stage 2c, B3/B4, reopen B2, or integrate Floor/Reservations/Schedule
+without a new authorized slice.
