@@ -38,6 +38,13 @@ DEFAULTS: dict[str, str] = {
     # Target labor cost as a percent of forecast sales. The schedule flags a week
     # over this as "High".
     "labor_pct_target": "30",
+    "show_table_admin": "0",
+    "show_zone_waiter": "0",
+    "reservation_hold_before_min": "30",
+    "reservation_drop_after_min": "20",
+    # How long a table is considered occupied by a booking, for overlap
+    # checks. Flat per party size — no venue-specific pacing model exists yet.
+    "reservation_duration_min": "90",
 }
 
 # What the settings form is allowed to write. Anything else is ignored, so a
@@ -146,6 +153,31 @@ def schedule_hours(db: Session) -> tuple[int, int]:
     # end may be <= start: an overnight window that runs into the next morning
     # (e.g. 07:00–04:00). build_calendar handles the wrap.
     return _h("schedule_start_hour", 8), _h("schedule_end_hour", 23)
+
+
+def reservation_window(db: Session) -> tuple[int, int]:
+    """Return reservation hold-before and drop-after windows in minutes."""
+    s = _all(db)
+
+    def _minutes(key: str, default: int) -> int:
+        try:
+            return max(0, int(float(s[key])))
+        except (TypeError, ValueError):
+            return default
+
+    return (
+        _minutes("reservation_hold_before_min", 30),
+        _minutes("reservation_drop_after_min", 20),
+    )
+
+
+def reservation_duration_minutes(db: Session) -> int:
+    """Flat booking duration in minutes, for the availability engine's overlap
+    window. Ignores party size — no per-size pacing model exists yet."""
+    try:
+        return max(1, int(float(_all(db)["reservation_duration_min"])))
+    except (TypeError, ValueError):
+        return 90
 
 
 def save(db: Session, values: dict[str, str]) -> None:

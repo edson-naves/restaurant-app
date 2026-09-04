@@ -121,8 +121,8 @@
         <span class="tot">${{ c.total_cents|money }}</span>
       </a>
     {% else %}
-      <details class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
-         data-status="{{ c.table.status }}" data-floor="{{ sec_floor_id }}"
+      <details class="tbl {{ 'reserved' if c.hold else c.table.status }}" data-find="{{ haystack }}{{ (' ' ~ c.hold.guest_name ~ ' reserved')|lower if c.hold else '' }}" data-number="{{ c.table.number }}"
+         data-status="{{ 'reserved' if c.hold else c.table.status }}" data-floor="{{ sec_floor_id }}"
          data-mine="{{ '1' if c.table.current_waiter_id == staff.id else '' }}"
          data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
          {% if c.table.zone_ref %}style="border-left-color: {{ c.table.zone_ref.swatch }}"{% endif %}>
@@ -130,7 +130,11 @@
           <span class="n">Table {{ c.table.number }}</span><br>
           <span class="meta">{{ c.table.zone }} · seats {{ c.table.capacity }}</span><br>
           {% if c.waiter %}<span class="meta">{{ c.waiter }}</span><br>{% endif %}
+          {% if c.hold %}
+          <span class="pill reserved">📅 {{ c.hold.guest_name }} · {{ c.hold.at.strftime('%H:%M') }}</span>
+          {% else %}
           <span class="pill free">free</span>
+          {% endif %}
           {% if can('settings') %}
           {# Trash on the card corner: click, confirm, retired. Stops the click
              from also toggling the card open. Nothing is deleted — the table is
@@ -142,6 +146,14 @@
           {% endif %}
         </summary>
         {% if can('orders.manage') %}
+        {% if c.hold %}
+        {# Held for an incoming booking — one tap seats the party that's
+           actually arriving, straight onto this table, no re-picking. #}
+        <form method="post" action="/reservations/{{ c.hold.id }}/seat-here" style="margin-top:10px">
+          <button class="btn primary sm" style="width:100%">Seat {{ c.hold.guest_name }} here</button>
+        </form>
+        <p class="meta" style="margin-top:6px">Or open for a walk-in instead:</p>
+        {% endif %}
         <form method="post" action="/tables/{{ c.table.id }}/open" style="margin-top:10px">
           <div class="field">
             <label>Guests</label>

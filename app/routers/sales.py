@@ -51,6 +51,7 @@ from app.models.oltp import (
     Zone,
 )
 from app.services import daymenu, happyhour
+from app.services import reservations as reservations_svc
 from app.services import settings as settings_svc
 from app.services import upsell
 from app.services.payments import balance_panel, ensure_seats, set_shared_item_shares
@@ -95,6 +96,10 @@ def _order_station_status(order: "Order") -> list[dict]:
 
 @router.get("/")
 def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db), staff: Staff = Depends(current_staff)):
+    # Tables currently held for an incoming booking (Reservations 4.1.5): a
+    # free table with an active hold reads as "reserved" here, not free, so a
+    # waiter does not seat a walk-in onto a table about to arrive.
+    holds = reservations_svc.active_holds(db)
     # Retired tables (admin) keep their history but leave the floor.
     tables = db.execute(
         select(RestaurantTable)
@@ -144,6 +149,10 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
                 "total_cents": total,
                 "guests": order.guest_count if order else 0,
                 "waiter": t.current_waiter.name if t.current_waiter else None,
+                # A held reservation, only meaningful for a free table with no
+                # open order — an occupied/paying table shows its order, not
+                # the booking that will follow it.
+                "hold": holds.get(t.id) if order is None else None,
                 # Food that's up but not yet served — the waiter's cue to run it.
                 # Counts even while the rest of the order is still Preparing, so
                 # partial readiness isn't hidden behind the order's aggregate.

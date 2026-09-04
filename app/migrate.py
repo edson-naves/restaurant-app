@@ -118,6 +118,15 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("payment_attempt", "reconciled_by", "VARCHAR(60) NOT NULL DEFAULT ''"),
     ("payment_attempt", "reconciliation_note", "VARCHAR(300) NOT NULL DEFAULT ''"),
     ("refund_attempt", "intent_fingerprint", "VARCHAR(64) NOT NULL DEFAULT ''"),
+    # Zone rectangle on the floor map (per-mille-ish pixel box) and table shape,
+    # for the reservation picker's map. Defaults match the model's Python-level
+    # defaults, so an existing zone/table lands in the same place create_all
+    # would have put a brand-new one.
+    ("zone", "pos_x", "INTEGER NOT NULL DEFAULT 60"),
+    ("zone", "pos_y", "INTEGER NOT NULL DEFAULT 60"),
+    ("zone", "width", "INTEGER NOT NULL DEFAULT 360"),
+    ("zone", "height", "INTEGER NOT NULL DEFAULT 300"),
+    ("restaurant_table", "shape", "VARCHAR(10) NOT NULL DEFAULT 'round'"),
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW

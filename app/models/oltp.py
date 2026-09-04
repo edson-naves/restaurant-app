@@ -9,12 +9,14 @@ from datetime import date, datetime, time
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
+    Column,
     Date,
     DateTime,
     ForeignKey,
     Index,
     Integer,
     String,
+    Table,
     Text,
     UniqueConstraint,
     func,
@@ -307,6 +309,10 @@ class Zone(Base):
     # Null means "not chosen yet" and falls back to the palette, so zones are
     # colour-coded from the moment they exist without a backfill.
     color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    pos_x: Mapped[int] = mapped_column(Integer, default=60)
+    pos_y: Mapped[int] = mapped_column(Integer, default=60)
+    width: Mapped[int] = mapped_column(Integer, default=360)
+    height: Mapped[int] = mapped_column(Integer, default=300)
 
     floor: Mapped["Floor"] = relationship(back_populates="zones", lazy="joined")
 
@@ -346,6 +352,7 @@ class RestaurantTable(Base):
     # Floor-plan grid coordinates for the visual layout.
     pos_x: Mapped[int] = mapped_column(Integer, default=0)
     pos_y: Mapped[int] = mapped_column(Integer, default=0)
+    shape: Mapped[str] = mapped_column(String(10), default="round", nullable=False)
     current_waiter_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
 
     current_waiter: Mapped["Staff | None"] = relationship("Staff", lazy="joined")
@@ -1646,6 +1653,23 @@ class ReservationStatus:
     NO_SHOW = "no_show"
 
 
+# A reservation may hold more than one physical table for a large party.
+reservation_table = Table(
+    "reservation_table",
+    Base.metadata,
+    Column(
+        "reservation_id",
+        ForeignKey("reservation.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "table_id",
+        ForeignKey("restaurant_table.id"),
+        primary_key=True,
+    ),
+)
+
+
 class Reservation(Base):
     """Section 4.1.5 — future bookings and the walk-in waitlist.
 
@@ -1672,6 +1696,9 @@ class Reservation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
 
     table: Mapped["RestaurantTable | None"] = relationship(lazy="joined")
+    tables: Mapped[list["RestaurantTable"]] = relationship(
+        secondary=reservation_table, lazy="selectin"
+    )
 
     __table_args__ = (
         CheckConstraint(

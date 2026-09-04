@@ -121,6 +121,28 @@
       </form>
     </div>
 
+    {% if map_floors %}
+    <div class="card" id="reservation-picker">
+      <div class="between" style="margin-bottom:10px">
+        <h2 style="margin:0">Pick tables on floor map</h2>
+        <span class="sub">Selected tables are held for this booking</span>
+      </div>
+      {% for floor_entry in map_floors %}
+      <h3 style="margin:12px 0 8px">{{ floor_entry.floor.name if floor_entry.floor else 'Main floor' }}</h3>
+      <div style="display:flex;flex-wrap:wrap;gap:10px">
+        {% for zone_entry in floor_entry.zones %}
+        {% for table in zone_entry.tables %}
+        <button type="button" class="btn sm table-pick{% if table.id in booked_ids %} booked{% endif %}"{% if table.id in booked_ids %} data-booked="1"{% endif %} data-table-id="{{ table.id }}" aria-pressed="false">
+          Table {{ table.number }} <span class="sub">({{ table.capacity }})</span>
+        </button>
+        {% endfor %}
+        {% endfor %}
+      </div>
+      {% endfor %}
+      <div id="selected-tables" class="sub" style="margin-top:10px">No tables selected.</div>
+    </div>
+    {% endif %}
+
     <div class="card">
       <div class="between" style="margin-bottom:10px">
         <h2 style="margin:0">Upcoming reservations <span class="count-badge">{{ bookings|length }}</span></h2>
@@ -223,5 +245,27 @@ function bump(id, d) {
   var lo = parseInt(el.min || '0', 10), hi = parseInt(el.max || '999', 10);
   el.value = Math.max(lo, Math.min(hi, (parseInt(el.value, 10) || 0) + d));
 }
+
+document.querySelectorAll('.table-pick').forEach(function (button) {
+  button.addEventListener('click', function () {
+    var selected = button.getAttribute('aria-pressed') === 'true';
+    button.setAttribute('aria-pressed', String(!selected));
+    button.classList.toggle('primary', !selected);
+    var id = button.dataset.tableId;
+    var form = document.getElementById('bookform');
+    var input = form.querySelector('input[data-table-id="' + id + '"]');
+    if (selected) {
+      if (input) input.remove();
+    } else if (!input) {
+      input = document.createElement('input');
+      input.type = 'hidden'; input.name = 'table_ids'; input.value = id;
+      input.dataset.tableId = id; form.appendChild(input);
+    }
+    var count = form.querySelectorAll('input[data-table-id]').length;
+    document.getElementById('selected-tables').textContent = count
+      ? count + ' table' + (count === 1 ? '' : 's') + ' selected.'
+      : 'No tables selected.';
+  });
+});
 </script>
 {% endblock %}
