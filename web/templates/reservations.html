@@ -125,21 +125,29 @@
     <div class="card" id="reservation-picker">
       <div class="between" style="margin-bottom:10px">
         <h2 style="margin:0">Pick tables on floor map</h2>
-        <span class="sub">Selected tables are held for this booking</span>
+        <span class="sub" id="selected-tables">No tables selected</span>
       </div>
       {% for floor_entry in map_floors %}
-      <h3 style="margin:12px 0 8px">{{ floor_entry.floor.name if floor_entry.floor else 'Main floor' }}</h3>
-      <div style="display:flex;flex-wrap:wrap;gap:10px">
-        {% for zone_entry in floor_entry.zones %}
-        {% for table in zone_entry.tables %}
-        <button type="button" class="btn sm table-pick{% if table.id in booked_ids %} booked{% endif %}"{% if table.id in booked_ids %} data-booked="1"{% endif %} data-table-id="{{ table.id }}" aria-pressed="false">
-          Table {{ table.number }} <span class="sub">({{ table.capacity }})</span>
-        </button>
-        {% endfor %}
-        {% endfor %}
+      {% if map_floors|length > 1 %}<h3 style="margin:12px 0 8px">{{ floor_entry.floor.name if floor_entry.floor else 'Main floor' }}</h3>{% endif %}
+      {% for zone_entry in floor_entry.zones %}
+      <div class="zpanel" style="margin-bottom:12px">
+        <div class="zpanel-head">
+          <span class="zp-dot" style="background: {{ zone_entry.zone.swatch if zone_entry.zone else '#8a9bb0' }}"></span>
+          <strong class="zp-name">{{ zone_entry.zone.name if zone_entry.zone else 'No zone' }}</strong>
+          <span class="zp-meta">{{ zone_entry.tables|length }} table{{ '' if zone_entry.tables|length == 1 else 's' }} · {{ zone_entry.seats }} seats</span>
+        </div>
+        <div class="restbl-grid">
+          {% for table in zone_entry.tables %}
+          <button type="button" class="restbl" data-table-id="{{ table.id }}" aria-pressed="false"
+                  title="Table {{ table.number }} · seats {{ table.capacity }}{% if table.id in booked_ids %} · already has a booking{% endif %}">
+            <span class="rt-n">Table {{ table.number }}{% if table.id in booked_ids %} <span title="Already has a booking">📅</span>{% endif %}</span>
+            <span class="rt-seats">{{ table.capacity }} seats</span>
+          </button>
+          {% endfor %}
+        </div>
       </div>
       {% endfor %}
-      <div id="selected-tables" class="sub" style="margin-top:10px">No tables selected.</div>
+      {% endfor %}
     </div>
     {% endif %}
 
@@ -246,11 +254,11 @@ function bump(id, d) {
   el.value = Math.max(lo, Math.min(hi, (parseInt(el.value, 10) || 0) + d));
 }
 
-document.querySelectorAll('.table-pick').forEach(function (button) {
+document.querySelectorAll('.restbl').forEach(function (button) {
   button.addEventListener('click', function () {
     var selected = button.getAttribute('aria-pressed') === 'true';
     button.setAttribute('aria-pressed', String(!selected));
-    button.classList.toggle('primary', !selected);
+    button.classList.toggle('sel', !selected);
     var id = button.dataset.tableId;
     var form = document.getElementById('bookform');
     var input = form.querySelector('input[data-table-id="' + id + '"]');
@@ -263,8 +271,8 @@ document.querySelectorAll('.table-pick').forEach(function (button) {
     }
     var count = form.querySelectorAll('input[data-table-id]').length;
     document.getElementById('selected-tables').textContent = count
-      ? count + ' table' + (count === 1 ? '' : 's') + ' selected.'
-      : 'No tables selected.';
+      ? count + ' table' + (count === 1 ? '' : 's') + ' selected'
+      : 'No tables selected';
   });
 });
 </script>

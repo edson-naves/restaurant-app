@@ -236,6 +236,10 @@ class Staff(Base):
     # A short availability note shown in the schedule team panel (e.g. "Prefers
     # mornings", "Weekends only").
     availability_note: Mapped[str] = mapped_column(String(60), nullable=False, default="")
+    # A stable colour for this person on the floor plan — their tables show it, so
+    # you see whose is whose at a glance. NULL falls back to a palette by id, so
+    # everyone has a colour without a backfill.
+    color: Mapped[str | None] = mapped_column(String(7), nullable=True)
     hired_on: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     position: Mapped["Position | None"] = relationship(lazy="joined")
@@ -246,6 +250,12 @@ class Staff(Base):
             name="ck_staff_role",
         ),
     )
+
+    @property
+    def swatch(self) -> str:
+        """The floor-plan colour for this person — the one they chose, or a
+        stable palette default keyed on their id."""
+        return self.color or STAFF_PALETTE[(self.id or 0) % len(STAFF_PALETTE)]
 
 
 class Floor(Base):
@@ -270,6 +280,21 @@ class Floor(Base):
 # ready status colours, which the chip's border already uses.
 # Zone colours deliberately avoid the status hues (green=free, amber=occupied,
 # red=ready) and the blue accent, so a zone is never mistaken for a status.
+# Distinct, saturated hues so each waiter's tables stand out on the floor plan
+# and are easy to tell apart at a glance.
+STAFF_PALETTE = (
+    "#6366f1",  # indigo
+    "#0ea5e9",  # sky
+    "#14b8a6",  # teal
+    "#f59e0b",  # amber
+    "#ef4444",  # red
+    "#ec4899",  # pink
+    "#8b5cf6",  # violet
+    "#22c55e",  # green
+    "#f97316",  # orange
+    "#06b6d4",  # cyan
+)
+
 ZONE_PALETTE = (
     "#eab308",  # Main   -> yellow
     "#3b82f6",  # Window -> blue
@@ -801,6 +826,10 @@ class Order(Base):
     kitchen_status: Mapped[str] = mapped_column(String(20), default=KitchenStatus.PENDING)
     guest_count: Mapped[int] = mapped_column(Integer, default=1)
     opened_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    # When a waiter first took the table over (first item / order captured). With
+    # opened_at (seated) and closed_at (left) this gives the two service lead
+    # times: seated->attended and seated->departure.
+    attended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     sent_to_kitchen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     ready_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from datetime import datetime
 from urllib.parse import urlsplit, urlunsplit
 
@@ -96,10 +97,6 @@ def _order_station_status(order: "Order") -> list[dict]:
 
 @router.get("/")
 def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db), staff: Staff = Depends(current_staff)):
-    # Tables currently held for an incoming booking (Reservations 4.1.5): a
-    # free table with an active hold reads as "reserved" here, not free, so a
-    # waiter does not seat a walk-in onto a table about to arrive.
-    holds = reservations_svc.active_holds(db)
     # Retired tables (admin) keep their history but leave the floor.
     tables = db.execute(
         select(RestaurantTable)
@@ -138,32 +135,81 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
             t.status = TableStatus.OCCUPIED
         db.commit()
 
+    # Tables a booking is holding right now (its window is open). A free table in
+    # this map shows as "reserved" instead of free, and can be seated straight
+    # from the map. An already-occupied table with a hold still gets a due-soon
+    # reminder (Reservations 4.1.5) — see "reservation" on the card below.
+    # Auto-drops any no-show past its window.
+    holds = reservations_svc.active_holds(db)
+
+    # Role visibility: managers/owners see every table; a waiter sees only their
+    # own tables plus occupied ones no one has claimed yet (which they can pick
+    # up by opening the order) — never the free ones. Held tables stay visible to
+    # everyone, so a waiter can seat the booking from the map.
+    if staff.role not in (Role.OWNER, Role.MANAGER):
+        tables = [
+            t for t in tables
+            if t.current_waiter_id == staff.id
+            or (t.status != TableStatus.FREE and t.current_waiter_id is None)
+            or t.id in holds
+        ]
+
     cards = []
     for t in tables:
         order = by_table.get(t.id)
         total = sum(i.line_total_cents for i in order.items) if order else 0
+        claimed = t.current_waiter is not None
+        # Food that's up but not yet served — the waiter's cue to run it. Counts
+        # even while the rest of the order is still Preparing, so partial readiness
+        # isn't hidden behind the order's aggregate.
+        ready_ct = sum(
+            i.quantity for i in order.items if i.kitchen_status == KitchenStatus.READY
+        ) if order else 0
+        # Display status, derived (no schema change) — the icon shown on the card:
+        #   seated       occupied but no waiter yet (guests waiting)
+        #   ready_serve  a waiter's on it and food is up — RUN it (wins on partial)
+        #   served       delivered, guests dining
+        #   occupied     order in, kitchen still cooking, nothing up yet
+        res = holds.get(t.id)
+        if t.status == TableStatus.FREE:
+            # A held free table reads as "reserved" (booking incoming), not free.
+            disp = "reserved" if res else "free"
+        elif t.status == TableStatus.READY_TO_PAY:
+            disp = "ready_to_pay"
+        elif not claimed:
+            disp = "seated"
+        elif ready_ct > 0:
+            disp = "ready_serve"
+        elif order is not None and order.status == OrderStatus.SERVED:
+            disp = "served"
+        else:
+            disp = "occupied"
         cards.append(
             {
                 "table": t,
                 "order": order,
                 "total_cents": total,
                 "guests": order.guest_count if order else 0,
+                "disp_status": disp,
                 "waiter": t.current_waiter.name if t.current_waiter else None,
-                # A held reservation, only meaningful for a free table with no
-                # open order — an occupied/paying table shows its order, not
-                # the booking that will follow it.
-                "hold": holds.get(t.id) if order is None else None,
-                # Food that's up but not yet served — the waiter's cue to run it.
-                # Counts even while the rest of the order is still Preparing, so
-                # partial readiness isn't hidden behind the order's aggregate.
-                "ready_count": sum(
-                    i.quantity for i in order.items
-                    if i.kitchen_status == KitchenStatus.READY
-                ) if order else 0,
+                "waiter_id": t.current_waiter_id if claimed else None,
+                # The responsible waiter's floor-plan colour — the card is coloured
+                # by WHO is serving it (None -> unclaimed, a neutral border).
+                "waiter_color": (t.current_waiter.swatch
+                                 if (claimed and t.current_waiter.is_active) else None),
+                "ready_count": ready_ct,
+                # Minutes since the guests sat (order opened). On a seated table
+                # this is how long they've waited for a waiter — the manager's cue.
                 "minutes": (
                     int((datetime.now() - order.opened_at).total_seconds() // 60)
                     if order else 0
                 ),
+                # The booking holding this table right now (None if not reserved).
+                # Carries guest name / time / party for the reserved card, and its
+                # id for the one-tap "Seat" straight from the map — set regardless
+                # of disp_status, so an occupied table due for a booking still
+                # carries the reminder even though its colour stays "occupied".
+                "reservation": res,
                 # Per-station readiness of what's fired (Pizza ✓ · Grill ⏳ …),
                 # shown as a compact strip on the card. Empty when nothing's fired.
                 "stations": _order_station_status(order) if order else [],
@@ -171,10 +217,12 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
         )
 
     def tally(group):
+        def n(status):
+            return sum(1 for c in group if c["disp_status"] == status)
         return {
-            "free": sum(1 for c in group if c["table"].status == TableStatus.FREE),
-            "occupied": sum(1 for c in group if c["table"].status == TableStatus.OCCUPIED),
-            "ready": sum(1 for c in group if c["table"].status == TableStatus.READY_TO_PAY),
+            "free": n("free"), "seated": n("seated"), "occupied": n("occupied"),
+            "ready_serve": n("ready_serve"), "served": n("served"),
+            "ready": n("ready_to_pay"), "reserved": n("reserved"),
         }
 
     counts = tally(cards)
@@ -192,6 +240,33 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
                 seen[z.id] = z
         return sorted(seen.values(), key=lambda z: (z.sort_order or 0, z.name))
 
+    def waiters_of(group):
+        # Distinct waiters covering tables in this section — the colour key that
+        # replaces the name on each card. Cards are coloured by their waiter.
+        seen: dict[int, object] = {}
+        for c in group:
+            w = c["table"].current_waiter
+            if w and w.is_active and w.id not in seen:
+                seen[w.id] = w
+        return sorted(seen.values(), key=lambda w: w.name)
+
+    def zone_groups(group):
+        # Cards bucketed by zone, each with its table + seat totals, for the
+        # bordered per-zone panels in the list view. Ordered as on the floor.
+        buckets: dict[int, dict] = {}
+        for c in group:
+            z = c["table"].zone_ref
+            key = z.id if z else 0
+            b = buckets.setdefault(key, {"zone": z, "cards": [], "tables": 0, "seats": 0})
+            b["cards"].append(c)
+            b["tables"] += 1
+            b["seats"] += c["table"].capacity
+        return sorted(
+            buckets.values(),
+            key=lambda b: (b["zone"].sort_order if b["zone"] else 999,
+                           b["zone"].name if b["zone"] else "zzz"),
+        )
+
     sections = []
     for fl in sorted(
         {c["table"].floor for c in cards if c["table"].floor},
@@ -199,13 +274,25 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
     ):
         group = [c for c in cards if c["table"].floor_id == fl.id]
         sections.append({"floor": fl, "cards": group, "counts": tally(group),
-                         "zones": zones_of(group)})
+                         "zones": zones_of(group), "waiters": waiters_of(group),
+                         "zone_groups": zone_groups(group)})
 
     # A table whose zone was removed would otherwise vanish from the floor.
     homeless = [c for c in cards if not c["table"].floor]
     if homeless:
         sections.append({"floor": None, "cards": homeless, "counts": tally(homeless),
-                         "zones": zones_of(homeless)})
+                         "zones": zones_of(homeless), "waiters": waiters_of(homeless),
+                         "zone_groups": zone_groups(homeless)})
+
+    # Every active zone (with its map rectangle) per floor, so the spatial map can
+    # draw each zone — including empty ones — behind its tables.
+    zones_by_floor: dict[int | None, list] = {}
+    for z in db.execute(
+        select(Zone).where(Zone.is_active.is_(True)).order_by(Zone.sort_order, Zone.name)
+    ).scalars().all():
+        zones_by_floor.setdefault(z.floor_id, []).append(z)
+    for s in sections:
+        s["map_zones"] = zones_by_floor.get(s["floor"].id if s["floor"] else None, [])
 
     # Floors are tabs, not stacked sections (mirrors Manage): a waiter works one
     # floor, and the ?floor= tab picks which. The rest is a tap away, so the
@@ -256,6 +343,7 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
         "show_all": show_all,
         "floor_card_count": len(cards) if show_all else (len(current["cards"]) if current else 0),
         "delivery_pending": delivery_pending,
+        "create_nonce": secrets.token_hex(8),   # one-time token for the Add-table form
         "title": "Floor plan",
     })
 
@@ -362,6 +450,11 @@ def open_order_on_table(db: Session, table: RestaurantTable, guests: int, waiter
         guest_count=guests,
         opened_at=datetime.now(),
     )
+    if wid is not None:
+        # A waiter is responsible from the moment they open the table — the
+        # seated->attended lead time is 0 here; it only grows past 0 when a
+        # table opens unclaimed and reassign_waiter() stamps it later.
+        order.attended_at = order.opened_at
     db.add(order)
     db.flush()
 
@@ -391,6 +484,8 @@ def reassign_waiter(
     ).scalars().first()
     if order:
         order.waiter_id = waiter_id
+        if order.attended_at is None:
+            order.attended_at = datetime.now()
     db.commit()
     return RedirectResponse("/", status_code=303)
 

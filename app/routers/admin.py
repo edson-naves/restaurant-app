@@ -627,17 +627,72 @@ def assign_zone_waiter(
     )
 
 
+@router.post("/zones/{zone_id}/set-tables")
+def set_zone_tables(
+    zone_id: int,
+    count: int = Form(...),
+    capacity: int = Form(...),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Declarative zone size (auto-commit, no button): make the zone hold
+    exactly `count` tables of `capacity` seats. A shortfall is added on free
+    grid squares (_free_cells, same placement as a single Add). A surplus is
+    retired newest-first — soft only, same as every other table removal here,
+    so no service history is ever lost — but ONLY from tables that are FREE
+    with no live order (same guard as the single-table and bulk retire
+    routes). If reducing to `count` would require touching an occupied one,
+    the whole call is rejected and nothing changes — never a partial retire
+    that could pick the wrong table. Capacity likewise only ever applies to a
+    table that is free; an occupied table is left untouched, seated party and
+    all. AJAX endpoint — returns 204."""
+    if not 0 <= count <= 50:
+        raise HTTPException(400, "Tables must be between 0 and 50.")
+    if not 1 <= capacity <= 20:
+        raise HTTPException(400, "Seats must be between 1 and 20.")
+    zone = _zone_or_400(db, zone_id)
+    active = db.execute(
+        select(RestaurantTable).where(
+            RestaurantTable.zone_id == zone.id, RestaurantTable.is_active.is_(True)
+        )
+    ).scalars().all()
+    current = len(active)
+    free = [t for t in active
+            if t.status == TableStatus.FREE and not _live_order_for_table(db, t.id)]
+
+    if count < current:
+        surplus = current - count
+        if len(free) < surplus:
+            raise HTTPException(
+                400,
+                f"Only {len(free)} of this zone's {current} tables are free — "
+                f"seat or clear the rest before reducing to {count}."
+            )
+        for t in sorted(free, key=lambda t: t.id, reverse=True)[:surplus]:
+            t.is_active = False                      # soft-retire only; keeps history
+
+    for t in free:
+        if t.is_active:                              # skip the ones just retired above
+            t.capacity = capacity
+
+    if count > current:
+        _add_tables(db, zone, count - current, capacity)
+    db.commit()
+    return Response(status_code=204)
+
+
 @router.post("/tables/layout")
 def save_layout(
     layout: str = Form(...),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
-    """Persist grid coordinates from the drag editor.
+    """Persist grid coordinates and shape from the drag editor.
 
-    Payload is 'id:x:y' triples separated by commas — a hidden field on a plain
-    form post, so the editor needs script only for the dragging itself and the
-    save path stays the same POST-redirect-GET as every other screen here.
+    Payload is 'id:x:y' triples, each with an optional ':shape' suffix,
+    separated by commas — a hidden field on a plain form post, so the editor
+    needs script only for the dragging itself and the save path stays the
+    same POST-redirect-GET as every other screen here.
     """
     tables = {
         t.id: t for t in db.execute(select(RestaurantTable)).scalars().all()
@@ -655,13 +710,14 @@ def save_layout(
         (t.floor_id, t.pos_x, t.pos_y)
         for t in _active_tables(db) if t.id not in moving
     }
+    shapes = {"round", "square", "rect"}
     for chunk in layout.split(","):
         if not chunk.strip():
             continue
         parts = chunk.split(":")
-        if len(parts) != 3 or not all(p.strip().lstrip("-").isdigit() for p in parts):
+        if len(parts) not in (3, 4) or not all(p.strip().lstrip("-").isdigit() for p in parts[:3]):
             raise HTTPException(400, f"Malformed layout entry '{chunk}'.")
-        tid, x, y = (int(p) for p in parts)
+        tid, x, y = (int(p) for p in parts[:3])
         table = tables.get(tid)
         if table is None:
             raise HTTPException(400, f"Unknown table id {tid} in layout.")
@@ -671,8 +727,12 @@ def save_layout(
             raise HTTPException(400, f"Two tables share position {x},{y}.")
         seen.add((table.floor_id, x, y))
         table.pos_x, table.pos_y = x, y
+        if len(parts) == 4 and parts[3].strip() in shapes:
+            table.shape = parts[3].strip()
     db.commit()
     return RedirectResponse("/admin/tables", status_code=303)
+
+
 
 
 # --------------------------------------------------------------------------
@@ -900,6 +960,10 @@ def edit_zone(
     zone_id: int,
     name: str = Form(...),
     color: str = Form(""),
+    pos_x: int | None = Form(None),
+    pos_y: int | None = Form(None),
+    width: int | None = Form(None),
+    height: int | None = Form(None),
     db: Session = Depends(get_db),
     staff: Staff = Depends(require("settings")),
 ):
@@ -920,6 +984,16 @@ def edit_zone(
     zone.name = name
     if color.strip():
         zone.color = _check_color(color)
+    # The zone's rectangle on the floor map (per-mille box, 0..1000). Optional:
+    # a plain name/colour edit does not touch it.
+    if pos_x is not None:
+        zone.pos_x = max(0, min(1000, pos_x))
+    if pos_y is not None:
+        zone.pos_y = max(0, min(1000, pos_y))
+    if width is not None:
+        zone.width = max(60, min(1000, width))
+    if height is not None:
+        zone.height = max(60, min(1000, height))
     # Keep every table's denormalized label in step with the rename.
     for t in db.execute(
         select(RestaurantTable).where(RestaurantTable.zone_id == zone_id)
@@ -1157,6 +1231,22 @@ def _guard_last_owner(db: Session, person: Staff, verb: str) -> None:
             f"{person.name} is the only active owner — you cannot {verb} them. "
             "Promote another owner first.",
         )
+
+
+@router.post("/staff/{staff_id}/color")
+def set_staff_color(
+    staff_id: int,
+    color: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("staff.manage")),
+):
+    """Set a staff member's floor-plan colour (AJAX; 204). Empty/invalid clears
+    it, falling back to the palette default (Staff.swatch)."""
+    person = db.get(Staff, staff_id)
+    if person is not None:
+        person.color = color if (len(color) == 7 and color.startswith("#")) else None
+        db.commit()
+    return Response(status_code=204)
 
 
 @router.post("/staff/{staff_id}/active")

@@ -58,6 +58,9 @@
   {% for z in f.zones %}
   <form method="post" action="/admin/zones/{{ z.id }}/edit" id="zf{{ z.id }}"></form>
   <form method="post" action="/admin/zones/{{ z.id }}/tables" id="zt{{ z.id }}"></form>
+  <form method="post" action="/admin/zones/{{ z.id }}/set-tables" id="zst{{ z.id }}">
+    <input type="hidden" name="count"><input type="hidden" name="capacity">
+  </form>
   {% endfor %}
 
   <div class="between">
@@ -122,6 +125,21 @@
           <td>
             <input form="zf{{ z.id }}" type="text" name="name" value="{{ z.name }}" style="width:170px">
             {% if not z.is_active %}<span class="pill open">retired</span>{% endif %}
+            {# The zone's rectangle on the floor map (per-mille box, 0..1000) —
+               tucked behind a details toggle so the row stays scannable. #}
+            <details style="margin-top:4px">
+              <summary class="sub" style="cursor:pointer;font-size:11px">Map box</summary>
+              <div style="display:flex;gap:4px;margin-top:4px">
+                <input form="zf{{ z.id }}" type="number" name="pos_x" value="{{ z.pos_x }}"
+                       min="0" max="1000" title="X (0-1000)" style="width:56px">
+                <input form="zf{{ z.id }}" type="number" name="pos_y" value="{{ z.pos_y }}"
+                       min="0" max="1000" title="Y (0-1000)" style="width:56px">
+                <input form="zf{{ z.id }}" type="number" name="width" value="{{ z.width }}"
+                       min="60" max="1000" title="Width" style="width:56px">
+                <input form="zf{{ z.id }}" type="number" name="height" value="{{ z.height }}"
+                       min="60" max="1000" title="Height" style="width:56px">
+              </div>
+            </details>
           </td>
           <td>
             <input form="zf{{ z.id }}" type="color" name="color" value="{{ z.swatch }}"
@@ -140,12 +158,12 @@
           {# Tables/Seats are what you are adding; the Total columns preview
              what the zone will hold once you press Add — current + new. #}
           <td class="num">
-            <input form="zt{{ z.id }}" type="number" name="count" min="0" max="50" value="0"
+            <input id="count{{ z.id }}" form="zt{{ z.id }}" type="number" name="count" min="0" max="50" value="0"
                    class="addcount" data-zone="{{ z.id }}"
                    title="How many tables to add" style="width:72px;text-align:right">
           </td>
           <td class="num">
-            <input form="zt{{ z.id }}" type="number" name="capacity" min="1" max="20" value="2"
+            <input id="cap{{ z.id }}" form="zt{{ z.id }}" type="number" name="capacity" min="1" max="20" value="2"
                    class="addseats" data-zone="{{ z.id }}"
                    title="Seats on each new table" style="width:72px;text-align:right">
           </td>
@@ -156,6 +174,12 @@
           <td style="white-space:nowrap">
             <button form="zt{{ z.id }}" class="btn sm primary addbtn" data-zone="{{ z.id }}"
                     {{ 'disabled' if not z.is_active or not f.is_active else '' }}>Add</button>
+            {# Declarative alternative to Add: "make this zone hold exactly this
+               many tables" — reuses the same two number fields via a tiny sync
+               on submit, rather than duplicating inputs. #}
+            <button type="button" class="btn sm zone-set-exact" data-zone="{{ z.id }}"
+                    {{ 'disabled' if not z.is_active or not f.is_active else '' }}
+                    title="Set this zone to exactly this many tables (extra ones are retired)">Set exact</button>
             <button form="zf{{ z.id }}" class="btn sm">Save</button>
             {% if z.is_active %}
               <form method="post" action="/admin/zones/{{ z.id }}/active" style="display:inline">
@@ -226,5 +250,19 @@
     totalsFor(input.dataset.zone);
   });
 })();
+
+// "Set exact": reuses the Tables/Seats fields, but posts to set-tables (make
+// the zone hold exactly this many) instead of tables (add this many).
+document.querySelectorAll('.zone-set-exact').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    const zoneId = btn.dataset.zone;
+    const count = document.getElementById('count' + zoneId).value;
+    const capacity = document.getElementById('cap' + zoneId).value;
+    const form = document.getElementById('zst' + zoneId);
+    form.count.value = count;
+    form.capacity.value = capacity;
+    form.submit();
+  });
+});
 </script>
 {% endblock %}

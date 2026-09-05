@@ -454,6 +454,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .dot.free { background: var(--free); }
 .dot.occupied { background: var(--occupied); }
 .dot.ready_to_pay { background: var(--ready); }
+.dot.reserved { background: var(--reserved); }
 
 /* Menu admin: item photo thumbnail + upload/remove controls. */
 .menu-thumb {
@@ -467,9 +468,51 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .menu-thumb-acts form { margin: 0; }
 
 .floor-head { margin: 0 0 10px; font-size: 15px; color: var(--muted); }
-.floor {
+/* A bordered panel per zone, stacked — the card grid lives inside each panel
+   (.zpanel-grid); the floor just stacks the panels. */
+.floor { display: flex; flex-direction: column; gap: 16px; }
+.zpanel {
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px;
+  background: color-mix(in srgb, var(--panel) 45%, transparent);
+}
+.zpanel-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.zp-dot { width: 12px; height: 12px; border-radius: 50%; flex: none; }
+.zp-name { font-size: 17px; }
+.zp-meta { color: var(--muted); font-size: 12px; }
+.zpanel-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px;
 }
+/* Legend bar: zone keys on the left, the waiter key pushed to the right. */
+.legend-bar { align-items: center; }
+.legend-waiters { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-left: auto; }
+/* Round initials avatar on a waiter button, ringed in that server's colour. */
+.waiter-btn { padding-left: 4px; }
+.wav {
+  width: 22px; height: 22px; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 800; letter-spacing: .3px; color: var(--ink);
+  background: color-mix(in srgb, var(--wc) 22%, transparent);
+  border: 1.5px solid var(--wc);
+}
+.waiter-all { color: var(--muted); }
+
+/* Reservation table picker (4.1.5): small click-to-select cards inside the
+   same .zpanel used on the Floor page, so the two screens read as one system. */
+.restbl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(94px, 1fr)); gap: 8px; }
+.restbl {
+  display: flex; flex-direction: column; gap: 1px; text-align: left; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 7px 9px; font: inherit; color: var(--ink);
+}
+.restbl:hover { border-color: var(--accent); }
+.restbl > * { pointer-events: none; }
+.restbl .rt-n { font-size: 12px; font-weight: 700; white-space: nowrap; }
+.restbl .rt-seats { font-size: 10px; color: var(--muted); }
+.restbl.sel {
+  border-color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, var(--panel));
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.restbl.sel .rt-n::after { content: " ✓"; color: var(--accent); font-weight: 800; }
 .tbl {
   background: var(--panel); border: 1px solid var(--line); border-left: 5px solid var(--line);
   border-radius: var(--radius); padding: 12px; min-height: 112px;
@@ -479,7 +522,20 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .tbl.free { border-left-color: var(--free); }
 .tbl.occupied { border-left-color: var(--occupied); }
 .tbl.ready_to_pay { border-left-color: var(--ready); }
-.tbl.reserved { border-left-color: var(--reserved); }
+/* Held for a booking: a calm blue with a dashed edge — reads as "incoming, not
+   free, nobody serving yet", distinct from a live, solid-bordered table. */
+.tbl.reserved {
+  border-left-color: var(--reserved); border-style: dashed;
+  background: linear-gradient(0deg, rgba(99,102,241,.06), rgba(99,102,241,.06)), var(--panel);
+}
+/* An occupied table with a booking due inside its hold window: warn staff to
+   turn it before the party arrives. */
+.tbl.due-soon { box-shadow: inset 0 3px 0 var(--warn); }
+.res-due {
+  font-size: 11px; font-weight: 700; color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  border-radius: 8px; padding: 1px 6px; align-self: flex-start;
+}
 .tbl .n { font-weight: 700; font-size: 16px; }
 .tbl .meta { color: var(--muted); font-size: 12px; }
 .tbl .tot { margin-top: auto; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -988,6 +1044,14 @@ tr.dim:hover > td { opacity: 1; }
 .chip .n { font-weight: 700; font-size: 15px; }
 .chip .meta { color: var(--muted); font-size: 11px; }
 .chip.dragging { opacity: .4; }
+/* Shape-cycle toggle in a chip's corner — a tiny borderless icon button so it
+   reads as part of the chip, not a separate control competing for space. */
+.chip-shape {
+  position: absolute; top: 4px; right: 4px; width: 16px; height: 16px;
+  border: none; background: none; padding: 0; line-height: 16px; font-size: 11px;
+  color: var(--muted); cursor: pointer; border-radius: 4px;
+}
+.chip-shape:hover { background: var(--panel-2); color: var(--ink); }
 
 /* Zone marker. The card's left border already carries table status, so the
    zone gets its own channel (a corner dot) rather than competing for it. Shared

@@ -127,6 +127,11 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("zone", "width", "INTEGER NOT NULL DEFAULT 360"),
     ("zone", "height", "INTEGER NOT NULL DEFAULT 300"),
     ("restaurant_table", "shape", "VARCHAR(10) NOT NULL DEFAULT 'round'"),
+    # Waiter colour on the floor plan (nullable — falls back to STAFF_PALETTE by
+    # id, so an existing waiter is coloured without a backfill) and the
+    # seated->attended lead-time stamp (nullable — no historical value to backfill).
+    ("staff", "color", "VARCHAR(7)"),
+    ("order", "attended_at", "TIMESTAMP"),
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW
@@ -184,12 +189,14 @@ def run(engine: Engine, strict: bool = False) -> list[str]:
     applied: list[str] = []
     with engine.begin() as conn:
         for table, column, ddl in ADDED_COLUMNS:
-            rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+            # Quoted: "order" (and any future reserved word) is a valid table
+            # name here but not valid unquoted SQL — PRAGMA/ALTER both need it.
+            rows = conn.execute(text(f'PRAGMA table_info("{table}")')).fetchall()
             if not rows:
                 continue                       # table not created yet; create_all owns it
             if any(r[1] == column for r in rows):
                 continue                       # already migrated
-            conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+            conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN {column} {ddl}'))
             applied.append(f"{table}.{column}")
 
         applied.extend(_backfill_locations(conn))

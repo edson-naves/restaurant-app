@@ -54,11 +54,13 @@
     {% for y in range(rows) %}{% for x in range(cols) %}
       <div class="cell" data-x="{{ x }}" data-y="{{ y }}">
         {% for t in floor_tables if t.pos_x == x and t.pos_y == y %}
-        <div class="chip {{ t.status }}" draggable="true" data-id="{{ t.id }}">
+        <div class="chip {{ t.status }}" draggable="true" data-id="{{ t.id }}" data-shape="{{ t.shape }}">
           {% if t.zone_ref %}
           <i class="zdot" style="background: {{ t.zone_ref.swatch }}"
              title="{{ t.zone_ref.name }}"></i>
           {% endif %}
+          <button type="button" class="chip-shape" title="Cycle table shape (round/square/rect)">{{
+            {'round': '●', 'square': '■', 'rect': '▬'}.get(t.shape, '●') }}</button>
           <span class="n">{{ t.number }}</span>
           {# The zone is carried by the dot's colour, so this line shows who is
              on the table. Blank rather than a dash when nobody is assigned. #}
@@ -327,13 +329,16 @@
   if (!plan) return;
 
   let dragged = null;
+  const SHAPES = ['round', 'square', 'rect'];
+  const SHAPE_ICON = { round: '●', square: '■', rect: '▬' };
 
-  // Serialise every chip's current cell as "id:x:y" triples. Read from the DOM
-  // rather than tracked state so a swap or a cancelled drag can't desync it.
+  // Serialise every chip's current cell + shape as "id:x:y:shape" quads. Read
+  // from the DOM rather than tracked state so a swap or a cancelled drag (or a
+  // shape cycle) can't desync it.
   function serialise() {
     return Array.from(plan.querySelectorAll('.chip')).map(function (chip) {
       const cell = chip.parentElement;
-      return chip.dataset.id + ':' + cell.dataset.x + ':' + cell.dataset.y;
+      return chip.dataset.id + ':' + cell.dataset.x + ':' + cell.dataset.y + ':' + chip.dataset.shape;
     }).join(',');
   }
 
@@ -386,6 +391,20 @@
     if (occupant === dragged) return;
     if (occupant) origin.appendChild(occupant);   // swap, never stack
     cell.appendChild(dragged);
+    refresh();
+  });
+
+  // Shape cycle button: stop it reaching the drag handlers, step round -> square
+  // -> rect -> round, and update the chip's icon + dataset in place.
+  plan.addEventListener('click', function (e) {
+    const btn = e.target.closest('.chip-shape');
+    if (!btn) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const chip = btn.closest('.chip');
+    const next = SHAPES[(SHAPES.indexOf(chip.dataset.shape) + 1) % SHAPES.length];
+    chip.dataset.shape = next;
+    btn.textContent = SHAPE_ICON[next];
     refresh();
   });
 })();

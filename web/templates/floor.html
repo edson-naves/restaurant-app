@@ -25,6 +25,9 @@
       <button type="button" class="legend-btn" data-status="ready_to_pay">
         <i class="dot ready_to_pay"></i>Ready to pay <span data-count="ready_to_pay">{{ counts.ready }}</span>
       </button>
+      <button type="button" class="legend-btn" data-status="reserved" title="Held for a booking — seat from the table">
+        <i class="dot reserved"></i>Reserved <span data-count="reserved">{{ counts.reserved }}</span>
+      </button>
       {% if delivery_pending %}<span>· <a href="/delivery">{{ delivery_pending }} delivery in queue</a></span>{% endif %}
     </div>
   </div>
@@ -59,38 +62,70 @@
   {# Only meaningful when several floors show at once (All, or a cross-floor
      search); the script shows/hides it. A single floor is named by its tab. #}
   <h3 class="floor-head" {% if not show_all %}hidden{% endif %}>{{ sec.floor.name if sec.floor else 'No floor assigned' }}</h3>
-  {% if sec.zones %}
-  <div class="legend" style="margin:0 0 12px">
+  {# One legend bar: zone keys on the left, the waiter colour key on the right
+     (cards are coloured by whoever is covering the table, so this bar — not a
+     name on every card — says who's who and filters to them). #}
+  {% if sec.zones or sec.waiters %}
+  <div class="legend legend-bar" style="margin:0 0 12px">
     {% for z in sec.zones %}
     <button type="button" class="legend-btn zone-btn" data-zone="{{ z.id }}">
       <i class="dot" style="background: {{ z.swatch }}"></i>{{ z.name }}
     </button>
     {% endfor %}
+    {% if sec.waiters %}
+    <div class="legend-waiters">
+      {% for w in sec.waiters %}
+      {% set parts = w.name.split() %}
+      {% set initials = (parts[0][0] ~ (parts[1][0] if parts|length > 1 else ''))|upper %}
+      <button type="button" class="legend-btn waiter-btn" data-waiter="{{ w.id }}">
+        <span class="wav" style="--wc: {{ w.swatch }}">{{ initials }}</span>{{ w.name }}
+      </button>
+      {% endfor %}
+      <button type="button" class="legend-btn waiter-all" data-waiter-all title="Show every server">All staff</button>
+    </div>
+    {% endif %}
   </div>
   {% endif %}
 
 <div class="floor">
-  {% for c in sec.cards %}
+  {% for zg in sec.zone_groups %}
+  <div class="zpanel" data-zone-id="{{ zg.zone.id if zg.zone else '' }}">
+    <div class="zpanel-head">
+      <span class="zp-dot" style="background: {{ zg.zone.swatch if zg.zone else '#8a9bb0' }}"></span>
+      <strong class="zp-name">{{ zg.zone.name if zg.zone else 'No zone' }}</strong>
+      <span class="zp-meta">{{ zg.tables }} table{{ '' if zg.tables == 1 else 's' }} · {{ zg.seats }} seats</span>
+    </div>
+    <div class="zpanel-grid">
+  {% for c in zg.cards %}
     {# Everything worth searching on, lowercased once here so the filter is a
        plain substring test rather than a walk of the DOM. #}
     {% set haystack = (
          'table ' ~ c.table.number ~ ' ' ~ c.table.zone ~ ' ' ~
          (sec.floor.name if sec.floor else '') ~ ' ' ~
          (c.waiter or 'unassigned') ~ ' ' ~
-         c.table.status.replace('_', ' ') ~ ' ' ~
+         c.disp_status.replace('_', ' ') ~ ' ' ~
          (' ready to serve' if c.ready_count else '') ~ ' ' ~
-         (c.order.code if c.order else '')
+         (c.order.code if c.order else '') ~ ' ' ~
+         (('reserved ' ~ c.reservation.guest_name) if c.reservation else '')
        )|lower %}
+    {# Border colour: reserved = calm blue (a booking, nobody serving yet),
+       otherwise the responsible waiter's colour (grey when unclaimed). #}
+    {% set bc = '#3b82f6' if c.disp_status == 'reserved' else (c.waiter_color or '#8a9bb0') %}
     {% if c.order %}
-      <a class="tbl {{ c.table.status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
-         data-status="{{ c.table.status }}" data-floor="{{ sec_floor_id }}"
+      <a class="tbl {{ c.disp_status }}{{ ' due-soon' if (c.reservation and c.disp_status != 'reserved') }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
+         data-status="{{ c.disp_status }}" data-floor="{{ sec_floor_id }}"
          data-mine="{{ '1' if c.table.current_waiter_id == staff.id else '' }}"
          data-ready="{{ '1' if c.ready_count else '' }}"
          data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
-         {% if c.table.zone_ref %}style="border-left-color: {{ c.table.zone_ref.swatch }}"{% endif %}
+         data-waiter="{{ c.waiter_id or '' }}"
+         style="border-left-color: {{ bc }}"
          href="/orders/{{ c.order.id }}">
         <span class="n">Table {{ c.table.number }}</span>
         <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes|duration }}</span>
+        {% if c.reservation %}
+        {# This occupied table is held for an incoming booking — turn it in time. #}
+        <span class="res-due" title="Reserved — {{ c.reservation.guest_name }} · {{ c.reservation.party_size }} guests at {{ c.reservation.at.strftime('%H:%M') }} — turn this table">📅 due {{ c.reservation.at.strftime('%H:%M') }}</span>
+        {% endif %}
         {% if c.stations %}
         {# Per-station readiness of what's fired — the detail behind the card's
            aggregate status (hover a chip for the station name + count). #}
@@ -117,21 +152,21 @@
         {% elif c.order.status == 'served' %}
         <span class="pill os-served">{{ c.order.status|ostatus }}</span>
         {% endif %}
-        <span class="pill {{ c.table.status }}">{{ c.table.status.replace('_',' ') }}</span>
+        <span class="pill {{ c.disp_status }}">{{ c.disp_status.replace('_',' ') }}</span>
         <span class="tot">${{ c.total_cents|money }}</span>
       </a>
     {% else %}
-      <details class="tbl {{ 'reserved' if c.hold else c.table.status }}" data-find="{{ haystack }}{{ (' ' ~ c.hold.guest_name ~ ' reserved')|lower if c.hold else '' }}" data-number="{{ c.table.number }}"
-         data-status="{{ 'reserved' if c.hold else c.table.status }}" data-floor="{{ sec_floor_id }}"
+      <details class="tbl {{ c.disp_status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
+         data-status="{{ c.disp_status }}" data-floor="{{ sec_floor_id }}"
          data-mine="{{ '1' if c.table.current_waiter_id == staff.id else '' }}"
          data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
-         {% if c.table.zone_ref %}style="border-left-color: {{ c.table.zone_ref.swatch }}"{% endif %}>
+         style="border-left-color: {{ bc }}">
         <summary style="cursor:pointer;list-style:none">
           <span class="n">Table {{ c.table.number }}</span><br>
           <span class="meta">{{ c.table.zone }} · seats {{ c.table.capacity }}</span><br>
           {% if c.waiter %}<span class="meta">{{ c.waiter }}</span><br>{% endif %}
-          {% if c.hold %}
-          <span class="pill reserved">📅 {{ c.hold.guest_name }} · {{ c.hold.at.strftime('%H:%M') }}</span>
+          {% if c.reservation %}
+          <span class="pill reserved">📅 {{ c.reservation.guest_name }} · {{ c.reservation.at.strftime('%H:%M') }}</span>
           {% else %}
           <span class="pill free">free</span>
           {% endif %}
@@ -146,11 +181,11 @@
           {% endif %}
         </summary>
         {% if can('orders.manage') %}
-        {% if c.hold %}
+        {% if c.reservation %}
         {# Held for an incoming booking — one tap seats the party that's
            actually arriving, straight onto this table, no re-picking. #}
-        <form method="post" action="/reservations/{{ c.hold.id }}/seat-here" style="margin-top:10px">
-          <button class="btn primary sm" style="width:100%">Seat {{ c.hold.guest_name }} here</button>
+        <form method="post" action="/reservations/{{ c.reservation.id }}/seat-here" style="margin-top:10px">
+          <button class="btn primary sm" style="width:100%">Seat {{ c.reservation.guest_name }} here</button>
         </form>
         <p class="meta" style="margin-top:6px">Or open for a walk-in instead:</p>
         {% endif %}
@@ -186,6 +221,9 @@
         {% endif %}
       </details>
     {% endif %}
+  {% endfor %}
+    </div>
+  </div>
   {% endfor %}
 </div>
 </section>
@@ -273,6 +311,7 @@
 
   let statusFilter = null;
   let zoneFilter = null;
+  let waiterFilter = null;
   // "My tables" defaults on for anyone actually covering tables; someone with
   // none assigned (owner, manager, kitchen) has no such card, so it stays off
   // and they see the whole floor.
@@ -314,23 +353,35 @@
   }
   if (addFloor) addFloor.addEventListener('change', fillZones);
 
+  // "Occupied" is a bucket, not one raw disp_status: seated / ready_serve /
+  // served are all still an occupied table underneath, just with a finer badge
+  // on the card. The legend only offers Free / Occupied / Ready to pay /
+  // Reserved, so those three collapse into the one filter/count.
+  const OCCUPIED_GROUP = ['occupied', 'seated', 'ready_serve', 'served'];
+
   function apply() {
     const searching = parse(box.value).length > 0;
     // A text search or a zone pick reaches across floors; otherwise the active
     // floor tab scopes the view.
     const floorFree = searching || zoneFilter !== null;
-    const avail = { free: 0, occupied: 0, ready_to_pay: 0 };
+    const avail = { free: 0, occupied: 0, ready_to_pay: 0, reserved: 0 };
     let shown = 0;
 
     cards.forEach(function (card) {
       const textOk = cardMatches(card.dataset.find, card.dataset.number, box.value);
       const zoneOk = !zoneFilter || card.dataset.zone === zoneFilter;
+      const waiterOk = !waiterFilter || card.dataset.waiter === waiterFilter;
       const floorOk = floorFree || !activeFloor || card.dataset.floor === activeFloor;
-      const mineOk = !mineFilter || card.dataset.mine === '1';
+      // Reserved tables stay visible even under "my tables": a booking isn't any
+      // one waiter's yet, but whoever is on the floor seats it from the map.
+      const mineOk = !mineFilter || card.dataset.mine === '1' || card.dataset.status === 'reserved';
       const readyOk = !readyFilter || card.dataset.ready === '1';
-      const scopeOk = textOk && zoneOk && floorOk && mineOk && readyOk;   // everything but status
-      if (scopeOk && avail.hasOwnProperty(card.dataset.status)) avail[card.dataset.status]++;
-      const hit = scopeOk && (!statusFilter || card.dataset.status === statusFilter);
+      const scopeOk = textOk && zoneOk && waiterOk && floorOk && mineOk && readyOk;   // everything but status
+      const bucket = OCCUPIED_GROUP.indexOf(card.dataset.status) !== -1 ? 'occupied' : card.dataset.status;
+      if (scopeOk && avail.hasOwnProperty(bucket)) avail[bucket]++;
+      const statusOk = !statusFilter || card.dataset.status === statusFilter ||
+        (statusFilter === 'occupied' && OCCUPIED_GROUP.indexOf(card.dataset.status) !== -1);
+      const hit = scopeOk && statusOk;
       card.hidden = !hit;
       if (hit) shown++;
     });
@@ -339,6 +390,9 @@
     countSpans.forEach(function (s) { s.textContent = avail[s.dataset.count] || 0; });
     statusBtns.forEach(function (b) { b.classList.toggle('on', b.dataset.status === statusFilter); });
     zoneBtns.forEach(function (b) { b.classList.toggle('on', b.dataset.zone === zoneFilter); });
+    document.querySelectorAll('.legend-btn[data-waiter]').forEach(function (b) {
+      b.classList.toggle('on', b.dataset.waiter === waiterFilter);
+    });
     floorTabs.forEach(function (a) { a.classList.toggle('on', a.dataset.floor === activeFloor); });
     if (mineBtn) mineBtn.classList.toggle('on', mineFilter);
 
@@ -354,6 +408,12 @@
     sections.forEach(function (sec) {
       const head = sec.querySelector('.floor-head');
       if (head) head.hidden = sec.hidden || !multiFloor;
+    });
+
+    // Hide a zone panel whose cards are all filtered out, so no empty bordered
+    // panel (with just its header) is left behind.
+    document.querySelectorAll('.zpanel').forEach(function (p) {
+      p.hidden = !p.querySelector('.tbl[data-find]:not([hidden])');
     });
 
     const filtering = searching || statusFilter !== null || zoneFilter !== null || mineFilter || readyFilter;
@@ -381,6 +441,27 @@
         if (z) activeFloor = z.dataset.floor;
       }
       apply();
+    });
+  });
+
+  Array.from(document.querySelectorAll('.legend-btn[data-waiter]')).forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      waiterFilter = (waiterFilter === btn.dataset.waiter) ? null : btn.dataset.waiter;
+      apply();
+    });
+  });
+
+  // "All staff" clears the waiter filter, so the floor shows every server again.
+  Array.from(document.querySelectorAll('[data-waiter-all]')).forEach(function (btn) {
+    btn.addEventListener('click', function () { waiterFilter = null; apply(); });
+  });
+
+  // An open card (a table's seat/reservation options) closes when you click
+  // anywhere outside it — the summary that opened it stays inside, so opening
+  // one never closes itself.
+  document.addEventListener('click', function (e) {
+    document.querySelectorAll('details.tbl[open]').forEach(function (d) {
+      if (!d.contains(e.target)) d.removeAttribute('open');
     });
   });
 
