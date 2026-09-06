@@ -17,8 +17,9 @@ state. Current state is recorded from "### Floor UI + Reservations" onward.
 Current line:
 
 ```text
-main (local)     8e5ecf6  ac0be60 + test-evidence commit; AHEAD of origin/main
-                          by 1 — not yet pushed
+main (local)     2 commits ahead of origin/main, not yet pushed:
+                   8e5ecf6  test-evidence commit, independently APPROVED
+                   + a docs-only checkpoint commit on top of it
 origin/main      ac0be60  pushed 2026-09-06; production runs this
 production       ac0be60  /healthz HEALTHY; exact deployed SHA not
                           independently confirmable (no Render dashboard/API
@@ -710,17 +711,18 @@ recorded in the Release A checkpoint package.
 
 ```text
 NONE implemented and pending. Two administrative decisions are open:
-  1. push local main (8e5ecf6) to origin/main — the evidence-preservation
-     commit is APPROVED but not yet pushed;
+  1. push local main (2 commits ahead: the evidence-preservation commit,
+     independently APPROVED, plus a docs-only checkpoint on top) to
+     origin/main;
   2. decide the fate of the 5 pre-existing docs-only commits (topmost
      2a617b5) that fell off main's line during the Reservations
      fast-forward — preserved via reflog, not reintegrated.
 ```
 
 G1-G8 are complete. Release B (Payment/Security Stage 1/2a/2b), Floor UI +
-Reservations, and Floor spatial are all DEPLOYED — `origin/main` is `ac0be60`;
-local `main` is `8e5ecf6` (one unpushed evidence commit ahead); production
-`/healthz` is HEALTHY.
+Reservations, and Floor spatial are all DEPLOYED — `origin/main` and
+production are `ac0be60`; local `main` is 2 commits ahead, not yet pushed;
+production `/healthz` is HEALTHY.
 
 Residual risks carried forward, not fixed, not blocking, pending their own
 authorization: multi-table partial availability in `seat_reservation_here`;
