@@ -6,24 +6,22 @@ Authoritative execution checkpoint.
 
 Read this file before modifying production code.
 
-Last consolidated: 2026-09-06, after Floor UI + Reservations and Floor spatial
-were both integrated and deployed, and the evidence-preservation commit
-`8e5ecf6` was independently reviewed. The block below this line, through
-"Post-A hardening", is superseded history — kept for provenance, not current
-state. Current state is recorded from "### Floor UI + Reservations" onward.
+Last consolidated: 2026-09-06, after Floor UI + Reservations, Floor spatial,
+test-evidence preservation, and documentation portability reconciliation were
+integrated and pushed. The block below this line, through "Post-A hardening",
+is superseded history — kept for provenance, not current state. Current state
+is recorded from "### Floor UI + Reservations" onward.
 
 ## Repository / Branch Reality
 
 Current line:
 
 ```text
-main (local)     2 commits ahead of origin/main, not yet pushed:
-                   8e5ecf6  test-evidence commit, independently APPROVED
-                   + a docs-only checkpoint commit on top of it
-origin/main      ac0be60  pushed 2026-09-06; production runs this
-production       ac0be60  /healthz HEALTHY; exact deployed SHA not
-                          independently confirmable (no Render dashboard/API
-                          access from this session)
+main (local)     c39856a  synchronized with origin/main
+origin/main      c39856a  pushed 2026-09-06
+production       /healthz HEALTHY after the push; exact deployed SHA not
+                 independently confirmable (no Render dashboard/API access
+                 from this session)
 ```
 
 `b0ab8e7` / `7068bb4` / `release/payment-security` / `release/post-a-hardening`
@@ -440,7 +438,7 @@ Out of scope, confirmed unaffected: hard-delete of a table, reservation cards,
 Stage 2c, B3/B4, Payment, the multi-table partial-availability risk, and the
 `open_order_on_table` lock.
 
-### Evidence-preservation commit — `8e5ecf6` — APPROVED, not yet pushed
+### Evidence-preservation commit — `8e5ecf6` — APPROVED / INTEGRATED / PUSHED
 
 ```text
 Author: enave
@@ -461,8 +459,8 @@ names the Floor-spatial picker redesign had already renamed) were genuinely
 corrected, not just committed as-is; all 5 files re-run clean against the
 current code. **Verdict: APPROVED.**
 
-Local `main` has been fast-forwarded to this commit. It has not been pushed
-to `origin/main` — that is a separate, still-pending authorization.
+This commit was fast-forwarded into local `main` and pushed to `origin/main`;
+it remains in the ancestry of the current `c39856a` checkpoint.
 
 ## Release A — integration history (now DEPLOYED)
 
@@ -707,7 +705,7 @@ and the `DATABASE_URL` SQLite fallback still open, the inert `Security_Key`
 variable, the empty Render Postgres instance with an exposed credential — is
 recorded in the Release A checkpoint package.
 
-## Documentation reconciliation — IN PROGRESS, PENDING INDEPENDENT REVIEW
+## Documentation reconciliation — CLOSED / INTEGRATED / DEPLOYED
 
 ```text
 Source: audit of 5 orphaned docs-only branches (docs/portability-gate @ 2a617b5
@@ -715,7 +713,9 @@ Source: audit of 5 orphaned docs-only branches (docs/portability-gate @ 2a617b5
         the separately-superseded docs/exp-000-evidence and docs/deploy-reality)
 Branch/worktree: docs/portability-reconciliation, from a984172
 Implementer: Claude
-Reviewer: pending assignment
+Reviewer: independent reviewer session
+Commit: c39856a88199092ed7ed9420a8b60289b29fe74f
+Verdict: APPROVED — VERDICT UNCHANGED
 ```
 
 `2a617b5` and its two ancestors were never merged into `main` — they fell off
@@ -738,27 +738,33 @@ recorded above; this file already supersedes it. Only this note was added.
 `docs/exp-000-portability`, `docs/exp-000-closeout`, `docs/exp-000-evidence`,
 and `docs/deploy-reality` contributed nothing beyond what `2a617b5` already
 carries or what `main` already has via a different cherry-picked path — see
-the audit for detail. Not integrated as separate branches; safe to delete once
-this reconciliation is approved, not before.
+the audit for detail. They were not integrated as separate branches. Their
+useful content is now preserved on `main`, so the five historical branches are
+superseded and eligible for later removal with explicit authorization.
 
-Awaiting independent review before commit.
+The first independent review returned `FIX REQUIRED` for two stale current-state
+claims inherited from the old common base. The implementer corrected only those
+claims; re-review returned `APPROVED`. A final read-only check confirmed that the
+three trailing-whitespace findings in `STAGE2C_INTEGRATION_DESIGN.md` are exactly
+two intentional Markdown line-break spaces per line, byte-identical to `2a617b5`;
+the verdict remained approved. The commit was fast-forwarded into `main`, pushed,
+and `/healthz` returned HTTP 200 `ok`. The exact SHA served by Render was not
+directly observable without dashboard/API access.
 
 ## Next Authorized Action
 
 ```text
-NONE implemented and pending. Two administrative decisions are open:
-  1. push local main (2 commits ahead: the evidence-preservation commit,
-     independently APPROVED, plus a docs-only checkpoint on top) to
-     origin/main;
-  2. decide the fate of the 5 pre-existing docs-only commits (topmost
-     2a617b5) that fell off main's line during the Reservations
-     fast-forward — preserved via reflog, not reintegrated.
+NONE implemented and pending. The next proposed product slice is a separately
+designed and authorized fix for the proven `open_order_on_table` PostgreSQL
+race. Administrative cleanup of the five superseded documentation branches is
+also optional and requires explicit authorization.
 ```
 
 G1-G8 are complete. Release B (Payment/Security Stage 1/2a/2b), Floor UI +
-Reservations, and Floor spatial are all DEPLOYED — `origin/main` and
-production are `ac0be60`; local `main` is 2 commits ahead, not yet pushed;
-production `/healthz` is HEALTHY.
+Reservations, Floor spatial, test-evidence preservation, and the documentation
+reconciliation are integrated and pushed — local `main` and `origin/main` are
+`c39856a`. Production `/healthz` is HEALTHY; the exact deployed SHA remains
+unconfirmed because this session has no Render dashboard/API access.
 
 Residual risks carried forward, not fixed, not blocking, pending their own
 authorization: multi-table partial availability in `seat_reservation_here`;
