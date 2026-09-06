@@ -6,11 +6,29 @@ Authoritative execution checkpoint.
 
 Read this file before modifying production code.
 
-Last consolidated: 2026-09-02, after Release B gates G1-G5 passed locally.
+Last consolidated: 2026-09-06, after Floor UI + Reservations and Floor spatial
+were both integrated and deployed, and the evidence-preservation commit
+`8e5ecf6` was independently reviewed. The block below this line, through
+"Post-A hardening", is superseded history — kept for provenance, not current
+state. Current state is recorded from "### Floor UI + Reservations" onward.
 
 ## Repository / Branch Reality
 
 Current line:
+
+```text
+main (local)     8e5ecf6  ac0be60 + test-evidence commit; AHEAD of origin/main
+                          by 1 — not yet pushed
+origin/main      ac0be60  pushed 2026-09-06; production runs this
+production       ac0be60  /healthz HEALTHY; exact deployed SHA not
+                          independently confirmable (no Render dashboard/API
+                          access from this session)
+```
+
+`b0ab8e7` / `7068bb4` / `release/payment-security` / `release/post-a-hardening`
+below are the Release A / Release B history that predates Floor UI +
+Reservations and Floor spatial — real, but no longer current. Do not treat
+anything in this section as present-tense.
 
 ```text
 main (local)              b0ab8e7  deployed code plus incident correction; local only
@@ -301,6 +319,150 @@ shared table, Order, BusinessDay, permissions, migration, payment, or timezone b
 The Kitchen closure recorded above (Stage A / B1 / B2 and B2.2 = APPROVED / CLOSED;
 B3/B4 = DEFERRED / NOT AUTHORIZED) and the Payment/Security statuses remain unchanged.
 
+### Floor UI + Reservations (table-hold model) — CLOSED / INTEGRATED / DEPLOYED
+
+```text
+Decision: picker/mapa (floor-map); cards stayed out of scope
+Implementer: Codex
+Reviewer: Claude
+Branch/worktree: feat/floor-reservations-cut, from 489f6d2
+Commit: ddd5add6d564ca6ea90bbd29422dc22a7e620aaf
+```
+
+Delivered: `reservation_table` (N:N), Zone rectangle fields, `RestaurantTable.shape`,
+the reconciled `app/services/reservations.py` (availability engine + hold-settings),
+lock + `calculate_availability` wired into `add_reservation`/`seat_reservation_here`,
+holds surfaced on the live Floor plan, four reservation settings defaults.
+
+Independent review found one real concurrency bug (stale identity-map read in
+`seat_reservation_here` after the `FOR UPDATE` lock) — fixed, re-verified against
+real Postgres, re-reviewed, approved. Evidence: `test_reservations_map.py` 16/16;
+`pg_reservation_overlap_race_proof.py` and `pg_seat_here_race_proof.py` 2/2 each
+against a disposable Postgres; `test_pg_migration.py` 26/26; fresh bootstrap proven
+equal to upgrade from `489f6d2` for the 5 new columns; full standalone regression
+green except the pre-existing, unrelated `test_e2e.py` (needs a live server).
+
+Fast-forwarded `origin/main` from `489f6d2` to `ddd5add` and pushed. `/healthz`
+HEALTHY post-deploy. SHA served by Render not independently confirmed (no
+dashboard/API access from this session) — inferred from the fail-closed boot
+guard plus `origin/main` state, not observed directly.
+
+Known residual risks, not fixed here, not blocking:
+
+```text
+seat-here + multi-table reservation   if only part of the held tables survive
+                                       revalidation, the code seats the full
+                                       party across whatever remains, without
+                                       checking aggregate capacity
+walk-in override on a reserved table  orphans the original reservation
+                                       (stays WAITING, points at an occupied
+                                       table); no product decision made yet
+open_order_on_table                   still has no row lock or DB constraint;
+                                       pre-existing, confirmed exploitable via
+                                       a real-Postgres proof, out of scope here
+```
+
+Out of scope, confirmed unaffected: Stage 2c, B3/B4, reopening B2,
+Strategy/PostHog/.github/menu_stations_export.csv/framework-experiments variants.
+
+### DEV inventory vs `ddd5add` (read-only, recorded)
+
+A full inventory of `feat/floor-map`, `feat/reservation-availability`,
+`feat/reservation-hold-settings`, `feat/reservation-ui-1`, and the uncommitted
+diff in the `restaurant_app` worktree, against `ddd5add`, found:
+
+- Kitchen (Stage A/B1/B2/B2.2): fully integrated, nothing outstanding.
+- Reservations (availability, hold-settings): fully integrated; diff against the
+  source branches is naming/docstring only, logic identical.
+- Floor spatial (zones-as-rectangles, drag, auto-relayout, shapes, waiter colour,
+  per-zone waiter tool): **not integrated** — committed only on `feat/floor-map`,
+  on a base older than `045dfd5`.
+- `restaurant_app`'s uncommitted diff (7 files, 634 lines): a superseded, earlier
+  draft of the same reservation picker/holds (`add_reservation`/`seat_reservation_here`
+  without the lock `ddd5add` has) — archived, not ported — plus a `floor.html`/
+  `reservations.html`/`app.css`/`admin_settings.html` top layer with real,
+  not-yet-integrated content: reserved/due-soon status on the live Floor (depends
+  on the Floor-spatial backend below), a two-column reservation-picker layout, and
+  independent hold-window settings form fields. `admin_settings.html`'s form
+  fields were flagged as portable on their own; the rest requires the Floor
+  spatial slice first.
+- `release/kitchen-sync`: obsolete, superseded, kept for history only.
+- No Schedule branch/commit exists — only planning language in this file.
+
+### Floor spatial (zones, drag, relayout, shapes, colour) — CLOSED / INTEGRATED / DEPLOYED
+
+```text
+Product decision: soft-retire stays the only table-removal path; the
+                   hard-delete endpoint on feat/floor-map was NOT ported
+Implementer: Codex
+Reviewer: Claude
+Branch/worktree: feat/floor-spatial-cut, from ddd5add
+Commit: ac0be6079b692eddc34a4ac5e83de4270f160fec
+```
+
+Delivered, additively onto `ddd5add`'s existing grid-based admin pages — the
+free-placement/unified-page redesign on `feat/floor-map` was explicitly NOT
+ported: zones as editable rectangles (`Zone.pos_x/pos_y/width/height`, already
+added in the Reservations slice; edited via `edit_zone`), table drag +
+shape via `save_layout` (backward-compatible 3-or-4-field payload),
+`set_zone_tables` (declarative zone sizing), `set_staff_color`/`Staff.color`/
+`Staff.swatch`, `floor_plan()` card data (`disp_status`, `waiter_color`,
+`zone_groups`, `reservation`, `attended_at`), reserved/due-soon status on the
+live Floor, and the reservation-picker grouped into the same zone panels as
+the Floor page. New columns `staff.color`, `order.attended_at`.
+
+Independent review found one real blocker before approval: `set_zone_tables`
+could soft-retire a table that was `occupied` with a live order, orphaning
+that order from the visible Floor. Fixed — retirement now only ever touches a
+table that is both `status == FREE` and has no live order (`_live_order_for_table`,
+the same guard `edit_table`/bulk-retire already use); if the reduction would
+require touching an occupied table, the whole call is rejected and nothing
+changes; capacity likewise only ever changes on a free table. Re-verified,
+re-reviewed, approved.
+
+Evidence at approval time: `test_floor_spatial.py` 36/36 (incl. the
+occupied-table rejection case); `test_reservations_map.py` 16/16 (re-verified
+against the Floor-spatial changes, not just the Reservations slice alone);
+`pg_reservation_overlap_race_proof.py` and `pg_seat_here_race_proof.py` 2/2
+each against a disposable Postgres; fresh bootstrap proven equal to upgrade
+for the 2 new columns, on both SQLite (this fix also corrected a real,
+previously-latent bug: the SQLite branch of `migrate.run()` did `PRAGMA
+table_info(order)` / `ALTER TABLE order ADD COLUMN` unquoted — `order` is a
+SQL reserved word; fixed to `"order"` in both statements) and Postgres; full
+standalone regression green except the pre-existing `test_e2e.py`.
+
+Fast-forwarded `origin/main` from `ddd5add` to `ac0be60` and pushed.
+`/healthz` HEALTHY post-deploy; SHA served not independently confirmed, same
+caveat as the Reservations deploy.
+
+Out of scope, confirmed unaffected: hard-delete of a table, reservation cards,
+Stage 2c, B3/B4, Payment, the multi-table partial-availability risk, and the
+`open_order_on_table` lock.
+
+### Evidence-preservation commit — `8e5ecf6` — APPROVED, not yet pushed
+
+```text
+Author: enave
+Branch: feat/floor-spatial-cut, one commit ahead of ac0be60
+Commit: 8e5ecf6b8ba0aa44c5485f8ba0512f66cf2c0539
+```
+
+Adds, as tracked files for the first time, the required evidence for both
+Floor slices — previously excluded from every integration commit on request,
+which meant none of it survived in `origin/main`'s history and would be lost
+if the working worktrees were ever discarded:
+`tests/test_reservations_map.py`, `tests/test_floor_spatial.py`,
+`tests/pg_reservation_overlap_race_proof.py`,
+`tests/pg_seat_here_race_proof.py`, `tests/pg_table_open_race_proof.py`.
+Test-only — zero lines of application code. Independently reviewed: confirmed
+the two stale assertions in `test_reservations_map.py` (checking CSS class
+names the Floor-spatial picker redesign had already renamed) were genuinely
+corrected, not just committed as-is; all 5 files re-run clean against the
+current code. **Verdict: APPROVED.**
+
+Local `main` has been fast-forwarded to this commit. It has not been pushed
+to `origin/main` — that is a separate, still-pending authorization.
+
 ## Release A — integration history (now DEPLOYED)
 
 Kitchen Stage A / B1 / B2 / B2.2 was reconstructed onto `045dfd5` per the
@@ -547,16 +709,31 @@ recorded in the Release A checkpoint package.
 ## Next Authorized Action
 
 ```text
-G6 — owner may authorize fast-forwarding local main to release/payment-security
+NONE implemented and pending. Two administrative decisions are open:
+  1. push local main (8e5ecf6) to origin/main — the evidence-preservation
+     commit is APPROVED but not yet pushed;
+  2. decide the fate of the 5 pre-existing docs-only commits (topmost
+     2a617b5) that fell off main's line during the Reservations
+     fast-forward — preserved via reflog, not reintegrated.
 ```
 
-G1-G5 are complete. Production remains healthy at `7068bb4`; the Release B
-candidate is local only. Passing G5 does not authorize G6, and advancing local
-`main` does not authorize push/deploy.
+G1-G8 are complete. Release B (Payment/Security Stage 1/2a/2b), Floor UI +
+Reservations, and Floor spatial are all DEPLOYED — `origin/main` is `ac0be60`;
+local `main` is `8e5ecf6` (one unpushed evidence commit ahead); production
+`/healthz` is HEALTHY.
 
-Not authorized: NEW pushes, NEW deployments, production mutation, Render
-configuration changes, removal of the inert `Security_Key` / `SECRET_KEU`
-variables, or cleanup of the smoke data.
+Residual risks carried forward, not fixed, not blocking, pending their own
+authorization: multi-table partial availability in `seat_reservation_here`;
+walk-in override orphaning a reservation; `open_order_on_table` has no row
+lock (proven exploitable on real Postgres); `set_zone_tables` has no row lock
+against a concurrent seat (narrow window, admin action, lower priority than
+the other three).
 
-Do not start Stage 2c, B3/B4, reopen B2, or integrate Floor/Reservations/Schedule
-without a new authorized slice.
+Not authorized: NEW pushes beyond what a future explicit authorization covers,
+NEW deployments, production mutation, Render configuration changes, removal of
+the inert `Security_Key` / `SECRET_KEU` variables, cleanup of the smoke data,
+fixing any residual risk above without its own authorization, or reservation
+cards.
+
+Do not start Stage 2c, B3/B4, reopen B2, or touch `open_order_on_table`'s or
+`set_zone_tables`'s locking without a new authorized slice.
