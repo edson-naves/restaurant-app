@@ -707,6 +707,42 @@ and the `DATABASE_URL` SQLite fallback still open, the inert `Security_Key`
 variable, the empty Render Postgres instance with an exposed credential — is
 recorded in the Release A checkpoint package.
 
+## Documentation reconciliation — IN PROGRESS, PENDING INDEPENDENT REVIEW
+
+```text
+Source: audit of 5 orphaned docs-only branches (docs/portability-gate @ 2a617b5
+        and its ancestors docs/exp-000-portability, docs/exp-000-closeout; plus
+        the separately-superseded docs/exp-000-evidence and docs/deploy-reality)
+Branch/worktree: docs/portability-reconciliation, from a984172
+Implementer: Claude
+Reviewer: pending assignment
+```
+
+`2a617b5` and its two ancestors were never merged into `main` — they fell off
+during the Reservations fast-forward (`ddd5add` was cut from `489f6d2`
+directly). `AGENTS.md`, `docs/00_PROJECT_CONTEXT.md`, `docs/01_ARCHITECTURE.md`,
+`docs/02_DECISIONS.md`, `docs/05_AI_HANDOFF.md`, both payment MOCs, and
+`PAYMENT_BRANCH_RECONCILIATION.md` had not been touched on `main` since
+`489f6d2` either, so `2a617b5`'s corrections to them (mainly: "approved but
+unmerged" → "deployed but dormant" now that Release B has shipped; ADR-029;
+the `AGENTS.md` Recovery/Portability-Gate sections; MOCs no longer duplicating
+a stage-status snapshot `03_CURRENT_WORK.md` already owns) applied as direct,
+conflict-free substitutions. Three new evidence files
+(`docs/Evidence/Payments/md/*.md`, `docs/framework-experiments/EXP-000_...md`)
+were added verbatim — pure additions, nothing to reconcile.
+
+This file is deliberately NOT replaced by `2a617b5`'s version of it — that
+version predates Floor UI + Reservations, Floor spatial, and everything
+recorded above; this file already supersedes it. Only this note was added.
+
+`docs/exp-000-portability`, `docs/exp-000-closeout`, `docs/exp-000-evidence`,
+and `docs/deploy-reality` contributed nothing beyond what `2a617b5` already
+carries or what `main` already has via a different cherry-picked path — see
+the audit for detail. Not integrated as separate branches; safe to delete once
+this reconciliation is approved, not before.
+
+Awaiting independent review before commit.
+
 ## Next Authorized Action
 
 ```text

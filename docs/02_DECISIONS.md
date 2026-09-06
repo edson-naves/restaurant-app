@@ -111,7 +111,8 @@ Do not add multi-tenancy speculatively.
 Persisted money uses integer minor units (cents). This does not approve every current percentage-calculation implementation detail.
 
 ## ADR-018 — Payment/Security Stages 1, 2a and 2b Remain Approved Target Architecture
-**Status:** Accepted
+**Status:** Accepted — **classification superseded by ADR-029** (Stage 1/2a/2b are
+deployed; the `APPROVED BUT UNMERGED` classification below is historical)
 
 Git reconciliation confirmed Stage 1/2a/2b exist on `fix/p0-security-and-payments` and were never merged into main or `feat/floor-map`.
 
@@ -128,7 +129,7 @@ Their absence from the current line is branch divergence, not rejection.
 This ADR does not authorize integration.
 
 ## ADR-019 — Durable External Payment Intent/Evidence Is Required in the Approved Target
-**Status:** Accepted
+**Status:** Accepted — **merge status superseded by ADR-029**
 
 Approved Stage 2a requires durable attempt/evidence around external financial operations and explicit ambiguous-state handling.
 
@@ -142,32 +143,36 @@ Approved Stage 2a remediation uses an independent durable refund-attempt lifecyc
 Current `feat/floor-map` still uses local Refund rows without provider refund lifecycle.
 
 ## ADR-021 — Approved Target Uses an Explicit Payment Provider Boundary
-**Status:** Accepted
+**Status:** Accepted — **merge status superseded by ADR-029**
 
 Stage 2b established a provider abstraction. Unknown/unsupported provider behavior must fail explicitly.
 
 This is approved but unmerged.
 
 ## ADR-022 — Approved Production Configuration Direction Is Fail-Closed
-**Status:** Accepted
+**Status:** Accepted — **merge status superseded by ADR-029**
 
 Stage 1 established the approved direction that critical production configuration fails closed and readiness/liveness are distinct.
 
 The current Floor/Kitchen line still contains fail-open defaults; do not describe target behavior as current enforcement.
 
 ## ADR-023 — External Financial Success Requires Durable Provider Evidence in the Approved Target
-**Status:** Accepted
+**Status:** Accepted — **merge status superseded by ADR-029**
 
 External payment/refund success must be tied to durable processor identity/evidence; ambiguous outcomes must be recoverable/reconcilable; amount/currency/provider identity are part of the integrity boundary.
 
 Approved but unmerged.
 
 ## ADR-024 — Payment Stage 2c Is Not an Approved Baseline
-**Status:** Accepted
+**Status:** Accepted — **authorization state superseded by ADR-029**
 
 Stage 2c remains WIP / AUTHORIZED-NOT-CLOSED.
 
 Do not treat the payment branch tip as one fully approved block.
+
+The `AUTHORIZED-NOT-CLOSED` wording above is preserved as the decision recorded at
+the time. It is **no longer the current authorization state** — see ADR-029. The
+core holding of this ADR, that Stage 2c is not an approved baseline, still stands.
 
 ## ADR-025 — Reporting Uses OLTP-to-Star-Schema ETL
 **Status:** Accepted
@@ -242,6 +247,40 @@ deterministic rules, but neither may invent architecture or policy exceptions.
 
 Final authority for policy exceptions, unresolved cross-agent conflicts, and
 cross-domain scope expansion remains with the repository owner.
+
+## ADR-029 — Release B Is Deployed; Stage 2c Requires New Authorization and Independent Review
+**Status:** Accepted
+
+Supersedes the status/authorization state of ADR-018, ADR-019, ADR-021, ADR-022,
+ADR-023 and ADR-024. Those ADRs are preserved unchanged as the record of what was
+decided at the time; only the state below is current.
+
+**Stage 1/2a/2b are DEPLOYED**, not approved-but-unmerged. They shipped as
+Release B at `489f6d2`. They are **dormant**: the services ship in production and
+no live router invokes them, so deployed must not be read as active runtime. The
+substantive holdings of ADR-019, ADR-021, ADR-022 and ADR-023 — durable processor
+evidence, the explicit provider boundary, fail-closed production configuration,
+and the amount/currency/provider integrity boundary — remain Accepted and are now
+deployed rather than pending.
+
+**Stage 2c is WIP / NOT AUTHORIZED / NOT REVIEWED / NOT DEPLOYED.** The
+`AUTHORIZED-NOT-CLOSED` classification in ADR-024 no longer describes it. Before
+any Stage 2c implementation, integration or deployment, all of the following are
+required:
+
+```text
+explicit written authorization for the specific slice
+independent review by a reviewer who is not the implementer
+the evidence that slice's gates require
+```
+
+The existence of `release/stage2c-charge`, of a design artifact, or of a
+self-asserted approval inside any artifact does not satisfy any of the three.
+Branch existence is never approval, and a document cannot evidence its own
+independent review.
+
+ADR-024's core holding stands: Stage 2c is not an approved baseline, and the
+payment branch tip must never be treated as one fully approved block.
 
 ## Explicitly Not Accepted Yet
 

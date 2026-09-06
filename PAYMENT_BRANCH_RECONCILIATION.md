@@ -1,5 +1,9 @@
 # PAYMENT_BRANCH_RECONCILIATION.md
 
+> **HISTORICAL — 2026-08 reconciliation, superseded by Release B.** Describes
+> `feat/floor-map` @ `8a0e349` and remediation tip `58e0324`. Current branch and
+> deployment reality: `docs/03_CURRENT_WORK.md`.
+
 Read-only Git/history reconciliation of the payment/security remediation vs. the
 currently-inspected branch. **Nothing was modified** — only inspection commands
 were run (`git status`, `branch -a`, `log`, `log --all -- <path>`, `ls-tree`,

@@ -12,6 +12,53 @@ For implementation prompts and inter-agent handoffs, follow the **Token-Efficien
 
 ---
 
+## Recovery Before Anything Else
+
+Before reading any other document, or acting:
+
+```text
+git worktree list
+git branch --show-current
+git rev-parse --short HEAD
+git log -1 --format='%h %ci %s' main
+git rev-parse origin/main
+```
+
+A directory name confers no authority. `restaurant_<x>` does not mean slice `<x>`
+is current, approved, or authorized.
+
+Global governance and current authorization are recovered from the current local
+`main` integration line — not from the checked-out branch, not from a sibling
+worktree, not from chat history.
+
+Recovery is read-only. Do not switch branches, clean, stash, reset, or otherwise
+mutate anything to obtain a readable state.
+
+Known limitation: historical worktrees may carry an older `AGENTS.md` that lacks
+this rule. Prefer the current integration line whenever it can be identified.
+
+Operational detail: `docs/05_AI_HANDOFF.md`.
+
+### Portability Gate (permanent)
+
+If information required for safe recovery exists only outside the repository,
+promote it into a durable, secret-safe repository artifact while preserving
+provenance and the evidence required for safe recovery.
+
+Raw files containing secrets, credentials, PII, production data, or other
+non-committable content must not be promoted verbatim. Redaction, safe
+extraction, or a durable evidence summary is allowed when necessary, provided
+provenance and the required recovery evidence are preserved.
+
+Required recovery information cannot be replaced merely by documenting its
+absence.
+
+A full cold-start recovery test is not required for every slice. Reserve it for
+major releases, material governance changes, explicit account/agent migration
+validation, or doubtful recovery confidence.
+
+---
+
 ## Token-Efficient Default
 
 Follow the Token-Efficient Agent Workflow in `docs/05_AI_HANDOFF.md`.
@@ -52,6 +99,11 @@ Do not begin by loading every historical handoff or old chat artifact.
 `docs/03_CURRENT_WORK.md` is the authoritative execution checkpoint.
 
 Do not infer authorization from existing code, branch names, uncommitted files, design documents, historical implementations, Git commit subjects, review artifacts, MOCs, or chat history.
+
+Human authority is a **project role**, not an account. Vendor, product, or account
+identity — ChatGPT, Claude, or any other — is not an authorization source, and neither
+conversation history nor account memory is authority. Whoever holds the role exercises
+it; current authorization remains sourced only from `docs/03_CURRENT_WORK.md`.
 
 If only documentation/handoff work is authorized, do not implement a feature.
 
@@ -142,27 +194,14 @@ Always preserve the distinction between:
 
 Do not collapse these states.
 
-Important current status:
+This file carries no status snapshot. Current Kitchen, Payment/Security, branch and
+deployment status lives in `docs/03_CURRENT_WORK.md`, and is maintained there only.
 
-- Kitchen Stage A — APPROVED / CLOSED
-- Kitchen Stage B1 — APPROVED / CLOSED
-- Kitchen Stage B2 — APPROVED / CLOSED (v3 design: APPROVED WITH NON-BLOCKING NOTES)
-- Kitchen B2.1 — APPROVED
-- Kitchen B2.2 — APPROVED / CLOSED
-- Kitchen B3/B4 — DEFERRED / NOT AUTHORIZED
-- Kitchen Release A — INTEGRATED INTO LOCAL `main` (`7225c6e`), NOT PUSHED, NOT DEPLOYED
-- Payment/Security Stage 1 — APPROVED BUT UNMERGED
-- Payment/Security Stage 2a — APPROVED BUT UNMERGED
-- Payment/Security Stage 2b — APPROVED BUT UNMERGED
-- Payment Stage 2c — WIP / AUTHORIZED-NOT-CLOSED
+Deployed is not the same as active runtime. Do not describe approved, unmerged, or
+deployed-but-dormant architecture as current runtime behavior.
 
-Do not describe approved-but-unmerged architecture as current runtime behavior.
-
-Do not describe Kitchen Release A as production behavior either: it is integrated
-into local `main` only. `origin/main` is still `045dfd5` and production has not
-been updated. Pushing to `main` triggers Render auto-deploy, so push and deploy
-are one decision, gated on a verified production backup and confirmation of the
-deployed SHA.
+Pushing to `main` triggers Render auto-deploy, so push and deploy are one decision,
+gated on a verified production backup and confirmation of the deployed SHA.
 
 Do not interpret branch divergence as architectural rejection or supersession.
 
@@ -289,7 +328,7 @@ Do not start B3/B4, task SERVED/reporting, remake/re-fire, or compatibility-fiel
 
 Payments and refunds are high-risk domains.
 
-Before modifying financial behavior, inspect current Payment/PaymentAllocation behavior, Refund behavior, direct Square flow, approved-but-unmerged Stage 1/2a/2b architecture, transaction boundaries, provider side effects, idempotency, durable processor evidence, amount/currency checks, refund semantics, permissions, reporting/ETL, migrations, and concurrency.
+Before modifying financial behavior, inspect current Payment/PaymentAllocation behavior, Refund behavior, direct Square flow, deployed-but-dormant Stage 1/2a/2b architecture, transaction boundaries, provider side effects, idempotency, durable processor evidence, amount/currency checks, refund semantics, permissions, reporting/ETL, migrations, and concurrency.
 
 Never assume:
 
@@ -303,7 +342,7 @@ On the current Floor/Kitchen line:
 - Square may report success before durable local Payment persistence;
 - a local card Refund does not automatically execute a Square refund;
 - full processor identity/evidence is not persisted on this line;
-- durable PaymentAttempt / RefundAttempt / provider abstraction lives on the separate approved-but-unmerged remediation line.
+- durable PaymentAttempt / RefundAttempt / provider abstraction is deployed but dormant: the services ship in production and no live router invokes them.
 
 Do not silently implement an ad hoc payment fix that conflicts with approved remediation architecture.
 
@@ -327,9 +366,11 @@ When a parent Order lock is the synchronization primitive, refresh/reselect stat
 
 ## Production / Security Safety
 
-Treat current production fail-open defaults as CURRENT RISK, not desired architecture.
+Payment/Security Stage 1 is deployed: `APP_ENV`-absent-means-production and the
+fail-closed `SECRET_KEY` guard are live, the guard running on the import path.
 
-Approved Payment/Security Stage 1 establishes the fail-closed target direction but remains unmerged.
+Still open, and still CURRENT RISK: `COOKIE_SECURE` and the SQLite `DATABASE_URL`
+fallback.
 
 Never expose secrets in code, documentation, logs, tests, screenshots, or handoffs.
 

@@ -64,9 +64,10 @@ KDS filtering occurs before board limits. KDS remains polling-based unless expli
 
 ### Current Floor/Kitchen development line
 
-Kitchen Release A is integrated into local `main` at `7225c6e`; `origin/main` is
-still `045dfd5` and production has not been updated. Floor UI and Reservations
-remain on `feat/floor-map`, unapproved and unmerged.
+Kitchen, Floor UI, and Reservations are integrated and deployed on the current
+line. Historical branches (`feat/floor-map` and the Release A reconstruction
+commits) record how that integration happened, not its current status. Current
+SHAs, deploy state, and checkpoint: `docs/03_CURRENT_WORK.md`.
 
 The current development line uses:
 
@@ -79,17 +80,17 @@ The current development line uses:
 - local `Refund` records;
 - no durable PaymentAttempt/RefundAttempt/provider-reconciliation layer on this line.
 
-### Approved but unmerged Payment/Security architecture
+### Deployed but dormant Payment/Security architecture
 
-A separate branch, `fix/p0-security-and-payments`, contains approved Payment/Security Stage 1, 2a, and 2b work.
+Payment/Security Stage 1, 2a and 2b shipped as Release B and are **DEPLOYED**.
 
-That approved line adds the hardened production/payment direction, including fail-closed production configuration, durable payment/refund attempt lifecycles, provider abstraction, durable processor evidence, and stronger idempotency/reconciliation foundations.
+That work adds the hardened production/payment direction, including fail-closed production configuration, durable payment/refund attempt lifecycles, provider abstraction, durable processor evidence, and stronger idempotency/reconciliation foundations.
 
-This architecture is **APPROVED BUT UNMERGED** relative to the current Floor/Kitchen line.
+It is **deployed but dormant**: the code ships in production and no live router invokes the attempt/provider/refund services. Deployed is not the same as active runtime; do not collapse the two.
 
-Its absence from the current branch is branch divergence, not rejection or supersession.
+Payment Stage 2c is **WIP / NOT AUTHORIZED / NOT REVIEWED / NOT DEPLOYED** and is not part of the approved baseline.
 
-Payment Stage 2c is WIP / authorized-not-closed and is not part of the approved integration baseline.
+Current authorization and deployment status: `03_CURRENT_WORK.md`.
 
 ## Financial Safety Principles
 
@@ -107,9 +108,9 @@ Current source includes PBKDF2-HMAC-SHA256 PIN hashing, salted PIN storage, lega
 
 The current Floor/Kitchen line also has evidence-supported production configuration risks, including fail-open defaults for critical settings such as `SECRET_KEY`/database configuration and insecure cookie defaults if production variables are missing.
 
-Approved-but-unmerged Payment/Security Stage 1 establishes the fail-closed production target direction.
+Payment/Security Stage 1 is deployed: absent `APP_ENV` means production, and the fail-closed `SECRET_KEY` guard runs on the import path.
 
-Do not treat that target as current runtime behavior until integrated.
+`COOKIE_SECURE` and the SQLite `DATABASE_URL` fallback remain open. See `03_CURRENT_WORK.md` for the current risk register.
 
 ## Data / Deployment Principles
 
@@ -151,16 +152,10 @@ A branch containing approved work is not automatically current runtime architect
 
 ## Current High-Level Status
 
-- Kitchen Stage A — APPROVED / CLOSED
-- Kitchen Stage B1 — APPROVED / CLOSED
-- Kitchen Stage B2 — APPROVED / CLOSED (v3 design: APPROVED WITH NON-BLOCKING NOTES)
-- Kitchen B2.1 — APPROVED
-- Kitchen B2.2 — APPROVED / CLOSED
-- Kitchen B3/B4 — DEFERRED / NOT AUTHORIZED
-- Kitchen Release A — INTEGRATED INTO LOCAL `main` (`7225c6e`), NOT PUSHED, NOT DEPLOYED
-- Payment/Security Stage 1 — APPROVED BUT UNMERGED
-- Payment/Security Stage 2a — APPROVED BUT UNMERGED
-- Payment/Security Stage 2b — APPROVED BUT UNMERGED
-- Payment Stage 2c — WIP / AUTHORIZED-NOT-CLOSED
+This document carries no status snapshot. Kitchen, Payment/Security, branch and
+deployment status live in `03_CURRENT_WORK.md`, and are maintained there only.
+
+Payment Stage 2c is WIP / NOT AUTHORIZED / NOT REVIEWED / NOT DEPLOYED, and
+requires explicit future authorization and independent review (ADR-029).
 
 See `03_CURRENT_WORK.md` for the active checkpoint.

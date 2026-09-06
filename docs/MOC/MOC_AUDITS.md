@@ -26,7 +26,8 @@ The independent auditor verifies claims against:
 
 ## Architecture / factual audits
 - [[PROJECT_ARCHITECTURE_FACTS_FOR_DOCS]]
-- [[PAYMENT_BRANCH_RECONCILIATION]]
+- [[PAYMENT_BRANCH_RECONCILIATION]] — HISTORICAL (2026-08); current branch
+  reality is in [[docs/03_CURRENT_WORK]]
 
 Use these to distinguish:
 - current runtime facts
@@ -83,10 +84,10 @@ The PostgreSQL proof confirmed:
 
 ## Payment / security review evidence
 Branch-level reconciliation:
-- [[PAYMENT_BRANCH_RECONCILIATION]]
+- [[PAYMENT_BRANCH_RECONCILIATION]] — HISTORICAL (2026-08)
 
 Approved status of Stage 1/2a/2b is documentary approval, not inferred from Git.
-Stage 2c remains WIP / authorized-not-closed.
+Stage 2c is NOT AUTHORIZED / NOT REVIEWED / NOT DEPLOYED.
 
 If payment review artifacts are later consolidated into stable filenames, link them here rather than duplicating their content.
 

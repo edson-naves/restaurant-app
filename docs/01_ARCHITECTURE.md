@@ -79,9 +79,12 @@ Local/test primarily uses SQLite. Production uses PostgreSQL with Gunicorn/Uvico
 
 Repository deployment scaffolding supports multiple targets; do not infer one vendor as permanent architecture without current evidence.
 
-Current Floor/Kitchen production risks include fail-open defaults for `SECRET_KEY`, `DATABASE_URL`, and cookie security when environment configuration is missing.
+Stage 1 is deployed: absent `APP_ENV` means production, and the fail-closed
+`SECRET_KEY` guard runs on the import path, so a misconfigured deployment fails
+to boot rather than falling back.
 
-Approved-but-unmerged Payment/Security Stage 1 establishes the fail-closed target direction.
+`COOKIE_SECURE` and the SQLite `DATABASE_URL` fallback remain open production
+risks. See `03_CURRENT_WORK.md` for the current risk register.
 
 ## Startup / Migration Architecture
 
@@ -164,8 +167,9 @@ Compatibility retained:
 - PreparationTask does not own SERVED.
 
 B1 is APPROVED / CLOSED. It was authored on `feat/floor-map`, reconstructed onto
-`045dfd5` for Release A, and is now integrated into local `main` at `7225c6e`.
-Integrated locally only — not pushed, not deployed.
+`045dfd5` for Release A, and integrated into local `main` at `7225c6e`. Release A
+was subsequently pushed and deployed. Current operational status, SHAs, and
+deploy state: `docs/03_CURRENT_WORK.md`.
 
 ## Kitchen Stage B2 — Current Approved Architecture
 
@@ -333,29 +337,23 @@ A local card Refund does NOT automatically execute a Square refund.
 
 Void and refund are distinct.
 
-## Approved-but-Unmerged Payment/Security Architecture
+## Deployed-but-Dormant Payment/Security Architecture
 
-Git reconciliation established:
+Stage 1/2a/2b shipped as Release B and are **DEPLOYED**. The remediation
+originated on `fix/p0-security-and-payments`; that branch tip is not the
+deployed artifact and must not be merged wholesale, because it also contains
+Stage 2c WIP.
 
-```text
-fix/p0-security-and-payments
-```
+Stage 2c is **WIP / NOT AUTHORIZED / NOT REVIEWED / NOT DEPLOYED**, and requires
+explicit future authorization and independent review before any implementation,
+integration or deployment (ADR-029).
 
-contains committed/pushed remediation that was never merged into main, into
-`feat/floor-map`, or into this release. It is Release B, separately designed.
+Stage 1/2a/2b architecture includes fail-closed production config, readiness/liveness separation, durable `PaymentAttempt`, independent `RefundAttempt`, provider abstraction, durable provider evidence, stronger idempotency/state transitions, and stronger amount/currency/reconciliation foundations.
 
-Status:
+These are **dormant**: the services ship in production and no live router invokes
+them. Do not describe them as active runtime behaviour.
 
-- Stage 1 — APPROVED BUT UNMERGED
-- Stage 2a — APPROVED BUT UNMERGED
-- Stage 2b — APPROVED BUT UNMERGED
-- Stage 2c — WIP / AUTHORIZED-NOT-CLOSED
-
-Approved Stage 1/2a/2b target architecture includes fail-closed production config, readiness/liveness separation, durable `PaymentAttempt`, independent `RefundAttempt`, provider abstraction, durable provider evidence, stronger idempotency/state transitions, and stronger amount/currency/reconciliation foundations.
-
-Do not describe these as current runtime on any line, including this release.
-
-Do not merge the branch tip wholesale because it also contains Stage 2c WIP.
+Current authorization and deployment status: `03_CURRENT_WORK.md`.
 
 ## Financial Arithmetic
 

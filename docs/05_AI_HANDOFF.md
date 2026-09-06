@@ -130,6 +130,35 @@ Agents must still report:
 
 Concise prompts reduce duplication; repository documents preserve the full context.
 
+## Step 0 — Recovery Checkout (detail; entry rule is in `AGENTS.md`)
+
+Read canonical docs with `git show main:<path>`, not from the working tree.
+
+A sibling worktree's existence is Git evidence. Its file contents are not
+canonical and are not part of recovery.
+
+`origin/main` is a local mirror. Its age is the `.git/FETCH_HEAD` mtime, and it
+records what was pushed — never what a platform runs.
+
+The normative Portability Gate is defined in `AGENTS.md`. This section only describes
+how to satisfy it operationally.
+
+Where promoted recovery context belongs:
+
+```text
+current state                     docs/03_CURRENT_WORK.md
+current authorization             docs/03_CURRENT_WORK.md
+durable decisions                 docs/02_DECISIONS.md
+required review/release evidence  docs/Evidence/<domain>/
+branch/worktree provenance        docs/03_CURRENT_WORK.md + Git
+implementer/reviewer assignment   docs/03_CURRENT_WORK.md
+```
+
+Secret-safe handling: never commit raw files carrying secrets, credentials, PII or
+production data. Redact, extract only the fields recovery needs, or record a durable
+evidence summary naming source, date and command, so provenance survives without the
+sensitive material.
+
 ## Mandatory Context Read Order
 
 ```text
@@ -207,21 +236,16 @@ Do not collapse these states.
 
 ## Branch-Divergence Rule
 
-Important lines:
+Current branch reality lives in `docs/03_CURRENT_WORK.md`. Do not restate it here.
 
-```text
-release/kitchen-sync            (this release; base 045dfd5)
-feat/floor-map                 (Floor UI + Reservations; unapproved, unmerged)
-fix/p0-security-and-payments   (Payment/Security; Release B)
-```
+Payment/Security Stage 1/2a/2b are **deployed but dormant**: the code ships in
+production, and no live router invokes the attempt/provider/refund services.
+Deployed is not the same as active runtime — do not collapse the two.
 
-Payment/Security Stage 1/2a/2b are approved but unmerged.
+Stage 2c is WIP and not authorized.
 
-Stage 2c is WIP.
-
-Future AI working on payment/security must inspect both current code and approved-but-unmerged remediation before proposing changes.
-
-Do not claim Stage 1/2a/2b are current runtime on any line, including this release.
+Future AI working on payment/security must inspect both the current runtime path
+and the dormant deployed remediation before proposing changes.
 
 ## No Automatic Git Integration
 
@@ -387,6 +411,11 @@ changes, cross-domain scope expansion, unresolved Claude↔Codex disagreement, a
 exceptional merge/deployment decisions. Agents must stop rather than invent an
 exception.
 
+That authority is a **project role**, not an account or vendor identity. It does not
+depend on which assistant account, subscription or conversation an agent runs under,
+and it is not conferred by chat history or account memory. Current authorization is
+read only from `docs/03_CURRENT_WORK.md`.
+
 ### Technical Enforcement
 
 GitHub Actions / CI / rulesets may later enforce deterministic policy (required tests,
@@ -412,7 +441,7 @@ create agent-specific permanent policy files for ownership transfer.
 
 This role-model change is governance/process only. It does not reopen or authorize any
 product feature, and does not weaken existing Kitchen invariants (closed B2 status),
-Payment/Security approved-but-unmerged boundaries, SQLite-vs-PostgreSQL evidence rules,
+Payment/Security integration boundaries, SQLite-vs-PostgreSQL evidence rules,
 concurrency discipline, financial/security safety, token-efficient handoff rules, Git
 safety, or evidence vocabulary.
 
@@ -479,7 +508,7 @@ B3/B4 and later cleanup remain separate, not implied by any B2 status.
 Before changing payment/refund behavior inspect:
 
 - current payment model;
-- approved-but-unmerged Stage 1/2a/2b;
+- deployed-but-dormant Stage 1/2a/2b;
 - transaction boundaries;
 - provider side effects;
 - idempotency;
@@ -520,9 +549,11 @@ Unknown/invalid permission cases should fail closed.
 
 ## Production Configuration
 
-Treat current fail-open defaults as CURRENT RISK.
+Stage 1 is deployed: `APP_ENV`-absent-means-production and the fail-closed
+`SECRET_KEY` guard are live, the guard running on the import path.
 
-Approved Stage 1 establishes the fail-closed target but remains unmerged.
+Still open, and still CURRENT RISK: `COOKIE_SECURE` and the SQLite
+`DATABASE_URL` fallback.
 
 Never expose secrets in code/docs/logs/tests.
 
