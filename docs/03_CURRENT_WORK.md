@@ -761,12 +761,27 @@ Audited read-only, feature-by-feature against main @ f6bd4ef
 before it's considered for deletion. No code changed by this audit.
 ```
 
-**Only exclusive, recoverable value:** the free-placement Floor/Zone builder in
-`admin_tables.html` / its `admin.py` routes — drag-to-place tables and zones
-(per-mille positioning, not the grid `main` uses), zone-rectangle resize, table
-shape cycling (round/square/long), and one unified floors+zones+tables+map
-page. `main`'s Floor spatial (`ac0be60`) was built additively onto the old
-grid-based admin pages and explicitly did not port this redesign.
+**Exclusive, recoverable value — three items, none in `main`:**
+
+1. The free-placement admin Floor/Zone builder in `admin_tables.html` / its
+   `admin.py` routes — drag-to-place tables and zones (per-mille positioning,
+   not the grid `main` uses), zone-rectangle resize, table shape cycling
+   (round/square/long), and one unified floors+zones+tables+map page. `main`'s
+   Floor spatial (`ac0be60`) was built additively onto the old grid-based
+   admin pages and explicitly did not port this redesign.
+2. On the *operational* Floor page itself (`floor.html`), a Map/List toggle
+   (`viewToggle`, persisted in `localStorage['fp-view']`) and a manager-only
+   "✏️ Arrange" mode that drags tables and drags/resizes zones directly on the
+   live floor, auto-saving as it goes (`arrangeToggle`, `floor.html:78-80` and
+   `:592-745` on this branch). `grep` for `arrange`/`viewToggle` in `main`'s
+   `floor.html` returns nothing — this mode does not exist there at all.
+3. The visual staff-color picker in `admin_staff.html` (a `type="color"` input
+   per staff row, auto-saving on change). `main` has the backend route
+   (`set_staff_color`, `admin.py:1236`) but **no template calls it** —
+   confirmed by grepping every `web/templates/*.html` in `main` for
+   `color`/`swatch` tied to staff. The capability is backend-only and
+   effectively dead without a UI; it is not functionally equivalent to this
+   branch's picker.
 
 **Already ported to `main`, content-identical (CRLF aside, verified with
 `diff -b -B`):** Kitchen Stations + Expo (`admin_stations.html`, `expo.html`,
@@ -786,9 +801,14 @@ the Reservations availability engine (`calculate_availability`, overlap/expiry
 checks — this branch has only `active_holds()`).
 
 Conclusion: `feat/floor-map` is safe to treat as superseded except for the
-free-placement builder. If that builder is ever wanted, port only
-`admin_tables.html` and its `admin.py` routes onto the current base — nothing
-else on this branch needs recovery.
+three items above. If they're ever wanted, port only those — the admin
+builder (`admin_tables.html` + its `admin.py` routes), the operational
+Map/List + Arrange mode (`floor.html`), and the staff-color picker
+(`admin_staff.html`) — onto the current base. Never bring the branch tip
+across wholesale: everything else on it (Reservations, Stations, Kitchen,
+Happy Hour, Day menus, Positions) is already equal or behind what `main`
+has, and it entirely lacks Payment/Security Release B and the Reservations
+availability engine.
 
 ## Next Authorized Action
 
