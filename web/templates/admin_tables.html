@@ -18,14 +18,11 @@
     <div>
       <strong>Floor layout{% if current_floor %} — {{ current_floor.name }}{% endif %}</strong>
       <p class="sub" style="margin:2px 0 0">
-        Drag a table onto any square to move it. Drop it on an occupied square to
-        swap the two. Nothing is saved until you press Save layout.
+        Drag a table anywhere on the map — drop it inside a zone to move it there.
+        Drag a zone's body to move it, or its corner handle to resize it; its
+        tables move with it. Every change saves automatically.
       </p>
     </div>
-    <form method="post" action="/admin/tables/layout" id="layoutForm">
-      <input type="hidden" name="layout" id="layoutField">
-      <button class="btn primary sm" id="saveLayout" disabled>Save layout</button>
-    </form>
   </div>
 
   {% if floors|length > 1 %}
@@ -50,30 +47,37 @@
     No floors defined yet — <a href="/admin/floors">create one</a> before adding tables.
   </p>
   {% else %}
-  <div class="plan" id="plan" style="--cols: {{ cols }}">
-    {% for y in range(rows) %}{% for x in range(cols) %}
-      <div class="cell" data-x="{{ x }}" data-y="{{ y }}">
-        {% for t in floor_tables if t.pos_x == x and t.pos_y == y %}
-        <div class="chip {{ t.status }}" draggable="true" data-id="{{ t.id }}" data-shape="{{ t.shape }}">
-          {% if t.zone_ref %}
-          <i class="zdot" style="background: {{ t.zone_ref.swatch }}"
-             title="{{ t.zone_ref.name }}"></i>
-          {% endif %}
-          <button type="button" class="chip-shape" title="Cycle table shape (round/square/rect)">{{
-            {'round': '●', 'square': '■', 'rect': '▬'}.get(t.shape, '●') }}</button>
-          <span class="n">{{ t.number }}</span>
-          {# The zone is carried by the dot's colour, so this line shows who is
-             on the table. Blank rather than a dash when nobody is assigned. #}
-          <span class="meta">{% if t.current_waiter %}{{ t.current_waiter.name }}{% else %}&nbsp;{% endif %}</span>
-          <span class="meta">{{ t.capacity }} seats</span>
-        </div>
-        {% endfor %}
-      </div>
-    {% endfor %}{% endfor %}
+  <div class="freemap" id="freemap">
+    {% for z in floor_zones %}
+    <div class="zone-rect" data-zone-id="{{ z.id }}"
+         data-x="{{ z.pos_x }}" data-y="{{ z.pos_y }}" data-w="{{ z.width }}" data-h="{{ z.height }}"
+         style="left:{{ z.pos_x / 10 }}%; top:{{ z.pos_y / 10 }}%; width:{{ z.width / 10 }}%; height:{{ z.height / 10 }}%; border-color: {{ z.swatch }};">
+      <span class="zone-label" style="background: {{ z.swatch }}">{{ z.name }}</span>
+      <div class="zone-resize" title="Drag to resize — repositions this zone's tables with it"></div>
+    </div>
+    {% endfor %}
+    {% for t in floor_tables %}
+    {% set pos = table_positions.get(t.id, (500, 500)) %}
+    <div class="chip map-chip {{ t.status }}" data-id="{{ t.id }}" data-shape="{{ t.shape }}"
+         data-zone-id="{{ t.zone_id or '' }}" data-x="{{ pos[0] }}" data-y="{{ pos[1] }}"
+         style="left:{{ pos[0] / 10 }}%; top:{{ pos[1] / 10 }}%;">
+      {% if t.zone_ref %}
+      <i class="zdot" style="background: {{ t.zone_ref.swatch }}"
+         title="{{ t.zone_ref.name }}"></i>
+      {% endif %}
+      <button type="button" class="chip-shape" title="Cycle table shape (round/square/rect)">{{
+        {'round': '●', 'square': '■', 'rect': '▬'}.get(t.shape, '●') }}</button>
+      <span class="n">{{ t.number }}</span>
+      {# The zone is carried by the dot's colour, so this line shows who is
+         on the table. Blank rather than a dash when nobody is assigned. #}
+      <span class="meta">{% if t.current_waiter %}{{ t.current_waiter.name }}{% else %}&nbsp;{% endif %}</span>
+      <span class="meta">{{ t.capacity }} seats</span>
+    </div>
+    {% endfor %}
   </div>
   <p class="sub" style="margin:12px 0 0">
     {{ floor_tables|length }} table{{ '' if floor_tables|length == 1 else 's' }} on this
-    floor. Each floor has its own grid, so squares do not clash between floors.
+    floor. A table outlined in red failed to save its last move — drag it again to retry.
   </p>
   {% endif %}
 </div>
@@ -322,90 +326,238 @@
   sync();
 })();
 
+// Floor Plan Builder — free-placement map (design §6, §7). Pointer events
+// rather than HTML5 drag-and-drop, deliberately: native DnD is poorly
+// supported on touch (design §7 "Touch/mouse"). Every gesture autosaves on
+// pointerup; a failed save marks the element `.unsaved` and leaves it exactly
+// where it was dropped rather than snapping back (design §6.3).
 (function () {
-  const plan = document.getElementById('plan');
-  const field = document.getElementById('layoutField');
-  const save = document.getElementById('saveLayout');
-  if (!plan) return;
+  const map = document.getElementById('freemap');
+  if (!map) return;
 
-  let dragged = null;
-  const SHAPES = ['round', 'square', 'rect'];
-  const SHAPE_ICON = { round: '●', square: '■', rect: '▬' };
+  function post(url, data) {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(data),
+    });
+  }
+  function mark(el, ok, reason) {
+    el.classList.toggle('unsaved', !ok);
+    el.title = ok ? '' : (reason || 'Save failed — drag again to retry');
+  }
+  function pct(v) { return (v / 10) + '%'; }
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
-  // Serialise every chip's current cell + shape as "id:x:y:shape" quads. Read
-  // from the DOM rather than tracked state so a swap or a cancelled drag (or a
-  // shape cycle) can't desync it.
-  function serialise() {
-    return Array.from(plan.querySelectorAll('.chip')).map(function (chip) {
-      const cell = chip.parentElement;
-      return chip.dataset.id + ':' + cell.dataset.x + ':' + cell.dataset.y + ':' + chip.dataset.shape;
+  function tablesOf(zoneEl) {
+    return Array.from(map.querySelectorAll('.map-chip'))
+      .filter(function (c) { return c.dataset.zoneId === zoneEl.dataset.zoneId; });
+  }
+
+  let drag = null;
+
+  map.addEventListener('pointerdown', function (e) {
+    if (e.target.closest('.chip-shape')) return;   // shape click, not a drag
+    // One active gesture at a time: a second pointer going down (a second
+    // touch, or a stray mousedown) while one is already tracked is ignored
+    // outright — not queued, not merged, no capture attempted — so it can
+    // never replace or interfere with the pointer already owning `drag`.
+    if (drag) return;
+    const r = map.getBoundingClientRect();
+    const chip = e.target.closest('.map-chip');
+    const handle = e.target.closest('.zone-resize');
+    const zoneEl = !handle && e.target.closest('.zone-rect');
+
+    if (chip) {
+      drag = {
+        kind: 'table', el: chip, mapRect: r, pointerId: e.pointerId,
+        origX: parseFloat(chip.dataset.x), origY: parseFloat(chip.dataset.y),
+        origZone: chip.dataset.zoneId, startX: e.clientX, startY: e.clientY,
+      };
+      chip.setPointerCapture(e.pointerId);
+      chip.classList.add('dragging');
+      e.preventDefault();
+    } else if (handle) {
+      const z = handle.closest('.zone-rect');
+      drag = {
+        kind: 'resize', el: z, mapRect: r, pointerId: e.pointerId,
+        origX: parseFloat(z.dataset.x), origY: parseFloat(z.dataset.y),
+        origW: parseFloat(z.dataset.w), origH: parseFloat(z.dataset.h),
+        startX: e.clientX, startY: e.clientY,
+        tables: tablesOf(z).map(function (c) {
+          return { el: c, x: parseFloat(c.dataset.x), y: parseFloat(c.dataset.y) };
+        }),
+      };
+      z.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    } else if (zoneEl) {
+      drag = {
+        kind: 'move', el: zoneEl, mapRect: r, pointerId: e.pointerId,
+        origX: parseFloat(zoneEl.dataset.x), origY: parseFloat(zoneEl.dataset.y),
+        origW: parseFloat(zoneEl.dataset.w), origH: parseFloat(zoneEl.dataset.h),
+        startX: e.clientX, startY: e.clientY,
+        tables: tablesOf(zoneEl).map(function (c) {
+          return { el: c, x: parseFloat(c.dataset.x), y: parseFloat(c.dataset.y) };
+        }),
+      };
+      zoneEl.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    }
+  });
+
+  map.addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    if (e.pointerId !== drag.pointerId) return;   // not the owning pointer
+    const dxPm = (e.clientX - drag.startX) / drag.mapRect.width * 1000;
+    const dyPm = (e.clientY - drag.startY) / drag.mapRect.height * 1000;
+
+    if (drag.kind === 'table') {
+      drag.curX = clamp(drag.origX + dxPm, 0, 1000);
+      drag.curY = clamp(drag.origY + dyPm, 0, 1000);
+      drag.el.style.left = pct(drag.curX);
+      drag.el.style.top = pct(drag.curY);
+    } else if (drag.kind === 'move') {
+      const x = clamp(drag.origX + dxPm, 0, 1000 - drag.origW);
+      const y = clamp(drag.origY + dyPm, 0, 1000 - drag.origH);
+      const realDx = x - drag.origX, realDy = y - drag.origY;
+      drag.curX = x; drag.curY = y;
+      drag.el.style.left = pct(x);
+      drag.el.style.top = pct(y);
+      drag.tables.forEach(function (t) {
+        t.curX = clamp(t.x + realDx, 0, 1000);
+        t.curY = clamp(t.y + realDy, 0, 1000);
+        t.el.style.left = pct(t.curX);
+        t.el.style.top = pct(t.curY);
+      });
+    } else if (drag.kind === 'resize') {
+      const w = clamp(drag.origW + dxPm, 60, 1000 - drag.origX);
+      const h = clamp(drag.origH + dyPm, 60, 1000 - drag.origY);
+      drag.curW = w; drag.curH = h;
+      drag.el.style.width = pct(w);
+      drag.el.style.height = pct(h);
+      // Proportional resize (design §6.2): each table's offset from the
+      // zone's own top-left corner scales with the rectangle, same as the
+      // zone itself growing or shrinking around that corner.
+      const sx = w / drag.origW, sy = h / drag.origH;
+      drag.tables.forEach(function (t) {
+        t.curX = clamp(drag.origX + (t.x - drag.origX) * sx, 0, 1000);
+        t.curY = clamp(drag.origY + (t.y - drag.origY) * sy, 0, 1000);
+        t.el.style.left = pct(t.curX);
+        t.el.style.top = pct(t.curY);
+      });
+    }
+  });
+
+  map.addEventListener('pointerup', function (e) {
+    if (!drag) return;
+    if (e.pointerId !== drag.pointerId) return;   // not the owning pointer
+    const d = drag;
+    drag = null;
+
+    if (d.kind === 'table') {
+      d.el.classList.remove('dragging');
+      const x = Math.round(d.curX !== undefined ? d.curX : d.origX);
+      const y = Math.round(d.curY !== undefined ? d.curY : d.origY);
+      // Hit-test the drop point's centre against the zone rectangles — dropping
+      // inside a different zone re-assigns the table to it. Overlapping zones
+      // are resolved by asking the browser what is actually painted on top at
+      // that point (elementsFromPoint, topmost first) rather than re-deriving
+      // stacking order by hand — correct however zones end up stacked, not
+      // just under today's DOM-order-happens-to-match-paint-order case.
+      const cr = d.el.getBoundingClientRect();
+      const cx = cr.left + cr.width / 2, cy = cr.top + cr.height / 2;
+      const topZone = document.elementsFromPoint(cx, cy)
+        .find(function (el) { return el.classList.contains('zone-rect'); });
+      const newZoneId = topZone ? topZone.dataset.zoneId : d.origZone;
+      let entry = d.el.dataset.id + ':' + x + ':' + y + ':' + d.el.dataset.shape;
+      if (newZoneId && newZoneId !== d.origZone) entry += ':' + newZoneId;
+      post('/admin/tables/map-layout', { tables: entry }).then(function (r) {
+        mark(d.el, r.ok);
+        // ponytail: dataset (and so the next drag's start point) only
+        // advances on success, so a failed save's very next drag can jump
+        // back to the last-saved spot before the new delta applies — rare
+        // (network blip / concurrent zone retirement), fixed by taking
+        // optimistic-lock/version tracking if it turns out to matter.
+        if (r.ok) {
+          d.el.dataset.x = x; d.el.dataset.y = y;
+          if (newZoneId !== d.origZone) d.el.dataset.zoneId = newZoneId;
+        }
+      }).catch(function () { mark(d.el, false); });
+      return;
+    }
+
+    // move / resize: the zone and every table it carries save atomically.
+    const x = Math.round(d.curX !== undefined ? d.curX : d.origX);
+    const y = Math.round(d.curY !== undefined ? d.curY : d.origY);
+    const w = Math.round(d.curW !== undefined ? d.curW : d.origW);
+    const h = Math.round(d.curH !== undefined ? d.curH : d.origH);
+    const entries = d.tables.map(function (t) {
+      const tx = Math.round(t.curX !== undefined ? t.curX : t.x);
+      const ty = Math.round(t.curY !== undefined ? t.curY : t.y);
+      return t.el.dataset.id + ':' + tx + ':' + ty;
     }).join(',');
-  }
-
-  const initial = serialise();
-
-  function refresh() {
-    const now = serialise();
-    field.value = now;
-    save.disabled = (now === initial);
-  }
-  refresh();
-
-  plan.addEventListener('dragstart', function (e) {
-    const chip = e.target.closest('.chip');
-    if (!chip) return;
-    dragged = chip;
-    chip.classList.add('dragging');
-    e.dataTransfer.effectAllowed = 'move';
-    // Firefox ignores a drag that carries no data.
-    e.dataTransfer.setData('text/plain', chip.dataset.id);
+    post('/admin/zones/' + d.el.dataset.zoneId + '/move-layout', {
+      pos_x: x, pos_y: y, width: w, height: h, tables: entries,
+    }).then(function (r) {
+      mark(d.el, r.ok);
+      d.tables.forEach(function (t) { mark(t.el, r.ok); });
+      if (r.ok) {
+        d.el.dataset.x = x; d.el.dataset.y = y; d.el.dataset.w = w; d.el.dataset.h = h;
+        d.tables.forEach(function (t) {
+          t.el.dataset.x = Math.round(t.curX !== undefined ? t.curX : t.x);
+          t.el.dataset.y = Math.round(t.curY !== undefined ? t.curY : t.y);
+        });
+      }
+    }).catch(function () {
+      mark(d.el, false);
+      d.tables.forEach(function (t) { mark(t.el, false); });
+    });
   });
 
-  plan.addEventListener('dragend', function () {
-    if (dragged) dragged.classList.remove('dragging');
-    plan.querySelectorAll('.cell.over').forEach(function (c) { c.classList.remove('over'); });
-    dragged = null;
+  // A cancelled gesture (browser-initiated: e.g. a touch scroll takes over,
+  // or the OS interrupts the pointer) must never autosave, and must never
+  // leave the next gesture stuck behind stale capture/drag state — the
+  // element may already sit wherever the cancelled gesture displaced it, so
+  // it is flagged .unsaved (same signal as a failed save) rather than
+  // silently left looking persisted. table/move/resize all route through one
+  // `drag` object, so one handler covers all three. The pointerId check
+  // above matches pointermove/pointerup: only the pointer that opened this
+  // gesture (drag.pointerId, set on pointerdown) may cancel it.
+  map.addEventListener('pointercancel', function (e) {
+    if (!drag) return;
+    if (e.pointerId !== drag.pointerId) return;   // not the owning pointer
+    const d = drag;
+    drag = null;
+    try { d.el.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
+    d.el.classList.remove('dragging');
+    mark(d.el, false, 'Move cancelled before saving — drag again to retry.');
+    // move/resize carry their zone's tables — flag the whole group together,
+    // since they were displaced together and none of it was sent.
+    if (d.tables) {
+      d.tables.forEach(function (t) {
+        mark(t.el, false, 'Move cancelled before saving — drag again to retry.');
+      });
+    }
   });
 
-  plan.addEventListener('dragover', function (e) {
-    const cell = e.target.closest('.cell');
-    if (!cell || !dragged) return;
-    e.preventDefault();                       // required to make the cell a drop target
-    e.dataTransfer.dropEffect = 'move';
-    cell.classList.add('over');
-  });
-
-  plan.addEventListener('dragleave', function (e) {
-    const cell = e.target.closest('.cell');
-    if (cell) cell.classList.remove('over');
-  });
-
-  plan.addEventListener('drop', function (e) {
-    const cell = e.target.closest('.cell');
-    if (!cell || !dragged) return;
-    e.preventDefault();
-    cell.classList.remove('over');
-
-    const occupant = cell.querySelector('.chip');
-    const origin = dragged.parentElement;
-    if (occupant === dragged) return;
-    if (occupant) origin.appendChild(occupant);   // swap, never stack
-    cell.appendChild(dragged);
-    refresh();
-  });
-
-  // Shape cycle button: stop it reaching the drag handlers, step round -> square
-  // -> rect -> round, and update the chip's icon + dataset in place.
-  plan.addEventListener('click', function (e) {
+  // Shape cycle: unchanged UX, now persisted through this page's own
+  // free-map endpoint (design §6.1 Correction 2) — the old grid endpoint has
+  // no DOM left on this page for its JS to read shape from.
+  map.addEventListener('click', function (e) {
     const btn = e.target.closest('.chip-shape');
     if (!btn) return;
     e.preventDefault();
     e.stopPropagation();
-    const chip = btn.closest('.chip');
+    const chip = btn.closest('.map-chip');
+    const SHAPES = ['round', 'square', 'rect'];
+    const SHAPE_ICON = { round: '●', square: '■', rect: '▬' };
     const next = SHAPES[(SHAPES.indexOf(chip.dataset.shape) + 1) % SHAPES.length];
     chip.dataset.shape = next;
     btn.textContent = SHAPE_ICON[next];
-    refresh();
+    const x = Math.round(parseFloat(chip.dataset.x)), y = Math.round(parseFloat(chip.dataset.y));
+    post('/admin/tables/map-layout', { tables: chip.dataset.id + ':' + x + ':' + y + ':' + next })
+      .then(function (r) { mark(chip, r.ok); })
+      .catch(function () { mark(chip, false); });
   });
 })();
 </script>

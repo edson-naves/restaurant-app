@@ -1053,6 +1053,36 @@ tr.dim:hover > td { opacity: 1; }
 }
 .chip-shape:hover { background: var(--panel-2); color: var(--ink); }
 
+/* Floor Plan Builder — free-placement map (design §5-6). Zones and tables
+   are positioned absolutely, in per-mille (0-1000) percent, over one
+   fixed-ratio canvas; pointer events (not the .plan/.cell grid above, which
+   the old grid-drag editor still owns) drive move/resize/drop. */
+.freemap {
+  position: relative; width: 100%; aspect-ratio: 4 / 3; min-height: 420px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius);
+  overflow: hidden; touch-action: none;
+}
+.zone-rect {
+  position: absolute; border: 2px dashed var(--line); border-radius: 10px;
+  cursor: move; background: rgba(127,127,127,.04);
+}
+.zone-label {
+  position: absolute; top: -11px; left: 10px; padding: 1px 8px;
+  border-radius: 999px; font-size: 11px; font-weight: 700; color: #fff;
+}
+.zone-resize {
+  position: absolute; right: -6px; bottom: -6px; width: 14px; height: 14px;
+  border-radius: 4px; background: var(--panel); border: 1px solid var(--line);
+  cursor: nwse-resize;
+}
+.zone-rect.unsaved { border-color: var(--occupied); }
+.map-chip {
+  position: absolute; transform: translate(-50%, -50%); width: 92px;
+  touch-action: none; z-index: 2; cursor: grab;
+}
+.map-chip.dragging { opacity: .6; z-index: 5; cursor: grabbing; }
+.map-chip.unsaved { outline: 2px solid var(--occupied); }
+
 /* Zone marker. The card's left border already carries table status, so the
    zone gets its own channel (a corner dot) rather than competing for it. Shared
    by the admin layout chips and the operational floor-plan cards. */

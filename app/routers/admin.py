@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 import re
 import xml.etree.ElementTree as ET
 import zipfile
@@ -67,6 +68,11 @@ router = APIRouter(prefix="/admin")
 # Width of the floor-plan editor grid. Seed data lays tables out 8 per row, so
 # anything at or above 8 keeps existing positions valid.
 GRID_COLS = 10
+
+# Shared by the legacy grid editor (/tables/layout) and the free-map builder
+# (/tables/map-layout) — one set, so the two routes can never silently drift
+# on which shapes are valid.
+_TABLE_SHAPES = {"round", "square", "rect"}
 
 # An order in one of these states is finished; its table and waiter are free.
 LIVE_ORDER_STATES = (
@@ -128,6 +134,45 @@ def _free_cells(db: Session, count: int, floor_id: int | None) -> list[tuple[int
             cells.append(cell)
         i += 1
     return cells
+
+
+def _table_map_positions(
+    tables: list[RestaurantTable], zones: list[Zone]
+) -> dict[int, tuple[int, int]]:
+    """Display position (per-mille, 0-1000) for every table passed in, for the
+    Floor Plan Builder's free map.
+
+    A table already dragged uses its real map_x_per_mille/map_y_per_mille.
+    One never placed gets a fallback: its zone's never-placed tables, sorted
+    by id, spread as distinct points on a ring centred on that zone's own
+    rectangle (design §4.4 — a rank-based bijection, not id parity or id % N,
+    both of which collide for some id sets). Nothing is written to the
+    database here — recomputed fresh from whatever is NULL right now.
+    """
+    positions: dict[int, tuple[int, int]] = {}
+    unplaced_by_zone: dict[int, list[RestaurantTable]] = {}
+    for t in tables:
+        if t.map_x_per_mille is not None and t.map_y_per_mille is not None:
+            positions[t.id] = (t.map_x_per_mille, t.map_y_per_mille)
+        elif t.zone_id is not None:
+            unplaced_by_zone.setdefault(t.zone_id, []).append(t)
+
+    zone_by_id = {z.id: z for z in zones}
+    for zone_id, unplaced in unplaced_by_zone.items():
+        zone = zone_by_id.get(zone_id)
+        if zone is None:
+            continue
+        n = len(unplaced)
+        cx, cy = zone.pos_x + zone.width / 2, zone.pos_y + zone.height / 2
+        radius = max(0.0, min(zone.width, zone.height) / 2 - 40)
+        for rank, table in enumerate(sorted(unplaced, key=lambda t: t.id)):
+            if n == 1:
+                x, y = cx, cy
+            else:
+                angle = 2 * math.pi * rank / n
+                x, y = cx + radius * math.cos(angle), cy + radius * math.sin(angle)
+            positions[table.id] = (max(0, min(1000, round(x))), max(0, min(1000, round(y))))
+    return positions
 
 
 def _parse_names(raw: str, limit: int = 50) -> list[str]:
@@ -300,6 +345,12 @@ def tables_page(
                     if t.zone_id == z.id and t.current_waiter_id}
         zone_waiter[z.id] = next(iter(covering)) if len(covering) == 1 else 0
 
+    floor_zones = [z for z in zones if current and z.floor_id == current.id]
+    # Free-map display position for every table on this floor — real
+    # coordinates where the manager has dragged one, a deterministic fallback
+    # spread otherwise (see _table_map_positions). Never written here.
+    table_positions = _table_map_positions(on_floor, floor_zones)
+
     return render(request, "admin_tables.html", {
         "db": db, "staff": staff,
         "tables": tables,
@@ -320,9 +371,8 @@ def tables_page(
         # between floors is a legitimate action.
         "zones": [z for z in zones if z.floor.is_active],
         # Just this floor's, for adding a table to the floor on screen.
-        "floor_zones": [
-            z for z in zones if current and z.floor_id == current.id
-        ],
+        "floor_zones": floor_zones,
+        "table_positions": table_positions,
         "waiters": waiters,
         "zone_waiter": zone_waiter,
         "seats_total": sum(t.capacity for t in active),
@@ -710,7 +760,6 @@ def save_layout(
         (t.floor_id, t.pos_x, t.pos_y)
         for t in _active_tables(db) if t.id not in moving
     }
-    shapes = {"round", "square", "rect"}
     for chunk in layout.split(","):
         if not chunk.strip():
             continue
@@ -727,10 +776,128 @@ def save_layout(
             raise HTTPException(400, f"Two tables share position {x},{y}.")
         seen.add((table.floor_id, x, y))
         table.pos_x, table.pos_y = x, y
-        if len(parts) == 4 and parts[3].strip() in shapes:
+        if len(parts) == 4 and parts[3].strip() in _TABLE_SHAPES:
             table.shape = parts[3].strip()
     db.commit()
     return RedirectResponse("/admin/tables", status_code=303)
+
+
+@router.post("/tables/map-layout")
+def save_map_layout(
+    tables: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Persist free-map (per-mille) position, shape and zone reassignment from
+    the Floor Plan Builder's drag interaction (design §6.1).
+
+    Payload is 'id:x:y[:shape[:zone_id]]' per table, comma-separated — shape
+    and zone_id are optional per entry ('id:x:y' alone is a plain move).
+    Unlike /admin/tables/layout (the grid editor, unchanged), positions here
+    are per-mille (0-1000) on the free map: overlap is allowed, and
+    pos_x/pos_y are never read or written here (design §3). AJAX — 204.
+    """
+    entries = [c for c in tables.split(",") if c.strip()]
+    parsed: list[tuple[int, int, int, str | None, int | None]] = []
+    for chunk in entries:
+        parts = chunk.split(":")
+        if len(parts) not in (3, 4, 5) or not all(
+            p.strip().lstrip("-").isdigit() for p in parts[:3]
+        ):
+            raise HTTPException(400, f"Malformed layout entry '{chunk}'.")
+        tid, x, y = (int(p) for p in parts[:3])
+        shape = parts[3].strip() if len(parts) >= 4 and parts[3].strip() else None
+        if shape is not None and shape not in _TABLE_SHAPES:
+            raise HTTPException(400, f"Invalid shape '{shape}'.")
+        zone_id = None
+        if len(parts) == 5 and parts[4].strip():
+            if not parts[4].strip().lstrip("-").isdigit():
+                raise HTTPException(400, f"Malformed layout entry '{chunk}'.")
+            zone_id = int(parts[4])
+        parsed.append((tid, x, y, shape, zone_id))
+
+    tables_by_id = {t.id: t for t in db.execute(select(RestaurantTable)).scalars().all()}
+    for tid, x, y, shape, zone_id in parsed:
+        table = tables_by_id.get(tid)
+        if table is None:
+            raise HTTPException(400, f"Unknown table id {tid} in layout.")
+        table.map_x_per_mille = max(0, min(1000, x))
+        table.map_y_per_mille = max(0, min(1000, y))
+        if shape is not None:
+            table.shape = shape
+        if zone_id is not None:
+            _assign_zone(table, _zone_or_400(db, zone_id))
+    db.commit()
+    return Response(status_code=204)
+
+
+@router.post("/zones/{zone_id}/move-layout")
+def move_zone_layout(
+    zone_id: int,
+    pos_x: int = Form(...),
+    pos_y: int = Form(...),
+    width: int = Form(...),
+    height: int = Form(...),
+    tables: str = Form(""),
+    db: Session = Depends(get_db),
+    staff: Staff = Depends(require("settings")),
+):
+    """Atomically move/resize a zone rectangle and every one of its tables'
+    free-map positions, in one transaction (design §6.2).
+
+    `tables` ('id:x:y' per table) must name exactly this zone's currently
+    active tables — no more, no fewer, no duplicates, none from another
+    zone — or nothing is written. The client computes each table's
+    proportional new position as it drags/resizes; this endpoint only
+    validates and persists that already-computed math. AJAX — 204.
+    """
+    zone = _zone_or_400(db, zone_id)
+    current_tables = db.execute(
+        select(RestaurantTable).where(
+            RestaurantTable.zone_id == zone.id, RestaurantTable.is_active.is_(True)
+        )
+    ).scalars().all()
+    current_by_id = {t.id: t for t in current_tables}
+
+    entries = [c for c in tables.split(",") if c.strip()]
+    parsed: list[tuple[int, int, int]] = []
+    seen_ids: set[int] = set()
+    for chunk in entries:
+        parts = chunk.split(":")
+        if len(parts) != 3 or not all(p.strip().lstrip("-").isdigit() for p in parts):
+            raise HTTPException(400, f"Malformed layout entry '{chunk}'.")
+        tid, x, y = (int(p) for p in parts)
+        if tid in seen_ids:
+            raise HTTPException(400, f"Duplicate table id {tid} in payload.")
+        seen_ids.add(tid)
+        parsed.append((tid, x, y))
+
+    # Exact-set requirement (design §6.2, third review): the payload must
+    # name every one of this zone's active tables and nothing else — an
+    # omitted table would silently detach from its own zone's rectangle; an
+    # extra/wrong-zone id would falsely claim membership. One rule, one error.
+    received_ids = seen_ids
+    current_ids = set(current_by_id)
+    missing = sorted(current_ids - received_ids)
+    extra = sorted(received_ids - current_ids)
+    if missing or extra:
+        parts_msg = []
+        if missing:
+            parts_msg.append(f"missing table id(s) {missing}")
+        if extra:
+            parts_msg.append(f"unexpected table id(s) {extra}")
+        raise HTTPException(400, "Table list for this zone doesn't match: " + "; ".join(parts_msg) + ".")
+
+    zone.pos_x = max(0, min(1000, pos_x))
+    zone.pos_y = max(0, min(1000, pos_y))
+    zone.width = max(60, min(1000, width))
+    zone.height = max(60, min(1000, height))
+    for tid, x, y in parsed:
+        table = current_by_id[tid]
+        table.map_x_per_mille = max(0, min(1000, x))
+        table.map_y_per_mille = max(0, min(1000, y))
+    db.commit()
+    return Response(status_code=204)
 
 
 

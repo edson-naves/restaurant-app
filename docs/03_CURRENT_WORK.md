@@ -22,8 +22,15 @@ canonical base   latest fetched origin/main, unless an explicitly authorized
 main / origin    synchronized at the last verification; resolve and freeze the
                  exact SHA at task start with `git fetch origin main` followed
                  by `git rev-parse origin/main`
-production       Render visually confirmed `f6bd4ef` Live on 2026-09-06;
-                 /healthz HEALTHY
+production       Render visually confirmed `c18b9e03c264129f019341deddcad31e68b1cc05`
+                 Live via Auto-Deploy on 2026-09-07 02:55:19 PDT (green/
+                 concluded indicator). Neon branch `production`, database
+                 `neondb`. Post-deploy DB-reality check: map_x_exists=true,
+                 map_y_exists=true, invalid_positions=0, orphaned_zones=0.
+                 This supersedes the prior `f6bd4ef` confirmation below —
+                 slice 1 (model/migration/backfill) is now live; slice 2
+                 (admin visual builder, this worktree) is NOT part of this
+                 deploy — see "Implementation slice 2" status.
 ```
 
 Do not copy the last observed SHA into future prompts as a permanent baseline.
@@ -1079,24 +1086,339 @@ Floor Plan Builder interface (drag endpoints, Map/List + Arrange mode,
 staff-color picker) remains entirely out of scope for this slice and is
 unaffected by this approval.
 
+**Implementation slice 1: VALIDATED IN PRODUCTION.** Since the approval
+above, slice 1 was integrated, pushed, and deployed. Manually confirmed:
+
+```text
+Render commit    c18b9e03c264129f019341deddcad31e68b1cc05
+Deploy method    Auto-Deploy
+Indicator        green / concluded
+Shown at         2026-09-07 02:55:19 PDT
+Neon branch      production
+Neon database    neondb
+map_x_exists     true
+map_y_exists     true
+invalid_positions  0
+orphaned_zones     0
+```
+
+This confirms slice 1's schema/migration/backfill in the live production
+database, not the exact process SHA independent of this observation (§11 —
+a visual dashboard/console reading, not a Render API/webhook confirmation).
+This validation covers **slice 1 only**. It does not extend, imply, or
+substitute review/approval/integration status for slice 2 below.
+
+### Implementation slice 2 — admin visual builder — CLOSED / APPROVED (not integrated)
+
+```text
+Branch/worktree: feat/floor-admin-ui, from c18b9e0 (literal SHA, fetched
+                  and captured per the immutable-baseline procedure)
+Implementer: Claude
+Reviewer: independent review, re-review pass — verdict APPROVED WITH
+          NON-BLOCKING NOTES. Prior pass on this same slice had returned
+          FIX REQUIRED (2 HIGH findings, pointer-ownership); this re-review
+          confirmed both are fixed and found no new blocking issue.
+Files: app/routers/admin.py, web/templates/admin_tables.html,
+       web/static/app.css, docs/03_CURRENT_WORK.md,
+       tests/test_floor_admin_ui.py
+Status: CLOSED / APPROVED — independently re-reviewed, verdict APPROVED
+        WITH NON-BLOCKING NOTES, both prior HIGH findings confirmed fixed,
+        the review's own non-blocking note incorporated (see below).
+        This closing pass commits the slice to its own branch/worktree
+        (feat/floor-admin-ui) — it is still NOT INTEGRATED into main, NOT
+        PUSHED, and NOT DEPLOYED. Closing this slice authorizes nothing
+        beyond itself: integrating it into main is a separate, explicitly
+        authorized step (see "Next Authorized Action" below). This does
+        NOT mean the free-placement builder UI is live anywhere.
+```
+
+**Independent re-review verdict: APPROVED WITH NON-BLOCKING NOTES.**
+
+The re-review re-read the pointer-ownership fix below line by line (not
+trusting the implementer's own account of it), re-ran all four required
+test suites fresh, and confirmed:
+
+- Both prior **HIGH** findings — no re-entrancy guard on `pointerdown`, and
+  no `pointerId` ownership check on `pointermove`/`pointerup`/
+  `pointercancel` — are fixed exactly as described in "Both fixed, this
+  pass" below: the guard runs before any side effect, `pointerId` is
+  stored on all three gesture kinds, and all three consumer handlers
+  reject a non-owning pointer before touching position, capture, classes,
+  or the network.
+- No new blocking issue in the pointer-ownership fix, the two AJAX
+  endpoints, the shared `_TABLE_SHAPES` constant, the overlapping-zone
+  hit-test, or this documentation file.
+- **Declared limitation, unchanged and still real:** no browser/DOM test
+  harness exists anywhere in this codebase. Both structural tests
+  (`test_admin_tables_page_enforces_single_owning_pointer`,
+  `test_admin_tables_page_has_pointercancel_cleanup`) confirm the guard
+  code's *text* is present in the right handler and would fail if a guard
+  were removed or misplaced — they do not execute a real PointerEvent
+  sequence in an actual browser. This is a carried-forward, disclosed gap
+  (§9's original carve-out), not something this slice's closing resolves.
+- **Non-blocking note, incorporated this pass:** the re-review noted the
+  pointercancel structural test asserted the absence of `post(` (the local
+  fetch-wrapping helper) but not of a raw `fetch(` call bypassing that
+  helper — a hypothetical future edit could add a direct `fetch()` inside
+  the handler without failing that assertion. Fixed: the same test now
+  also asserts `"fetch(" not in handler`. No implementation behavior
+  changed — `pointercancel` already made no network call of any kind; this
+  only widens what the test would catch if that ever changed.
+
+**Independent review verdict: FIX REQUIRED — 2 HIGH findings.**
+
+Root cause: the global `drag` state did not identify which pointer owned
+the active gesture. A second `pointerdown` could silently replace the
+active gesture's `drag` object; a `pointermove`, `pointerup`, or
+`pointercancel` carrying a *different* `pointerId` than the one that
+started the gesture would still be accepted, because nothing ever compared
+`e.pointerId` against anything.
+
+- **HIGH** — a second pointer going down while one gesture was already
+  active overwrote `drag` outright (no ownership check existed on
+  `pointerdown` at all), silently abandoning the first pointer's gesture
+  mid-drag with no cleanup, and handing control of the (now-wrong) `drag`
+  object to the second pointer.
+- **HIGH** — `pointermove`, `pointerup`, and `pointercancel` acted on
+  whichever `drag` object happened to be set, regardless of which pointer
+  fired the event — a stray event from an unrelated pointer (e.g. a second
+  finger lifting, or a second touch's own `pointercancel`) could move,
+  autosave, or cancel a gesture it never started.
+
+**Both fixed, this pass — single-active-gesture-with-owner policy:**
+
+1. `pointerdown` now checks `if (drag) return;` immediately (before
+   computing which element was hit or building a new `drag` object) — a
+   second pointer going down while one gesture is active is ignored
+   completely: no new `drag`, no `setPointerCapture` attempt, no
+   `preventDefault`. The first gesture's `drag` object is untouched.
+2. Every `drag` object (`table`, `move`, `resize`) now stores
+   `pointerId: e.pointerId` from the `pointerdown` that created it.
+3. `pointermove`, `pointerup`, and `pointercancel` each now check
+   `e.pointerId !== drag.pointerId` immediately after the existing
+   `if (!drag) return;` guard, and return without touching anything —
+   position, capture, `.dragging`, autosave, or `.unsaved` — when the
+   event's pointer is not the gesture's owner. `pointerup`'s listener
+   signature gained the `e` parameter it previously lacked, since reading
+   `pointerId` requires it.
+4. Previously-approved cancellation behavior is unchanged and still holds
+   for the owning pointer: no autosave request on cancel; the zone and all
+   of its carried tables are marked `.unsaved` together; capture is
+   released defensively; `.dragging` is always stripped; `drag` is cleared.
+
+**Functional scope preserved, unchanged by this fix:** single-pointer drag
+math (proportional resize, drop-into-zone hit-test via
+`elementsFromPoint`), the shape-constant dedup, and every backend route —
+none of those touched by this pass.
+
+**Tests — structural, same declared limitation as the prior pointercancel
+coverage (no browser/DOM test harness exists anywhere in this codebase;
+adding one — jsdom or a real browser driver — for this one gesture-ownership
+path was judged disproportionate rather than silently skipped: Node
+24.18.0 is available on this machine but nothing in the repo currently
+uses it for tests, and there is no `package.json`).** Two tests, each
+isolating one handler's own source text so a removed guard fails the
+specific assertion tied to it, not a loose "feature exists somewhere"
+check:
+
+```text
+test_admin_tables_page_enforces_single_owning_pointer:
+    pointerdown's `if (drag) return;` exists and precedes the first
+    `drag = {` assignment (re-entrancy guard runs before state is built)
+    pointerId is stored on all 3 drag kinds (table/resize/move)
+    pointermove/pointerup/pointercancel each contain
+    `e.pointerId !== drag.pointerId`
+    pointerup's listener now declares the `e` parameter it needs
+test_admin_tables_page_has_pointercancel_cleanup (extended, this pass):
+    the existing cleanup/marking/no-post assertions, plus the new
+    ownership-guard line inside the same isolated handler
+```
+
+Second implementation slice of the approved Floor Plan Builder design
+(`docs/Evidence/Floor/FLOOR_PLAN_BUILDER_DESIGN.md` §5-7): the admin
+Tables/map page (`admin_tables.html`) gets a free-placement map, additive to
+the existing grid-based table/zone management (the grid-drag interaction on
+*this* page is retired per §5; `floor.html`'s own grid rendering is
+untouched, out of scope per §10).
+
+Delivered, strictly per the design:
+
+- `POST /admin/tables/map-layout` (§6.1) — `id:x:y[:shape[:zone_id]]` per
+  table, comma-separated; clamps x/y to [0,1000] server-side; validates
+  shape against `{round, square, rect}` (400, not silent ignore, on an
+  invalid value); reassigns zone via the existing shared `_assign_zone`
+  when a zone_id is given; `pos_x`/`pos_y` are never read or written here.
+- `POST /admin/zones/{zone_id}/move-layout` (§6.2) — one atomic
+  `db.commit()` for a zone's rectangle and every one of its tables'
+  positions; requires `tables` to name exactly the zone's current active
+  table ids (no missing, no extra, no duplicate, none from another zone)
+  before writing anything; rejects an incomplete/wrong/duplicate payload
+  with nothing written, byte-identical to the pre-request state.
+- `admin_tables.html` — zone rectangles and tables rendered absolutely
+  positioned (per-mille percent) over one canvas; pointer events (not HTML5
+  drag-and-drop — §7's touch/mouse note) drive table move/drop-into-zone,
+  zone move, and zone corner-resize (client computes the proportional new
+  table positions; the backend only validates and persists what it's
+  sent, per §6.2's division of responsibility); shape-cycle button now
+  persists through the new endpoint instead of the old grid endpoint's
+  DOM-scraping JS, which has nothing left to read on this page (§6.1
+  Correction 2); a failed autosave marks the element `.unsaved` (visible
+  red outline + tooltip) and leaves it exactly where dropped, never
+  snapping back or failing silently (§6.3).
+- `admin.py::_table_map_positions` — the NULL-fallback placement (§4.4):
+  a zone's never-placed tables, sorted by id, spread as distinct points on
+  a ring centred on that zone's rectangle (a true rank/bijection, not id
+  parity or `id % N`, both of which collide for some id sets) — computed
+  fresh on every page render, nothing stored.
+- `admin_floors.html` untouched — stays the separate floor/zone creation
+  entry point, per §5/§10.
+- The old `POST /admin/tables/layout` grid route is untouched and stays
+  green under its own existing test; nothing on this page calls it anymore.
+
+**Known limitation, disclosed, not fixed here (matches design §6.3's own
+accepted tradeoff):** if a save fails (network error, or a zone deleted out
+from under a concurrent drag) and dataset is not advanced, the *next* drag
+on that same element computes its delta from the last-*saved* position, not
+the currently-*displayed* one — a visual jump back on the very next
+gesture after a failure, before the retry's own drop corrects it. No data
+is at risk (the failed write never landed), and the failure is still
+visibly flagged, never hidden. Left as a `ponytail:` comment at the call
+site rather than adding version/optimistic-lock tracking not present
+anywhere else in this codebase, matching §12's decision to accept
+last-write-wins rather than introduce new concurrency machinery for this
+slice.
+
+**Authorial correction round 1 (self-applied — independently reviewed
+afterward; that review's FIX REQUIRED verdict and its 2 HIGH findings are
+recorded above, ahead of this section, along with correction round 2 that
+resolved them):**
+
+1. **Pointer cancellation.** `pointerdown`/`pointermove`/`pointerup` had no
+   `pointercancel` handling — a browser-cancelled gesture (touch-scroll
+   takeover, OS interrupt) left `drag` set, pointer capture held, and
+   `.dragging` on the chip, so the *next* gesture on that element could
+   start from stale state. Added one `pointercancel` listener covering all
+   three kinds (table/move/resize, since they share the one `drag` object):
+   clears `drag`, releases pointer capture defensively
+   (`try/catch`, a no-op if the UA already released it), always strips
+   `.dragging`, and — since the element may already sit wherever the
+   cancelled gesture displaced it, with nothing sent — marks it `.unsaved`
+   with an accurate tooltip ("Move cancelled before saving"), distinct from
+   the existing "Save failed" text used for a real rejected/failed AJAX
+   call. For zone move/resize, the zone and every one of its carried tables
+   are marked together, matching how they were displaced together. No
+   `post()` call anywhere in the handler.
+2. **Duplicate-id + omission test.** Added
+   `test_move_layout_rejects_duplicate_id_and_omission_together`: one
+   payload naming a table twice while omitting the zone's other active
+   table. Confirms 400 and zero partial write (zone rect and both tables'
+   positions all read back unchanged). The existing endpoint code already
+   raises on the duplicate before ever reaching the missing/extra check —
+   this test is what actually exercises that combination; it did not exist
+   before this pass.
+3. **pointercancel test coverage.** No browser JS harness exists in this
+   codebase (unchanged from slice 2's original scope note); a real
+   pointer-event simulation is disproportionate to add for this one gesture
+   path. Added `test_admin_tables_page_has_pointercancel_cleanup` instead:
+   fetches the rendered page and structurally confirms, inside the isolated
+   `pointercancel` handler's own source text, that state is cleared, capture
+   is released, `.dragging` is removed, the affected element(s) are marked,
+   the zone's tables are flagged together, and — the one negative
+   assertion — no `post(` call appears in that handler. This proves the
+   handler exists with the right shape; it does not execute it or prove
+   runtime behavior in an actual browser.
+4. **Overlapping zones.** The drop hit-test iterated `.zone-rect` in DOM
+   order and kept overwriting the match, so the *last* zone in that
+   `querySelectorAll` order silently won regardless of what a manager
+   actually sees stacked on top at the drop point. Analysis: today's CSS
+   gives zone-rects no explicit `z-index` and no transform, so DOM order
+   does currently equal paint order — but nothing made that correspondence
+   explicit or protected it from a future style change (e.g. a "just
+   dropped" or "selected" zone getting its own `z-index`). Replaced the
+   manual bounding-rect loop with `document.elementsFromPoint(cx, cy)`
+   (topmost-first, native browser API) and picked the first `.zone-rect` in
+   that stack — this is the browser's own answer to "what's actually
+   painted on top here", correct under any future stacking, not a
+   re-implementation of stacking rules that could drift from them. No
+   design-doc gap remained to record as a limitation: the native API fully
+   resolves the ambiguity.
+5. **Shape constant duplication.** `_TABLE_SHAPES` (this slice's own
+   module-level set) and a second, identical `shapes = {"round", "square",
+   "rect"}` local to the legacy `/tables/layout` route were two literals for
+   the same three values. Moved `_TABLE_SHAPES` next to `GRID_COLS` (before
+   either route) and pointed the legacy route's membership check at it
+   instead of its own local set. The legacy route's behavior is unchanged
+   byte-for-byte: same three values, same silent-ignore-on-invalid-value
+   semantics (still no 400 there — untouched), same everything except the
+   set object's identity.
+
+**Tests — real execution:**
+
+```text
+tests/test_floor_admin_ui.py (17 tests / 63 assertions, SQLite):
+    map-layout: move, clamp-out-of-range, unknown-id/malformed rejection,
+    shape valid/invalid/omitted, zone_id reassignment, 403 non-Owner
+    move-layout: atomic move, omitted/extra/duplicate/wrong-zone rejection,
+    duplicate-id + omission together (new, this pass — §2 above)
+    (each asserting nothing was written, not just the response code),
+    empty-on-empty vs empty-on-occupied, inactive-table exclusion +
+    rejection-if-named, 403 non-Owner
+    page render: mixed placed/NULL-fallback tables render without error
+    pointercancel structural check (new, this pass — §3 above)
+Regression (§9 "must stay green"), all re-run standalone, all pass —
+re-confirmed fresh again in this correction pass (2026-09-07), not just
+carried over from the original implementation pass:
+    tests/test_floor_spatial.py — 7 tests, incl. the OLD grid-drag
+        test_save_layout_sets_shape_and_position unmodified and still green
+    tests/test_reservations_map.py — confirms zero position-dependency
+    tests/test_migrate.py
+Evidence boundary (§9, explicit carve-out): tests/test_admin.py re-run and
+    still fails the same pre-existing way documented for slice 1 — "no
+    owner in the database" (missing seed data), not a code assertion,
+    reproduced on this same base before this slice's changes. Not a
+    regression; not chased further, per the design's own instruction not
+    to assume it fixed without re-checking (it isn't fixed, confirmed).
+Not in scope for test evidence (§9 explicit carve-out): browser/touch/
+    device validation of the pointer-drag JS — no browser test harness
+    exists anywhere in this codebase.
+```
+
+Out of scope, confirmed unaffected: `floor.html`'s operational Map/List +
+Arrange mode, the staff-color picker, `admin_floors.html`, CSRF (pre
+-existing app-wide gap, not this slice's to fix), keyboard-accessible drag
+(pre-existing gap), Payment/Security files (none touched).
+
 ## Next Authorized Action
 
 ```text
-NONE merged/committed and pending. The Floor Plan Builder design
-(design/floor-plan-builder) is CLOSED / APPROVED. Its first implementation
-slice (model, migration, backfill — see "Implementation slice 1" above,
-branch feat/floor-map-coordinates) is now IMPLEMENTATION COMPLETE, sitting
-uncommitted in its own isolated worktree, awaiting independent review — not
-yet reviewed, not yet committed, not merged, not pushed, not deployed.
-Remaining slices (UI/drag endpoints, operational Map/List + Arrange,
-staff-color) still require their own separate, explicit authorization each,
-same as before.
+The Floor Plan Builder design (design/floor-plan-builder) is CLOSED /
+APPROVED. Both implementation slices built against it are done:
+
+  Slice 1 (model, migration, backfill, branch feat/floor-map-coordinates)
+  — VALIDATED IN PRODUCTION (see "Implementation slice 1" above). Not
+  future, not pending — it is live.
+
+  Slice 2 (admin visual builder, branch feat/floor-admin-ui) — CLOSED /
+  APPROVED by independent re-review (see "Implementation slice 2" above),
+  committed to its own branch by this pass. NOT YET integrated into main,
+  NOT pushed, NOT deployed.
+
+**Next authorized administrative step (still requires explicit
+authorization before acting — not self-authorizing):** fast-forward
+`feat/floor-admin-ui` into `main` (a fast-forward is possible only if
+`main` has not moved past this branch's own base, `c18b9e0` — re-verify
+`git merge-base` immediately before merging, not assumed from this note).
+No push and no deploy are implied by that merge; each remains its own,
+later, separately authorized step. The operational Map/List + Arrange
+mode and the staff-color picker (out of scope for both slices above)
+still require their own separate, explicit authorization each, same as
+before.
 
 open_order_on_table's proven PostgreSQL race remains a real, tracked risk
 (see "Residual risks" below) and a candidate for its own future,
 separately-designed-and-authorized slice — it is NOT the next proposed
-slice ahead of the Floor Plan Builder migration/backfill work above; it is
-preserved here as future risk/backlog, not queued ahead of it. Administrative
+slice ahead of the Floor Plan Builder integration above; it is preserved
+here as future risk/backlog, not queued ahead of it. Administrative
 cleanup of the five superseded documentation branches is also optional and
 requires explicit authorization, independent of either.
 ```
