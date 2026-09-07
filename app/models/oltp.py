@@ -378,6 +378,14 @@ class RestaurantTable(Base):
     pos_x: Mapped[int] = mapped_column(Integer, default=0)
     pos_y: Mapped[int] = mapped_column(Integer, default=0)
     shape: Mapped[str] = mapped_column(String(10), default="round", nullable=False)
+    # Free-placement (per-mille, 0-1000) coordinates for the Floor Plan Builder's
+    # free map — a separate representation from pos_x/pos_y's grid cells, never
+    # a reinterpretation of them (docs/Evidence/Floor/FLOOR_PLAN_BUILDER_DESIGN.md
+    # §3). NULL means "never placed on the free map yet"; a real 0 would be
+    # indistinguishable from a deliberate placement, so no default is given —
+    # backfill (app/migrate.py) fills these in for existing eligible tables.
+    map_x_per_mille: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    map_y_per_mille: Mapped[int | None] = mapped_column(Integer, nullable=True)
     current_waiter_id: Mapped[int | None] = mapped_column(ForeignKey("staff.id"), nullable=True)
 
     current_waiter: Mapped["Staff | None"] = relationship("Staff", lazy="joined")

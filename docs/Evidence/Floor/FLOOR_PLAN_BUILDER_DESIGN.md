@@ -7,9 +7,19 @@ Base SHA (literal, captured via git fetch origin main + git rev-parse origin/mai
           99e2490dd1c124184ca92e8a88f149fbaec93979
 Author:   Claude (design only)
 Status:   DESIGN CLOSED / APPROVED — fourth independent review returned
-          APPROVED WITH NON-BLOCKING NOTES (both notes incorporated, see
-          "Revision note (fourth pass)" below). IMPLEMENTATION REMAINS NOT
-          AUTHORIZED — design approval is not implementation authorization.
+          APPROVED WITH NON-BLOCKING NOTES (both notes incorporated). The
+          approved architecture, schema, ELIGIBLE definition, formula, and
+          call-sites are UNCHANGED since that approval. §4.2/§4.5's
+          transactional description was subsequently found factually
+          incorrect on one point once implementation actually ran the
+          tests — corrected in "Revision note (fifth pass)" below as a
+          factual correction from execution evidence, not a design/goal
+          change; nothing here reopens the architectural approval.
+          IMPLEMENTATION REMAINS NOT AUTHORIZED FOR THIS DOCUMENT — design
+          approval is not implementation authorization. (A first
+          implementation slice does exist, in its own worktree/branch, with
+          its own independent-review status tracked in
+          `docs/03_CURRENT_WORK.md`, not here.)
 Scope of this document: DESIGN ONLY. No application code, migration, or test
 was written or modified by this slice. See "Confirmation nothing was
 implemented" at the end.
@@ -97,6 +107,46 @@ Implementation remains NOT AUTHORIZED** — approval of this document
 authorizes nothing beyond itself; a separate, explicitly authorized
 migration/backfill implementation slice is the proposed next step (see
 `docs/03_CURRENT_WORK.md`), not implied by this closure.
+
+**Revision note (fifth pass) — factual correction from execution evidence,
+not a re-opening of the architectural approval above:** the first
+implementation slice (`docs/03_CURRENT_WORK.md`, branch
+`feat/floor-map-coordinates`) actually wrote and ran the tests this design
+specifies — real SQLite, and real disposable PostgreSQL — and that execution
+disproved one specific factual claim this document had carried since its
+first version and repeated through every prior pass, including the fourth
+pass's own point 2 correction two paragraphs above (which restated the claim
+more precisely without checking it): that on SQLite, a failed backfill rolls
+the two new columns back together with it, in the same transaction as the
+column ALTERs.
+
+**Measured, not assumed:** under this project's actual stack (SQLAlchemy
+2.0, pysqlite), `ALTER TABLE ADD COLUMN` auto-commits the instant it
+executes — even inside a `with engine.begin() as conn:` block, DDL is not
+part of that transaction on this driver, only plain DML is. So a failure in
+the backfill step, on SQLite, does **not** remove the two columns already
+added earlier in that same nominal transaction — they remain, exactly as
+they do on PostgreSQL (where they were already committed independently,
+before the backfill's own transaction ever began, for a different, already
+-correctly-described reason). What *does* roll back correctly on SQLite,
+confirmed directly, is the backfill's own DML — every UPDATE from that
+failed run is undone. The resulting state on both dialects is therefore the
+same shape, reached by two different mechanisms: **columns present, every
+eligible row's map position still NULL** — indistinguishable from "columns
+just added, nothing backfilled yet", which is exactly the state the next
+run already handles correctly (§4.4, §4.5). A re-run after fixing whatever
+caused the failure completes the backfill on the next attempt — also
+measured, not merely asserted.
+
+§4.2 ("Behavior on partial failure"), its "Required test" paragraph, and
+§4.5 ("Idempotency") are corrected below to state this precisely. Every
+residual claim that SQLite removes or reverts the two columns on this
+failure has been removed from those sections. **This is a factual
+correction of the design's own transactional description, drawn from
+running the exact tests this document specifies — it does not change the
+approved architecture, the schema, the `ELIGIBLE` definition, the formula,
+the call-sites, or any decision this document's approval covers.** Those
+remain APPROVED, unchanged, as closed above.
 
 ## 1. Purpose and historical reference
 
@@ -230,13 +280,20 @@ which is evidence, not a guarantee. Corrected below.
                       time this function runs, on both dialects — not a
                       separate manual step someone might skip. What "that
                       transaction" rolls back is NOT the same on both
-                      dialects — see §4.2's transactional behavior, corrected
-                      (third review) to state this precisely instead of
-                      generically: on SQLite it is the same transaction as
-                      phase 1's column ALTERs; on PostgreSQL, phase 1's
-                      columns are already committed by the time phase 2
-                      runs, so a phase-2 failure there rolls back only
-                      phase 2's own writes, and the columns remain.
+                      dialects, and — corrected fifth pass, against measured
+                      execution, not the third-review's assumption — it is
+                      narrower than "the column ALTERs too" on EITHER
+                      dialect: on SQLite, `ALTER TABLE ADD COLUMN` auto
+                      -commits independently of the enclosing transaction on
+                      this driver, so phase 1's columns survive a phase-2
+                      failure there same as on PostgreSQL, where phase 1's
+                      columns are already committed, each in their own
+                      transaction, before phase 2 even starts. On both
+                      dialects a phase-2 failure rolls back only phase 2's
+                      own writes; the columns remain either way — see §4.2's
+                      transactional behavior for the full, per-dialect
+                      mechanism (they arrive at the same outcome by
+                      different means, not the same means on both).
 3. UI ACTIVATION      the free-map route/template ships as its own later,
                       separately authorized slice (§8), strictly after phase
                       2 has completed without raising, on both dialects —
@@ -473,19 +530,34 @@ that is the point: the check exists to catch an implementation defect, not
 a data shape, because the data shape is already constrained to never
 produce one on its own.
 
-**Behavior on partial failure, both dialects, now explicit — the check lives
-inside the transaction on both:**
+**Behavior on partial failure, both dialects — corrected against measured
+execution evidence (fifth pass; see "Revision note (fifth pass)" at the top
+of this document). This replaces the earlier, incorrect claim that SQLite
+rolls the column ALTERs back together with a failed backfill — it does not,
+on this stack. What is unchanged: the fail-closed decision itself, the
+check's placement (steps 0-4 run as a unit), and the safety/idempotency
+outcome on both dialects.**
 
 ```text
-SQLite      Column ALTERs, backfill (steps 2-4 above), all run in one
-            `with engine.begin() as conn:` transaction. A raised exception —
-            from the ALTERs, from step 2's writes, or from step 4's
-            fail-closed check — rolls the whole block back: no orphaned
-            state where columns exist with a half-finished or silently
-            -incomplete backfill. run() then propagates the exception (there
-            is no strict=False swallow path for this block specifically —
-            the surrounding try/except in run() only wraps
-            _backfill_prep_tasks, not this one).
+SQLite      Measured directly against this project's stack (SQLAlchemy 2.0,
+            pysqlite): `ALTER TABLE ADD COLUMN` auto-commits the instant it
+            executes, even inside a `with engine.begin() as conn:` block —
+            DDL is not actually part of that transaction on this driver,
+            only plain DML is. So when step 2's writes or step 4's
+            fail-closed check raises, the two columns added earlier in the
+            SAME nominal transaction remain in the schema — they are not
+            rolled back. What DOES roll back correctly is the backfill's
+            own DML: every UPDATE from step 2 in that failed run is undone,
+            confirmed by re-reading every row afterward. Net state after a
+            failure: the two columns exist, every eligible row's
+            map_x_per_mille/map_y_per_mille is NULL — indistinguishable
+            from "columns just added, nothing backfilled yet", which is
+            exactly the state the next run already knows how to handle
+            (§4.4, §4.5). run() still propagates the exception (there is no
+            strict=False swallow path for this block specifically — the
+            surrounding try/except in run() only wraps _backfill_prep_tasks,
+            not this one) — the failure is still loud, only the "columns
+            vanish too" part of the original claim was wrong.
 
 PostgreSQL  Each column ADD in _run_postgres already runs in its own
             transaction, independently guarded (existing code, line
@@ -496,11 +568,22 @@ PostgreSQL  Each column ADD in _run_postgres already runs in its own
             column ADDs, running steps 1-4 above exactly as on SQLite; it is
             NOT wrapped in the per-column try/except — a failure at step 2
             or a raise at step 4 aborts that transaction and propagates,
-            regardless of `strict`. Unlike the column loop, this is a single
-            all-or-nothing step with no "per-column" granularity to log
-            partial progress against — there is nothing meaningful to SKIP
-            and continue with when the fail-closed check has just found some
-            tables positioned and others not.
+            regardless of `strict`. The already-committed columns from the
+            prior phase remain (they were never at risk — a different,
+            correctly-anticipated mechanism than SQLite's, arriving at the
+            same "columns present, values NULL" outcome). Unlike the column
+            loop, this is a single all-or-nothing step with no "per-column"
+            granularity to log partial progress against — there is nothing
+            meaningful to SKIP and continue with when the fail-closed check
+            has just found some tables positioned and others not.
+
+Both        Columns present, every eligible row's position NULL, is a safe
+            and idempotent end state on both dialects — by two different
+            transactional mechanisms arriving at the same outcome, not by
+            one shared mechanism as originally described. Re-running
+            `migrate.run()` after fixing whatever caused the failure
+            completes the backfill correctly on the next attempt — measured,
+            not merely asserted; see the required test immediately below.
 ```
 
 **Required test — this is what makes Correction 1 durable, not just
@@ -515,19 +598,24 @@ implementation this document originally described (columns created, backfill
 never invoked on Postgres) and pass once the Postgres call site required
 above exists.
 
-**Required test, second review's addition — the fail-closed guarantee itself
-must have a test, not just a design description of it:** inject a failure
-into step 2 or step 4 (e.g. a test-only monkeypatch that leaves one eligible
-row's `map_y_per_mille` NULL after step 2, or corrupts it out of `[0,1000]`)
-and assert (a) `migrate.run()` raises, and (b) re-reading the schema/table
-afterward shows **no** partial state — on SQLite, the columns added by step
-1 in that same run are gone too (full transaction rollback, re-verified by
-introspecting the schema post-failure); on the disposable PostgreSQL, the
-column-ADDs from step 1 (already committed in their own per-column
-transactions, per the existing `_run_postgres` design) remain, but zero rows
-show a written value from the failed backfill attempt — consistent with
-step 1 and step 2 being genuinely separate transactions on that dialect,
-already documented above.
+**Required test, second review's addition, corrected against measured
+execution (fifth pass) — the fail-closed guarantee itself must have a test,
+not just a design description of it:** inject a failure into step 2 or step
+4 (e.g. a test-only monkeypatch that leaves one eligible row's
+`map_y_per_mille` NULL after step 2, or corrupts it out of `[0,1000]`) and
+assert (a) `migrate.run()` raises, and (b) re-reading the schema/table
+afterward shows **no partially-written value** — on SQLite, the columns
+added by step 1 in that same run **remain** (DDL auto-commits independently
+of the transaction on this driver — measured, not the "gone too" this
+document previously and incorrectly stated) while every row's
+map_x_per_mille/map_y_per_mille is confirmed NULL (the backfill's own DML
+rolled back); on the disposable PostgreSQL, the column-ADDs from step 1
+(already committed in their own per-column transactions, per the existing
+`_run_postgres` design) likewise remain, and likewise zero rows show a
+written value from the failed backfill attempt. Both dialects: same
+end-state shape (columns present, values NULL), reached by different
+transactional mechanisms — the test must assert that shape explicitly on
+each dialect, not assume one dialect mirrors the other.
 
 A manual/CI count check against the actual deployment target —
 `SELECT COUNT(*) FROM restaurant_table JOIN zone ON restaurant_table.zone_id
@@ -742,24 +830,25 @@ one drag at a time.
 completed is a no-op — the eligible-and-NULL set (§4.4) is empty, so
 `_backfill_table_map_positions` has nothing to update on either dialect, on
 any subsequent run. A partial run (interrupted mid-transaction) rolls back
-entirely per §4.2's fail-closed decision — clarified (fourth review, note
-2), since "entirely" means different things per dialect and this section
-had stated it generically: "rolls back entirely" refers to the **backfill's
-own transaction** (§4.2 step 0-4), not the column-creation phase that
-preceded it. On SQLite, that backfill transaction is the same one as the
-column ALTERs (§4.1), so an interruption there does roll back both
-together — see §4.2's transactional behavior for that dialect specifically.
-On PostgreSQL, the column ADDs from the prior phase are already committed,
-each in its own transaction, by the time the backfill's transaction even
-starts (§4.2) — a partial/interrupted backfill there rolls back only the
-backfill transaction's own writes; the already-committed columns remain,
-exactly as §4.2's per-dialect transactional behavior already describes.
-Either way, "partial" and "complete" are the only two reachable states for
-the backfill step itself on a single run — there is no partially-applied
-backfill state to resume from, and re-running from "complete" only ever
-adds newly-eligible rows (a table that changed from ineligible to eligible
-since the last run — e.g. a zone-less table that got assigned a zone),
-never redoes already-backfilled ones.
+entirely per §4.2's fail-closed decision — "entirely" here means the
+**backfill's own transaction and its own writes** (§4.2 step 0-4), not
+necessarily the column-creation phase that preceded it; §4.2's "Behavior on
+partial failure" table gives the precise, measured, per-dialect shape
+(corrected fifth pass: on SQLite the two columns survive a failed backfill
+via DDL auto-commit, they are not rolled back together with it; on
+PostgreSQL they survive because they were already committed independently
+before the backfill's transaction began). What matters for idempotency
+specifically is narrower and holds on both dialects regardless of that
+distinction: the backfill's own DML never partially applies — either every
+row step 2 touched this run got a valid value and the transaction committed,
+or the raise undid all of that run's writes, so a table is never left with
+a half-computed or corrupted value from an interrupted run. "Partial" and
+"complete" are the only two reachable states for the backfill's *values*
+on a single run — there is no partially-applied backfill state to resume
+from — and re-running from "complete" only ever adds newly-eligible rows (a
+table that changed from ineligible to eligible since the last run — e.g. a
+zone-less table that got assigned a zone), never redoes already-backfilled
+ones.
 
 **Rollback:** dropping the two new columns is out of scope for a rollback of
 this slice's *code* — the standing convention in `app/migrate.py` is

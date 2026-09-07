@@ -11,6 +11,7 @@ service history. Run on every startup; a fully migrated database is a no-op.
 """
 from __future__ import annotations
 
+import math
 import re
 from datetime import datetime
 
@@ -132,6 +133,15 @@ ADDED_COLUMNS: tuple[tuple[str, str, str], ...] = (
     # seated->attended lead-time stamp (nullable — no historical value to backfill).
     ("staff", "color", "VARCHAR(7)"),
     ("order", "attended_at", "TIMESTAMP"),
+    # Floor Plan Builder — free-placement (per-mille) coordinates. Nullable, no
+    # default: NULL means "not placed on the free map yet", never reinterpreted
+    # from pos_x/pos_y (the existing grid columns, left untouched). Column
+    # creation alone leaves every row NULL on both dialects; the separate
+    # backfill below (_backfill_table_map_positions, wired into run() and
+    # _run_postgres() independently) is what fills eligible existing tables in.
+    # See docs/Evidence/Floor/FLOOR_PLAN_BUILDER_DESIGN.md §3-4.
+    ("restaurant_table", "map_x_per_mille", "INTEGER"),
+    ("restaurant_table", "map_y_per_mille", "INTEGER"),
 )
 
 # (table, column, min_length, new DDL type). Columns whose type/length GREW
@@ -162,6 +172,13 @@ UNIQUE_CONSTRAINTS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 PROVIDER_BACKFILL = (("payment_attempt", "square", "square_terminal"),)
 
 DEFAULT_FLOOR = "1st floor"
+
+# Must match app/routers/admin.py's GRID_COLS (10) — the Floor Plan Builder
+# backfill derives per-mille positions from the same grid the current admin
+# table editor uses. Not imported from there: app/routers/admin.py pulls in
+# the full FastAPI/router/template stack, and this module has no app-internal
+# imports today — a single stable integer isn't worth a layering violation.
+GRID_COLS = 10
 
 
 class MigrationError(RuntimeError):
@@ -200,6 +217,21 @@ def run(engine: Engine, strict: bool = False) -> list[str]:
             applied.append(f"{table}.{column}")
 
         applied.extend(_backfill_locations(conn))
+        # Floor Plan Builder — same nominal transaction as the column ALTERs
+        # above, fail-closed rather than best-effort (function docstring;
+        # docs/Evidence/Floor/FLOOR_PLAN_BUILDER_DESIGN.md §4.2). MEASURED
+        # CAVEAT the design doc did not anticipate: under this driver
+        # (pysqlite via SQLAlchemy), `ALTER TABLE ADD COLUMN` auto-commits
+        # the instant it executes — DDL is not actually rolled back by this
+        # `with engine.begin()` block on an exception, only plain DML is
+        # (verified directly; the same is true of every other ADD COLUMN in
+        # this file, not something introduced here). So a raise here leaves
+        # the two new columns in place but every row NULL — the DML (this
+        # function's UPDATEs) does roll back correctly. That end state is
+        # still safe and idempotent (identical to "columns exist, nothing
+        # backfilled yet" — exactly what the next run expects), just not by
+        # the "everything vanishes together" mechanism the design describes.
+        applied.extend(_backfill_table_map_positions(conn))
     # The fire-batch unique index is a REQUIRED invariant — run it in its own
     # transaction (after the additive column work has committed) so that if it
     # halts on pre-existing duplicates, it does not roll back the column adds.
@@ -313,6 +345,18 @@ def _run_postgres(engine: Engine, strict: bool = False) -> list[str]:
     # the unique index impossible).
     with engine.begin() as conn:
         _ensure_prep_task_index(conn)
+    # Floor Plan Builder — its own transaction, deliberately NOT wrapped in a
+    # try/except: the ADD COLUMNs above are already committed (each in its
+    # own transaction) by the time this runs, so a raise here only rolls back
+    # this backfill's own writes, never the columns — but it must still raise,
+    # not log "SKIPPED" and continue, on both dialects (fail-closed; see the
+    # function's docstring and docs/Evidence/Floor/FLOOR_PLAN_BUILDER_DESIGN.md
+    # §4.2). There is no existing Postgres call site to piggyback on for this
+    # backfill — added here from scratch, the same way _backfill_prep_tasks's
+    # own Postgres call (below) was added alongside its SQLite one rather than
+    # assumed.
+    with engine.begin() as conn:
+        applied.extend(_backfill_table_map_positions(conn))
     # The backfill itself stays best-effort (a missing legacy task is caught by
     # the B2 readiness invariant, not a silent unprotected duplicate risk).
     try:
@@ -770,3 +814,154 @@ def _backfill_locations(conn) -> list[str]:
     ), {"f": floor_id})
 
     return [f"backfilled {orphans} tables onto '{DEFAULT_FLOOR}' ({len(names)} zones)"]
+
+
+def _round_half_up(value: float) -> int:
+    """Deterministic round-half-up for a non-negative value.
+
+    Deliberately not Python's built-in round() (round-half-to-even) and never
+    a SQL-side ROUND() on either dialect (SQLite and PostgreSQL round
+    differently in edge cases, and neither is guaranteed to match Python) —
+    the arithmetic happens exactly once, here, and the already-rounded
+    integer is the only thing either dialect ever sees. See
+    docs/Evidence/Floor/FLOOR_PLAN_BUILDER_DESIGN.md §4.3.
+    """
+    return math.floor(value + 0.5)
+
+
+def _backfill_table_map_positions(conn) -> list[str]:
+    """Floor Plan Builder — give existing tables a starting position on the
+    free (per-mille, 0-1000) map, deterministically derived from their
+    current grid cell. Additive and one-directional: `pos_x`/`pos_y` (the
+    grid columns) are only ever read here, never written or reinterpreted —
+    docs/Evidence/Floor/FLOOR_PLAN_BUILDER_DESIGN.md §3.
+
+    ELIGIBLE(table, zone) := table.is_active AND table.zone_id = zone.id —
+    an INNER JOIN, not a separately-worded `zone_id IS NOT NULL` clause (the
+    join structurally excludes a zone-less table; there is nothing for it to
+    equal). A soft-retired or zone-less table is never backfilled and keeps
+    both columns NULL indefinitely — deliberate, not a gap (§4.4): neither
+    ever renders on a floor plan. This single relation is used, unchanged,
+    everywhere below — the eligible-row selection, the per-floor
+    GRID_ROWS_SEEN, and the in-transaction post-condition all query it the
+    same way, so the algorithm and its own correctness check cannot disagree
+    on which rows they mean (§4.2).
+
+    Step 0 — integrity check: an *orphaned* reference (an active table whose
+    `zone_id` matches no existing `Zone` row) is a data-integrity fault, not
+    a row the join gets to quietly exclude without comment. Raises, naming
+    the table id(s), before anything else runs. Expected to find nothing on
+    this codebase's own write paths (`app/database.py` enables `PRAGMA
+    foreign_keys=ON` for SQLite, and `zone_id` is a real FK on both
+    dialects; `Zone` rows are never hard-deleted) — it exists for a database
+    this migration cannot assume was only ever touched through those paths.
+
+    Step 1-2: for each eligible row still missing a map position, compute
+    one from its grid cell — `pos_x`/`pos_y` defensively clamped to the
+    grid's actual bounds, per-mille position computed and rounded once in
+    Python (`_round_half_up`), then clamped again to [0, 1000] — and write
+    it. Every eligible-and-not-yet-placed row is processed; none are
+    silently skipped.
+
+    Step 3-4: in this SAME transaction, immediately after step 2, re-check
+    (over the identical `ELIGIBLE` relation) that every eligible row now has
+    both coordinates, in range. Raise if not — do not log "SKIPPED" and
+    continue. Fail-closed, not best-effort, unlike this module's other
+    backfills: nothing downstream needs this one to succeed except the Floor
+    Plan Builder itself, so there is no broader system to protect by
+    swallowing a coding defect here (§4.2, Correction 3).
+
+    Idempotent: the only rows ever touched are eligible-and-NULL; once none
+    are, every later run is a no-op, and a table that becomes newly eligible
+    afterward (a zone-less table assigned a zone; a reactivated table) is
+    picked up on ITS OWN later run, without redoing an already-placed row
+    (§4.5).
+    """
+    # A legitimately absent table is a safe no-op — same guard convention as
+    # _backfill_locations/_backfill_prep_tasks. In the real app, create_all()
+    # always creates restaurant_table/zone before migrate.run() ever executes
+    # (module docstring), so this is normally trivially true; it matters for
+    # a narrower harness (e.g. tests/test_pg_migration.py's payment-only
+    # schema) that legitimately never creates these tables at all — found by
+    # running that suite's regression against this backfill.
+    if not _table_exists(conn, "restaurant_table") or not _table_exists(conn, "zone"):
+        return []
+
+    orphans = [
+        r[0] for r in conn.execute(text(
+            "SELECT restaurant_table.id FROM restaurant_table "
+            "LEFT JOIN zone ON restaurant_table.zone_id = zone.id "
+            "WHERE restaurant_table.is_active "
+            "AND restaurant_table.zone_id IS NOT NULL "
+            "AND zone.id IS NULL"
+        )).fetchall()
+    ]
+    if orphans:
+        raise RuntimeError(
+            f"Floor Plan Builder backfill: table id(s) {orphans} are active "
+            "with a zone_id that matches no existing Zone row (orphaned "
+            "reference). Not backfilled, not silently excluded — this is a "
+            "data-integrity fault outside this migration's own write paths. "
+            "Resolve it, then restart. Startup halted."
+        )
+
+    eligible = conn.execute(text(
+        "SELECT restaurant_table.id, restaurant_table.pos_x, restaurant_table.pos_y, "
+        "zone.floor_id, restaurant_table.map_x_per_mille, restaurant_table.map_y_per_mille "
+        "FROM restaurant_table JOIN zone ON restaurant_table.zone_id = zone.id "
+        "WHERE restaurant_table.is_active"
+    )).fetchall()
+    if not eligible:
+        return []
+
+    pending = [row for row in eligible if row[4] is None or row[5] is None]
+
+    # GRID_ROWS_SEEN per floor (§4.3): max(1, MAX(clamped pos_y) + 1) over the
+    # WHOLE eligible set on that floor — not just the rows being backfilled
+    # this run — computed once, before the per-table loop. Clamping pos_y to
+    # 0 first means "+ 1" is always >= 1, so no separate max(1, ...) pass is
+    # needed on top.
+    rows_seen: dict[int, int] = {}
+    for _id, _pos_x, pos_y, floor_id, _mx, _my in eligible:
+        candidate = max(pos_y, 0) + 1
+        if candidate > rows_seen.get(floor_id, 0):
+            rows_seen[floor_id] = candidate
+
+    for table_id, pos_x, pos_y, floor_id, _mx, _my in pending:
+        x = min(max(pos_x, 0), GRID_COLS - 1)
+        y = max(pos_y, 0)
+        grid_rows = rows_seen[floor_id]
+        map_x = max(0, min(1000, _round_half_up((x + 0.5) / GRID_COLS * 1000)))
+        map_y = max(0, min(1000, _round_half_up((y + 0.5) / grid_rows * 1000)))
+        conn.execute(
+            text(
+                "UPDATE restaurant_table SET map_x_per_mille = :x, "
+                "map_y_per_mille = :y WHERE id = :id"
+            ),
+            {"x": map_x, "y": map_y, "id": table_id},
+        )
+
+    # Step 3/4 runs unconditionally whenever there is an eligible row, even if
+    # `pending` was empty — the guarantee is "every eligible row is valid
+    # right now", not just "whatever this run touched is valid". A row that
+    # already carried a corrupted, non-NULL-but-out-of-range value (a bug
+    # elsewhere, or a previous run's defect) must still be caught here, not
+    # skipped because this run had nothing new to write.
+    violations = [
+        r[0] for r in conn.execute(text(
+            "SELECT restaurant_table.id FROM restaurant_table "
+            "JOIN zone ON restaurant_table.zone_id = zone.id "
+            "WHERE restaurant_table.is_active "
+            "AND (restaurant_table.map_x_per_mille IS NULL "
+            "OR restaurant_table.map_y_per_mille IS NULL "
+            "OR restaurant_table.map_x_per_mille NOT BETWEEN 0 AND 1000 "
+            "OR restaurant_table.map_y_per_mille NOT BETWEEN 0 AND 1000)"
+        )).fetchall()
+    ]
+    if violations:
+        raise RuntimeError(
+            f"Floor Plan Builder backfill: eligible table id(s) {violations} "
+            "still missing a valid map position after the backfill ran — "
+            "fail-closed, nothing left partially done. Startup halted."
+        )
+    return [f"backfilled map position for {len(pending)} table(s)"] if pending else []

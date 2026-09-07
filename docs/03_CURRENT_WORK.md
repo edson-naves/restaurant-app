@@ -916,18 +916,181 @@ Explicitly still out of scope, unaffected by this design: the operational
 Floor page Map/List + Arrange mode, and the staff visual color picker — both
 remain separate future slices per the audit above.
 
+### Implementation slice 1 — model, migration, backfill — APPROVED / READY TO COMMIT
+
+```text
+Branch/worktree: feat/floor-map-coordinates, from 12131d2 (literal SHA,
+                  fetched and captured per the immutable-baseline procedure)
+Implementer: Claude
+Reviewer: independent review — final re-review verdict: APPROVED
+Files: app/models/oltp.py, app/migrate.py, docs/03_CURRENT_WORK.md,
+       docs/Evidence/Floor/FLOOR_PLAN_BUILDER_DESIGN.md,
+       tests/test_floor_map_coordinates.py
+Status: APPROVED / READY TO COMMIT. Integration, push, and deploy remain
+        NOT AUTHORIZED. No UI, no drag endpoints, no Map/List + Arrange, no
+        staff-color — the operational/admin interface remains entirely out
+        of scope for this slice, unaffected.
+```
+
+First implementation slice of the approved Floor Plan Builder design
+(`docs/Evidence/Floor/FLOOR_PLAN_BUILDER_DESIGN.md` §3-4): the two new
+`RestaurantTable.map_x_per_mille`/`map_y_per_mille` columns (nullable, no
+default), their `ADDED_COLUMNS` entries, and `_backfill_table_map_positions`
+wired into both `run()` (SQLite) and `_run_postgres()` independently.
+Implements `ELIGIBLE(table, zone)` as the literal `INNER JOIN` the design
+specifies, the step-0 orphaned-reference integrity check, the per-floor
+`GRID_ROWS_SEEN` formula, Python-side `math.floor(x + 0.5)` rounding, the
+final `[0,1000]` clamp, and the in-transaction fail-closed post-condition.
+`pos_x`/`pos_y` are read-only inputs throughout; nothing reinterprets or
+writes them.
+
+**Independent review of this slice returned `FIX REQUIRED`, on two points:**
+
+- **HIGH** — `tests/test_floor_map_coordinates.py` ran destructive
+  PostgreSQL operations (`Base.metadata.drop_all()`, raw `DROP TABLE`)
+  against whatever `PG_TEST_DSN` named, with no guard confirming the target
+  was actually disposable. A typo, a copy-pasted production URL, or a leaked
+  environment variable could have been wiped with no safeguard in the way.
+- **MEDIUM** — the design artifact's transactional description of SQLite's
+  failure behavior was out of date: it stated the two new columns roll back
+  together with a failed backfill, in the same transaction as the column
+  ALTERs. Measured execution (below) showed this is not how the actual
+  driver behaves.
+
+**Both corrected, this pass:**
+
+1. **PostgreSQL destructive-target guard** (HIGH, fixed): added
+   `assert_disposable_postgres_target()` to the test file — parses the DSN
+   with `sqlalchemy.engine.make_url`, requires the PostgreSQL dialect,
+   rejects a URL with no database name, rejects a database name without an
+   unambiguous `test` marker, rejects a host ending in a known
+   production-hosting suffix (this project's documented `render.com`/
+   `neon.tech`, plus common managed-Postgres suffixes as defense in depth),
+   and requires the separate `ALLOW_DESTRUCTIVE_PG_TESTS=1` opt-in — all
+   before any connection or destructive statement, never printing the
+   password, full DSN, or username. Called at the top of every function in
+   the file that performs a destructive operation (`_fresh_schema`,
+   `_drop_map_columns`, the orphan test's raw `DROP TABLE`), not only at the
+   `__main__` entry point. 13 new unit tests cover every required case,
+   including a timing + exception-type proof that a rejected, real-shaped
+   -but-unreachable "production" DSN never attempts a network connection.
+2. **Design artifact factual correction** (MEDIUM, fixed): corrected in
+   `docs/Evidence/Floor/FLOOR_PLAN_BUILDER_DESIGN.md` itself (§4.2's
+   "Behavior on partial failure", its "Required test" paragraph, §4.5
+   "Idempotency", and the top-level phase summary), plus a new "Revision
+   note (fifth pass)" recording why. Real, measured evidence: under this
+   project's stack (SQLAlchemy 2.0, pysqlite), `ALTER TABLE ADD COLUMN`
+   auto-commits the instant it executes — even inside `engine.begin()`, DDL
+   is not part of that transaction on this driver, only DML is. So on
+   SQLite, a failed backfill leaves the two new columns in place (same as
+   on PostgreSQL, for a different, already-correctly-described reason); the
+   backfill's own DML (its UPDATEs) rolls back correctly on both dialects.
+   Resulting state on both: columns present, every eligible row's position
+   still NULL — safe and idempotent, indistinguishable from "columns just
+   added, nothing backfilled yet". A re-run after fixing the cause
+   completes the backfill — measured, not merely asserted. Every residual
+   claim that SQLite removes/reverts the columns on this failure was
+   removed. **This is a factual correction to the design's transactional
+   description, drawn from running the tests the design itself specifies —
+   it does not reopen or change the approved architecture, schema,
+   `ELIGIBLE` definition, formula, or call-sites, which remain APPROVED
+   from the fourth independent review.** The design document itself states
+   this distinction explicitly now; it is not described here as "approved
+   as-is" without that qualification.
+
+A third, unrelated latent implementation gap (not from the review, found
+independently while re-testing) was also fixed: the backfill function had
+no `_table_exists` guard (unlike every other backfill in this file), so it
+broke against a schema that legitimately never creates
+`restaurant_table`/`zone` at all (`tests/test_pg_migration.py`'s narrow
+payment-only harness). Guarded the same way `_backfill_locations` already
+is.
+
+**Second re-review of the same guard found one more real gap:**
+`_TEST_MARKER_RE = re.compile(r"test", re.IGNORECASE)` accepted `test` as
+any substring, not a delimited token — so `contest`, `latest`, `testament`,
+and `protest` would all have passed the "database name looks disposable"
+check. Fixed: the regex now requires `test` bounded by start/end of string,
+`_`, or `-` (`(?:^|[_-])test(?:$|[_-])`). Explicit tests added for all ten
+names named in that review — five that must pass (`test`, `floor_test`,
+`test_floor`, `floor-test-db`, `floor_test_01`) and five that must still be
+rejected (`contest`, `latest`, `testament`, `protest`, `restaurant`) — all
+ten confirmed individually, not just the aggregate pass/fail count.
+
+**Functional scope preserved, unchanged by this fix pass:** backfill
+formula, columns, `ELIGIBLE` definition, SQLite/PostgreSQL call-sites,
+model. No Floor UI, no endpoints, no Payment/Security file touched.
+
+**Tests — real execution, not "exists but unrun":**
+
+```text
+SQLite (no PG_TEST_DSN): 57 assertions total (34 backfill/migration + 23
+             guard unit tests, including the 10 explicit test-marker-token
+             names from the second re-review), tests/test_floor_map_coordinates.py,
+             0 failures. Executed with a real interpreter (py -3, Python
+             3.14.5, SQLAlchemy 2.0.51).
+Guard, dangerous-DSN rejection: confirmed zero connection/destructive
+             operation on rejection — exception type is the guard's own
+             UnsafePostgresTargetError (not a network/connection error
+             class) and rejection is near-instant (<1s) for a real-shaped
+             -but-unreachable AWS RDS-style hostname, proving no network
+             I/O was attempted.
+PostgreSQL (PG_TEST_DSN + ALLOW_DESTRUCTIVE_PG_TESTS=1, both required):
+             disposable database `floor_map_coords_test` inside the
+             existing local `rms-pgtest` Docker container
+             (postgres:16-alpine, already running on this machine) — never
+             production. 87 assertions, 0 failures. Confirmed separately:
+             PG_TEST_DSN set WITHOUT the opt-in var is rejected before any
+             table is created (database verified to still hold zero tables
+             afterward). Disposable databases dropped after the run; the
+             container itself was not modified.
+Regression:  tests/test_migrate.py, tests/test_floor_spatial.py,
+             tests/test_reservations_map.py — all pass, run both standalone
+             and via this slice's own regression subprocess check.
+             tests/test_pg_migration.py — passes on its own fresh disposable
+             database (separate from this slice's own test database, to
+             avoid cross-test contamination).
+```
+
+**Evidence boundary:** `tests/test_admin.py` was not re-verified beyond a
+single run that failed on missing seed data (`no owner in the database`) —
+an environment/fixture precondition, not a code assertion, and consistent
+with AGENTS.md's already-recorded note that this suite has pre-existing
+setup sensitivity. Not in this slice's required regression set
+(migration/Floor/Reservations); not chased further. No production database
+was read, written, or connected to at any point in this slice. No
+credential, password, or full DSN was ever printed to output.
+
+**Final independent re-review: APPROVED.** The delimited-token
+`_TEST_MARKER_RE` fix from the second re-review (above) was confirmed
+present and correct. The reviewer reproduced the 57 SQLite/guard checks
+(0 failures) themselves; the embedded regression suites
+(`test_migrate.py`, `test_floor_spatial.py`, `test_reservations_map.py`,
+`test_pg_migration.py`) were reproduced and passed. The 87-check
+PostgreSQL run (0 failures) was executed by the implementer against a
+disposable local Docker Postgres target (`rms-pgtest`), guarded by
+`assert_disposable_postgres_target`, and reported to the reviewer as
+evidence rather than independently re-run.
+
+**Implementation slice 1: APPROVED / READY TO COMMIT.** Integration
+(merge/fast-forward into `main`), push, and deploy remain NOT AUTHORIZED
+and require their own separate explicit instruction. The operational/admin
+Floor Plan Builder interface (drag endpoints, Map/List + Arrange mode,
+staff-color picker) remains entirely out of scope for this slice and is
+unaffected by this approval.
+
 ## Next Authorized Action
 
 ```text
-NONE implemented and pending. The Floor Plan Builder design
-(design/floor-plan-builder) is CLOSED / APPROVED (fourth independent
-review, APPROVED WITH NON-BLOCKING NOTES, both incorporated). The proposed
-next step is a separate implementation slice for the design's
-migration/backfill (§4 of the design artifact: the two new
-map_x_per_mille/map_y_per_mille columns, the fail-closed backfill, the
-orphaned-reference integrity check) — this still requires its own explicit
-authorization and is NOT authorized by the design's approval alone. No
-implementation of any kind is authorized yet.
+NONE merged/committed and pending. The Floor Plan Builder design
+(design/floor-plan-builder) is CLOSED / APPROVED. Its first implementation
+slice (model, migration, backfill — see "Implementation slice 1" above,
+branch feat/floor-map-coordinates) is now IMPLEMENTATION COMPLETE, sitting
+uncommitted in its own isolated worktree, awaiting independent review — not
+yet reviewed, not yet committed, not merged, not pushed, not deployed.
+Remaining slices (UI/drag endpoints, operational Map/List + Arrange,
+staff-color) still require their own separate, explicit authorization each,
+same as before.
 
 open_order_on_table's proven PostgreSQL race remains a real, tracked risk
 (see "Residual risks" below) and a candidate for its own future,
