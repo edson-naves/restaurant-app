@@ -352,6 +352,21 @@ behavior **before** starting an authorized implementation slice:
    clean it, reset it, discard it, move it, or overwrite it.
 
 3. Create an isolated branch/worktree from the **exact authorized base checkpoint**.
+   Never base new work on a historical, superseded, WIP, or otherwise non-authorized
+   branch/worktree. If useful work exists there, recover it only through a separately
+   scoped and reviewed reconciliation onto the authorized checkpoint.
+   When `docs/03_CURRENT_WORK.md` defines the default as the latest `origin/main`, run
+   `git fetch origin main`, resolve `git rev-parse origin/main`, and record that immutable
+   SHA as the slice base before creating the worktree. Never reuse a baseline SHA copied
+   from an older prompt or handoff without revalidation.
+   Create the branch/worktree from that captured literal SHA:
+
+   ```text
+   git worktree add -b feat/<slice-name> ../restaurant_<slice-name> <captured-SHA>
+   ```
+
+   Never pass the moving `origin/main` ref as the final argument after the SHA has been
+   captured.
 
 4. Naming convention:
 

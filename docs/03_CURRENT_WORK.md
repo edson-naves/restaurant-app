@@ -8,21 +8,28 @@ Read this file before modifying production code.
 
 Last consolidated: 2026-09-06, after Floor UI + Reservations, Floor spatial,
 test-evidence preservation, and documentation portability reconciliation were
-integrated and pushed. The block below this line, through "Post-A hardening",
-is superseded history — kept for provenance, not current state. Current state
-is recorded from "### Floor UI + Reservations" onward.
+integrated and pushed. `Repository / Branch Reality` below is the current baseline
+policy. Later sections explicitly labeled as history or superseded are kept only
+for provenance; current slice status begins at "### Floor UI + Reservations".
 
 ## Repository / Branch Reality
 
 Current line:
 
 ```text
-main (local)     c39856a  synchronized with origin/main
-origin/main      c39856a  pushed 2026-09-06
-production       /healthz HEALTHY after the push; exact deployed SHA not
-                 independently confirmable (no Render dashboard/API access
-                 from this session)
+canonical base   latest fetched origin/main, unless an explicitly authorized
+                 slice records a different exact checkpoint
+main / origin    synchronized at the last verification; resolve and freeze the
+                 exact SHA at task start with `git fetch origin main` followed
+                 by `git rev-parse origin/main`
+production       Render visually confirmed `f6bd4ef` Live on 2026-09-06;
+                 /healthz HEALTHY
 ```
+
+Do not copy the last observed SHA into future prompts as a permanent baseline.
+Each new slice must resolve `origin/main`, record that exact SHA as its base, and
+then pass that literal SHA—not the moving `origin/main` ref—to `git worktree add`.
+Work only in the resulting isolated branch/worktree from that frozen checkpoint.
 
 `b0ab8e7` / `7068bb4` / `release/payment-security` / `release/post-a-hardening`
 below are the Release A / Release B history that predates Floor UI +
@@ -820,10 +827,12 @@ also optional and requires explicit authorization.
 ```
 
 G1-G8 are complete. Release B (Payment/Security Stage 1/2a/2b), Floor UI +
-Reservations, Floor spatial, test-evidence preservation, and the documentation
-reconciliation are integrated and pushed — local `main` and `origin/main` are
-`c39856a`. Production `/healthz` is HEALTHY; the exact deployed SHA remains
-unconfirmed because this session has no Render dashboard/API access.
+Reservations, Floor spatial, test-evidence preservation, the documentation
+reconciliation (`c39856a`), and its synchronization closeout (`f6bd4ef`) are
+integrated and pushed. Local `main` and `origin/main` were synchronized at the
+last verification; agents must resolve the current SHA rather than rely on this
+historical snapshot. Render visually showed `f6bd4ef` Live and production
+`/healthz` was HEALTHY.
 
 Residual risks carried forward, not fixed, not blocking, pending their own
 authorization: multi-table partial availability in `seat_reservation_here`;

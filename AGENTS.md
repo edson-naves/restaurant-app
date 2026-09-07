@@ -140,9 +140,14 @@ Parallel implementation should use separate branches/worktrees whenever practica
 **Developer Worktree Bootstrap (required, Claude and Codex alike):** before starting any
 authorized implementation slice, bootstrap it into an **isolated branch/worktree** from
 the exact authorized base checkpoint — never implement in an unrelated dirty working
-tree, and never stash / clean / reset / discard / move / overwrite existing work. If
+tree. Never use a historical, superseded, WIP, or otherwise non-authorized branch or
+worktree as the base, even if it appears to contain useful changes. Never stash / clean /
+reset / discard / move / overwrite existing work. If
 isolation cannot be created safely, STOP and request a decision. Full required procedure
-is in `docs/05_AI_HANDOFF.md` → "Developer Worktree Bootstrap".
+is in `docs/05_AI_HANDOFF.md` → "Developer Worktree Bootstrap". When
+`docs/03_CURRENT_WORK.md` names the latest `origin/main` as the default baseline, fetch it
+and freeze its exact SHA at task start. Pass that literal SHA—not `origin/main`—as the
+start point to `git worktree add`; do not reuse a SHA copied from an older prompt.
 
 **Approved-slice commit ownership (Claude and Codex alike):** after an independent
 review returns `APPROVED` or `APPROVED WITH NON-BLOCKING NOTES`, the **primary
