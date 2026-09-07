@@ -923,7 +923,7 @@ Explicitly still out of scope, unaffected by this design: the operational
 Floor page Map/List + Arrange mode, and the staff visual color picker — both
 remain separate future slices per the audit above.
 
-### Implementation slice 1 — model, migration, backfill — APPROVED / READY TO COMMIT
+### Implementation slice 1 — model, migration, backfill — CLOSED / INTEGRATED / DEPLOYED
 
 ```text
 Branch/worktree: feat/floor-map-coordinates, from 12131d2 (literal SHA,
@@ -933,10 +933,12 @@ Reviewer: independent review — final re-review verdict: APPROVED
 Files: app/models/oltp.py, app/migrate.py, docs/03_CURRENT_WORK.md,
        docs/Evidence/Floor/FLOOR_PLAN_BUILDER_DESIGN.md,
        tests/test_floor_map_coordinates.py
-Status: APPROVED / READY TO COMMIT. Integration, push, and deploy remain
-        NOT AUTHORIZED. No UI, no drag endpoints, no Map/List + Arrange, no
-        staff-color — the operational/admin interface remains entirely out
-        of scope for this slice, unaffected.
+Commit: c18b9e03c264129f019341deddcad31e68b1cc05
+Status: CLOSED / INTEGRATED / DEPLOYED. Fast-forwarded into local main and
+        pushed to origin/main (12131d2 → c18b9e0). No UI, no drag
+        endpoints, no Map/List + Arrange, no staff-color — the
+        operational/admin interface remains entirely out of scope for
+        this slice, unaffected.
 ```
 
 First implementation slice of the approved Floor Plan Builder design
@@ -1087,7 +1089,21 @@ staff-color picker) remains entirely out of scope for this slice and is
 unaffected by this approval.
 
 **Implementation slice 1: VALIDATED IN PRODUCTION.** Since the approval
-above, slice 1 was integrated, pushed, and deployed. Manually confirmed:
+above, slice 1 was integrated, pushed, and deployed (`12131d2` → `c18b9e0`,
+fast-forwarded into local `main` and pushed to `origin/main`). Manually
+confirmed:
+
+**Pre-deploy recovery point:** Neon project `restaurant-oregon`, branch
+`backup-pre-floor-coordinates-20260907`, created from the `production`
+branch (data and schema, state at creation time) at approximately
+2026-09-07 09:51 UTC, 7-day retention (expires 2026-09-14). Created and
+confirmed by the repository owner directly in the Neon console; not
+independently re-verified by the implementing agent (no Neon CLI/API
+access from this session).
+
+**Post-deploy validation — reported by the repository owner, not
+independently re-verified by the implementing agent** (this session has no
+Render dashboard/API access and no PostgreSQL production connection):
 
 ```text
 Render commit    c18b9e03c264129f019341deddcad31e68b1cc05
@@ -1101,6 +1117,10 @@ map_y_exists     true
 invalid_positions  0
 orphaned_zones     0
 ```
+
+`/healthz` was independently confirmed by the implementing agent itself:
+HTTP 200, body `ok` (checked directly against the public endpoint,
+2026-09-07 10:00:40Z).
 
 This confirms slice 1's schema/migration/backfill in the live production
 database, not the exact process SHA independent of this observation (§11 —
