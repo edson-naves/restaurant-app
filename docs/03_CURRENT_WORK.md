@@ -817,13 +817,125 @@ Happy Hour, Day menus, Positions) is already equal or behind what `main`
 has, and it entirely lacks Payment/Security Release B and the Reservations
 availability engine.
 
+## Floor Plan Builder — design slice — DESIGN CLOSED / APPROVED, IMPLEMENTATION NOT AUTHORIZED
+
+```text
+Branch/worktree: design/floor-plan-builder, from 99e2490 (literal SHA, fetched
+                  and captured per the immutable-baseline procedure)
+Implementer: Claude
+Reviewer: four independent reviews. First three each returned DESIGN
+           REVISION REQUIRED, each corrected by the author. Fourth returned
+           APPROVED WITH NON-BLOCKING NOTES; both notes incorporated.
+Design artifact: docs/Evidence/Floor/FLOOR_PLAN_BUILDER_DESIGN.md
+Design status: CLOSED / APPROVED.
+Implementation status: NOT AUTHORIZED. Design approval is not
+                        implementation authorization.
+```
+
+**Design closed.** This was the active design flow through three
+correction cycles; it is now approved and closed. No implementation slice
+is open under this checkpoint yet — see "Next Authorized Action" below for
+the proposed next step, which still requires its own explicit
+authorization.
+
+First independent review found three real gaps in §4 (Migration and data):
+the backfill's PostgreSQL call site was missing (columns would have shipped
+NULL forever in production while working fine in SQLite/dev), a resilience
+property was attributed to the wrong precedent function, and the Y-axis
+formula referenced an undefined term. The author corrected all three plus
+the two NULL-fallback/eligibility points the same review raised as open
+-question recommendations.
+
+Second independent review, on the corrected document, again returned
+`DESIGN REVISION REQUIRED`, on four points: the backfill's fail-closed
+guarantee was still a manual/CI step outside the transaction rather than
+code the migration itself enforces, and its algorithm/verification could
+disagree on which rows needed a position; shape's persistence still pointed
+at a write path (the old grid endpoint's DOM-scraping JS) that has nothing
+left to read once the grid leaves the page; a zone move/resize and its
+tables' repositioning were two independent, non-atomic requests; plus
+smaller documentation inconsistencies (this entry and the design artifact's
+own "Confirmation nothing was implemented" text being stale, and an
+imprecise claim about newly-added tables). The author has corrected all four
+in the design artifact (§4.2's formal `ELIGIBLE` definition and
+in-transaction check; §6 restructured into §6.1/§6.2/§6.3) — see the design
+artifact's "Revision note (second pass)" for the full account.
+
+Third independent review, on the second-pass document, again returned
+`DESIGN REVISION REQUIRED`, on two points: the zone-move endpoint's payload
+validation checked that every table it named belonged to the zone, but
+never checked that it named *every* table the zone actually has — an
+incomplete payload (one table silently omitted) passed and would have left
+that table visually detached from its own zone; and `ELIGIBLE` was defined
+in prose ("active, non-NULL zone_id") without being formally identical to
+the `INNER JOIN` the rest of the migration section described, leaving room
+for an orphaned `zone_id` (pointing at a since-nonexistent `Zone`) to be
+quietly excluded by the join with no integrity signal, rather than being
+treated as the data-integrity fault it is. The author has corrected both in
+the design artifact — §6.2 now requires an exact-set match
+(`received_ids == current_active_table_ids_for_zone`) before any write;
+§4.2 restates `ELIGIBLE(table, zone)` as the literal `INNER JOIN` relation,
+used verbatim throughout §4, plus a new step-0 check that raises on an
+orphaned reference. See the design artifact's "Revision note (third pass)"
+for the full account.
+
+Fourth independent review, on the third-pass document, returned `APPROVED
+WITH NON-BLOCKING NOTES` — two notes, both incorporated before closing:
+(1) the PostgreSQL half of the orphaned-zone-reference test must not
+depend on disabling or bypassing constraint enforcement on that database,
+since a disposable instance may not have the privileges that requires —
+corrected to build the orphan via deliberately-legacy, FK-less scratch
+tables of its own instead; (2) §4.5's "a partial run rolls back entirely"
+read as true on both dialects the same way, which it isn't — corrected to
+name the backfill's own transaction specifically and restate the
+already-correct per-dialect distinction (SQLite: same transaction as the
+column ALTERs; PostgreSQL: columns already committed, only the backfill
+transaction's writes are undone) rather than leaving it generic. See the
+design artifact's "Revision note (fourth pass)" for the full account.
+
+**This design is now CLOSED / APPROVED.** Implementation remains NOT
+AUTHORIZED — approving this document authorizes nothing beyond itself.
+
+Technical design for porting the free-placement admin Floor/Zone builder
+(item 1 of the three preserved `feat/floor-map` items above) onto the current
+base. Decides the coordinate-collision strategy (`RestaurantTable` gets new
+`map_x_per_mille`/`map_y_per_mille` columns; `pos_x`/`pos_y` are never
+reinterpreted and keep serving the grid view and `floor.html` unchanged),
+migration/backfill approach, write contracts, compatibility, rollout order,
+and test coverage. No application code, migration, model, route, or template
+was written or changed by this slice — the design document is the only
+artifact.
+
+This authorization covers **design only**. It does not authorize
+implementation, migration execution, merge, push, or deployment. A separate,
+explicit authorization is required before any implementation slice begins,
+per the standard `AGENTS.md` workflow (`DESIGN → explicit authorization →
+IMPLEMENT`).
+
+Explicitly still out of scope, unaffected by this design: the operational
+Floor page Map/List + Arrange mode, and the staff visual color picker — both
+remain separate future slices per the audit above.
+
 ## Next Authorized Action
 
 ```text
-NONE implemented and pending. The next proposed product slice is a separately
-designed and authorized fix for the proven `open_order_on_table` PostgreSQL
-race. Administrative cleanup of the five superseded documentation branches is
-also optional and requires explicit authorization.
+NONE implemented and pending. The Floor Plan Builder design
+(design/floor-plan-builder) is CLOSED / APPROVED (fourth independent
+review, APPROVED WITH NON-BLOCKING NOTES, both incorporated). The proposed
+next step is a separate implementation slice for the design's
+migration/backfill (§4 of the design artifact: the two new
+map_x_per_mille/map_y_per_mille columns, the fail-closed backfill, the
+orphaned-reference integrity check) — this still requires its own explicit
+authorization and is NOT authorized by the design's approval alone. No
+implementation of any kind is authorized yet.
+
+open_order_on_table's proven PostgreSQL race remains a real, tracked risk
+(see "Residual risks" below) and a candidate for its own future,
+separately-designed-and-authorized slice — it is NOT the next proposed
+slice ahead of the Floor Plan Builder migration/backfill work above; it is
+preserved here as future risk/backlog, not queued ahead of it. Administrative
+cleanup of the five superseded documentation branches is also optional and
+requires explicit authorization, independent of either.
 ```
 
 G1-G8 are complete. Release B (Payment/Security Stage 1/2a/2b), Floor UI +
