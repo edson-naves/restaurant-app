@@ -751,6 +751,45 @@ the verdict remained approved. The commit was fast-forwarded into `main`, pushed
 and `/healthz` returned HTTP 200 `ok`. The exact SHA served by Render was not
 directly observable without dashboard/API access.
 
+## `feat/floor-map` branch inventory — HISTORICAL, READ-ONLY AUDIT
+
+```text
+Branch: feat/floor-map @ 5d8eee4 (worktree: restaurant_app)
+Never merged into main. Predates Release A/B and the current Floor/Kitchen line.
+Audited read-only, feature-by-feature against main @ f6bd4ef
+(merge-base 1756830a), to settle whether anything on it is worth recovering
+before it's considered for deletion. No code changed by this audit.
+```
+
+**Only exclusive, recoverable value:** the free-placement Floor/Zone builder in
+`admin_tables.html` / its `admin.py` routes — drag-to-place tables and zones
+(per-mille positioning, not the grid `main` uses), zone-rectangle resize, table
+shape cycling (round/square/long), and one unified floors+zones+tables+map
+page. `main`'s Floor spatial (`ac0be60`) was built additively onto the old
+grid-based admin pages and explicitly did not port this redesign.
+
+**Already ported to `main`, content-identical (CRLF aside, verified with
+`diff -b -B`):** Kitchen Stations + Expo (`admin_stations.html`, `expo.html`,
+`kitchen.html`). The reservations-on-floor UI (`zone_groups`, "due-soon" pill,
+seat-here action) existed on this branch first and was reconstructed onto
+`main` with minor copy changes.
+
+**Predates the branch split, identical on both lines:** Happy Hour
+(`services/happyhour.py`), Day menus (`services/daymenu.py`), Staff
+scheduling/Positions (`schedule.py`, `Position`) — untouched by either line
+since the common ancestor.
+
+**Not on this branch at all — `main` is strictly ahead:** the whole
+Payment/Security Release B (`app/config.py`, `payment_attempts.py`,
+`payment_providers.py`, `refund_attempts.py`, fail-closed `security.py`), and
+the Reservations availability engine (`calculate_availability`, overlap/expiry
+checks — this branch has only `active_holds()`).
+
+Conclusion: `feat/floor-map` is safe to treat as superseded except for the
+free-placement builder. If that builder is ever wanted, port only
+`admin_tables.html` and its `admin.py` routes onto the current base — nothing
+else on this branch needs recovery.
+
 ## Next Authorized Action
 
 ```text
