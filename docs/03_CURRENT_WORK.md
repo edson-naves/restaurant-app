@@ -1408,6 +1408,534 @@ Arrange mode, the staff-color picker, `admin_floors.html`, CSRF (pre
 -existing app-wide gap, not this slice's to fix), keyboard-accessible drag
 (pre-existing gap), Payment/Security files (none touched).
 
+## Floor Plan Builder — production diagnosis — FIX REQUIRED; fix IMPLEMENTED, NOT REVIEWED, NOT INTEGRATED
+
+```text
+Branch/worktree: fix/floor-zone-overlap, from daa6d5a (literal SHA, fetched
+                  and captured per the immutable-baseline procedure)
+Implementer: Claude
+Reviewer: not yet assigned
+Files: app/migrate.py, app/routers/admin.py, web/static/app.css,
+       web/templates/admin_tables.html, tests/test_floor_zone_overlap.py
+Status: DIAGNOSIS CONFIRMED (FIX REQUIRED), FIX IMPLEMENTED. NOT YET
+        INDEPENDENTLY REVIEWED. Not committed, not integrated, not pushed,
+        not deployed. `daa6d5a` (origin/main) itself remains deployed and
+        healthy — this is a functional-validation finding on top of a
+        successful deploy, not a deploy-health regression.
+```
+
+**`daa6d5a` deploy status, unaffected by this section:** confirmed Live via
+Render (Auto-Deploy, green/concluded) and `/healthz` HTTP 200 body `ok` —
+see the push/verification record above. Deployed and healthy. Post-deploy
+*functional* validation of the admin Floor Plan Builder against that
+deployed code, separately, found the problem below — a real defect in
+already-deployed behavior, not a sign the deploy itself failed.
+
+**Diagnosis (read-only investigation, no production access used):** table
+reassignment via drag worked for some zones (Patio, Window) but silently
+never reached others (Main, Bar) on the same floor. Root cause, confirmed
+by reproducing the real `Zone`/`create_zones` code against a disposable
+SQLite database: every zone — old and new — is created without an explicit
+position, so `Zone.pos_x/pos_y/width/height` default to the same fixed
+`(60, 60, 360, 300)`. Two zones neither has ever been dragged/resized land
+on the byte-identical rectangle; the admin builder's drop hit-test
+(`document.elementsFromPoint`, `web/templates/admin_tables.html`) can then
+only ever resolve to ONE of them for any point inside that shared
+rectangle — the other is permanently unreachable by drag, regardless of
+where exactly a manager drops a table. Verified: the backend endpoint
+itself (`POST /admin/tables/map-layout`) correctly persists a reassignment
+to either zone when given its `zone_id` explicitly — the defect is entirely
+in the geometry/hit-test path, not the backend. No production database or
+dashboard access was used or is required to reach this conclusion; it
+follows from the shared model default and the client's own hit-test logic.
+Full write-up, including the reproduction transcript and a feature-parity
+comparison against the historical `feat/floor-map` builder: prior
+diagnostic session (this same investigation), not duplicated here.
+
+**No reliable "never positioned" marker exists.** Checked before writing
+any fix: `Zone` carries no "ever moved"/"is default" flag, and
+`/admin/floors`'s "Map box" numeric fields (`web/templates/admin_floors.html`)
+let a manager reproduce the exact default by hand anyway, indistinguishably
+from a zone that simply was never touched. **Decision:** the fix treats
+every EXACT `(pos_x, pos_y, width, height)` match among active zones on the
+same floor the same way, regardless of cause, and touches nothing that
+merely overlaps without being byte-identical — overlap itself stays
+allowed by design (this project's own inherited `/tables/layout` docstring:
+*"Overlap is allowed ... the manager arranges the room as it really is."*).
+
+**Fix implemented, this pass (NOT yet reviewed):**
+
+1. **New zones never collide** — `POST /admin/floors/{id}/zones/create`
+   (`app/routers/admin.py`) now assigns `pos_x/pos_y/width/height`
+   explicitly via a new deterministic placement helper,
+   `place_new_zone_rect` (`app/migrate.py`, shared with the backfill below
+   so the algorithm lives in exactly one place). Placement is seeded from
+   the count of active zones already on THAT floor — not `sort_order`,
+   which can repeat — and explicitly checked against every active zone's
+   real rect on the same floor before being accepted; other floors are
+   never read or touched.
+2. **Existing coincident zones are corrected** — a new idempotent
+   migration backfill, `_backfill_zone_overlap` (`app/migrate.py`), wired
+   into both `run()` (SQLite) and `_run_postgres()`, each its own explicit
+   `engine.begin()` call site (not shared with the ADDED_COLUMNS/ALTER
+   work, and not try/except-swallowed — fail-closed, matching
+   `_backfill_table_map_positions`'s existing discipline). Per group of
+   active zones on the same floor sharing an exact rect: the lowest-id zone
+   is the anchor and never moves; every other zone in the group is
+   repositioned (position only — width/height preserved exactly) against
+   every active zone's rect on that floor, so it can land on neither the
+   anchor nor any unrelated zone already there.
+3. **Tables follow their corrected zone** — a moved zone's own active
+   tables that already carry a real (non-NULL) `map_x_per_mille`/
+   `map_y_per_mille` are translated by the exact same delta as their zone
+   (a pure translation, not a proportional rescale, since width/height
+   never change during this correction). `pos_x`/`pos_y` — the separate,
+   older grid columns — are never read or written by this backfill.
+4. **NULL/inactive table policy, explicit and tested:** an inactive table
+   is never read or written (retired tables' stale coordinates don't
+   matter — same convention as `_backfill_table_map_positions`,
+   `_free_cells`, `move_zone_layout`, all already in this codebase). A
+   table with a NULL map position is left NULL — there is nothing real to
+   translate, and `_table_map_positions()` (`app/routers/admin.py`)
+   already computes a fresh ring-fallback position around the zone's
+   rectangle at render time, from whatever that rectangle currently is —
+   so a never-placed table "follows" the corrected rectangle for free,
+   with no write needed.
+5. **Dialect behavior, documented honestly:** this backfill is pure DML
+   (`UPDATE` only) — no `ALTER TABLE`, unlike the ADDED_COLUMNS work
+   elsewhere in `migrate.py`. That distinction matters: on this driver, an
+   `ALTER` auto-commits immediately on SQLite even inside
+   `engine.begin()` (`_backfill_table_map_positions`'s own docstring) —
+   but plain DML has no such quirk on either dialect. A raised exception
+   anywhere in `_backfill_zone_overlap` rolls back every `UPDATE` it
+   already issued, completely and identically, on both SQLite and
+   PostgreSQL — verified directly (see tests below), not merely asserted
+   from the driver docs.
+6. **Non-blocking overlap warning** — `POST /admin/zones/{id}/move-layout`
+   now adds an advisory `X-Zone-Overlap-Warning: exact` response header
+   (status code and body unchanged, still `204`) when a move/resize
+   results in an exact-rectangle coincidence with another active zone on
+   the same floor. A *partial* overlap (still allowed by design) never
+   sets it, and a rejected (400) request never sets it either — the
+   client only shows this on an already-successful save, distinct from
+   `.unsaved` (a failed save), both visually (dashed blue outline vs solid
+   amber) and in the tooltip text.
+7. **Shape and capacity are visually real again** — `round`/`square`/
+   `rect` now render as an actual ellipse/rounded-square/stretched-rect on
+   the map (`web/static/app.css`, driven off the existing `data-shape`
+   attribute the shape-cycle button already maintains — no backend
+   contract change), and chip width scales with seat count (a new
+   `--cap-w` custom property, clamped to `[72, 140]px` by both the
+   generating formula and a hard CSS `min-width`/`max-width` backstop, so
+   no capacity value can distort the layout). `floor.html` (the
+   operational page) was not touched — it does not use the `.chip`/
+   `.map-chip` classes at all, confirmed before making any CSS change.
+
+**Tests — real execution, new file `tests/test_floor_zone_overlap.py`
+(SQLite always; PostgreSQL gated by the exact same
+`assert_disposable_postgres_target`/`ALLOW_DESTRUCTIVE_PG_TESTS=1` guard
+`tests/test_floor_map_coordinates.py` already defines — imported directly,
+never a second copy of that safety logic):**
+
+```text
+SQLite: 13 tests, all pass — new-zone placement (batch distinctness,
+    avoids an existing active zone's exact rect, floors independent),
+    backfill (2-way and 3-way group determinism, anchor preserved,
+    non-identical zones on the same floor untouched, the OTHER floor's
+    own coincident zone untouched, table translation matches the zone's
+    delta exactly, pos_x/pos_y never touched, NULL stays NULL, inactive
+    untouched, idempotent re-run is a true no-op, a forced mid-function
+    failure — two zones sized to the full 1000x1000 canvas, so
+    place_new_zone_rect's search exhausts deterministically — leaves an
+    earlier, already-successful group's UPDATE rolled back too, not
+    half-applied), migrate.run() wiring, the move-layout warning header
+    (exact-only, never on a failed/rejected request), shape/capacity
+    markup and CSS.
+PostgreSQL (PG_TEST_DSN + ALLOW_DESTRUCTIVE_PG_TESTS=1, both required):
+    disposable database inside the existing local `rms-pgtest` Docker
+    container (postgres:16-alpine, already running on this machine) —
+    never production. Backfill de-collides the seeded group, anchor
+    unchanged, second run is a no-op — same assertions as SQLite,
+    executed for real against a real PostgreSQL server. Disposable
+    database dropped after the run; the container itself untouched.
+Regression, all re-run standalone, all pass:
+    tests/test_floor_admin_ui.py, tests/test_floor_map_coordinates.py
+    (including its own embedded PostgreSQL scenarios, re-verified against
+    the same disposable database), tests/test_floor_spatial.py,
+    tests/test_reservations_map.py, tests/test_migrate.py.
+git diff --check: clean.
+```
+
+**Risks and limitations, disclosed:**
+- The exact production values of Main/Bar's `pos_x/pos_y/width/height`
+  were never read (no production database access, by design) — the root
+  cause was confirmed by reproducing the real code path, not by observing
+  production data directly. The fix corrects the general defect
+  regardless of whatever those specific values turn out to be.
+- The non-blocking overlap warning only covers zone move/resize
+  (`move-layout`); it does not warn on table drag-to-reassign
+  (`map-layout`) — a table successfully reassigning to a zone that happens
+  to exactly coincide with another gives no signal that the *other* zone
+  is now unreachable. Judged acceptable for this pass since the
+  underlying coincidence itself is what's being eliminated by the
+  backfill; flagged here rather than silently scoped out.
+- ~~`place_new_zone_rect`'s grid is exact and collision-checked for any
+  realistic zone count; its own internal safety cap (2000 attempts) exists
+  only to fail loudly rather than loop forever in a pathological case~~ —
+  **superseded, see "Second pass" below.** Independent review found this
+  claim both incomplete (the real threshold was width/height > 960, not
+  only the literal 1000x1000 case this section originally called out) and
+  its consequence understated (a "fail loudly" here meant an unhandled
+  `RuntimeError` inside a fail-closed, un-guarded, always-run boot-time
+  backfill — i.e. the *entire application* refusing to start, in any
+  environment, not merely "the migration fails"). Fixed; see below.
+- Independent review of this fix found the HIGH issue above (and several
+  lower-severity ones), described completely in "Second pass" below.
+
+**This section records diagnosis and a first implementation pass, since
+corrected by a second pass below in response to independent review. It
+does NOT constitute approval, integration, or deployment of this fix** —
+those remain separate, later, explicitly-authorized steps, same
+discipline as every other slice above.
+
+## Floor Plan Builder zone-overlap fix — second pass (independent review response)
+
+```text
+Branch/worktree: fix/floor-zone-overlap (same branch, second pass), from
+                  daa6d5a (unchanged — still the literal base SHA)
+Implementer: Claude
+Reviewer: independent review — verdict FIX REQUIRED (1 HIGH, 2 MEDIUM,
+          2 LOW); this pass addressed all five
+Files (this pass): app/services/zone_geometry.py (NEW), app/migrate.py,
+       app/routers/admin.py, web/static/app.css, web/templates/
+       admin_tables.html, tests/test_floor_zone_overlap.py
+Status: superseded by "third pass" below, which incorporates the
+        re-review's own two LOW notes and closes this slice. See that
+        section for the current, final status of this fix.
+```
+
+**HIGH — the backfill could crash the entire boot, not just fail to fix
+geometry.** The first pass's `place_new_zone_rect` raised `RuntimeError`
+after 2000 failed attempts, and `_backfill_zone_overlap` was wired
+fail-closed and unconditionally into both `run()` and `_run_postgres()` —
+called at module level on every app startup
+(`app/main.py`, `migrate.run(engine, strict=is_production())`), with no
+try/except. Independent review found the real trigger condition is any
+group of 2+ active coincident zones with **width > 960 AND height > 960**
+(the grid/scatter's minimum offset is 40, and 1000 − 960 = 40 — not only
+the literal 1000×1000 example originally documented) — and confirmed the
+consequence is not "the migration step fails", it is **the whole
+application refusing to start, in any environment**, including the very
+admin UI a manager would need to open to fix the offending zone. The
+diagnosed real-world case (Main/Bar at the 360×300 default) does not
+trigger it — the diagnosis itself was correct — but the mechanism is real
+and was exactly what `test_backfill_failure_leaves_no_partial_dml`
+deliberately forced to fire.
+
+**Fixed — availability over perfect geometry, made explicit and tested:**
+
+- `place_new_zone_rect` (moved to `app/services/zone_geometry.py`, see
+  architecture below) now tries the existing grid/scatter first, then a
+  bounded, deterministic systematic sweep of the rectangle's actual legal
+  position space (`x ∈ [0, 1000-width]`, `y ∈ [0, 1000-height]`) — no
+  randomness, and bounded at 200,000 checks (a pragmatic ceiling, not a
+  claim of exhaustiveness past it — comfortably covers any zone size up to
+  roughly half the canvas in both dimensions, including every size this
+  review exercised: 961×961, 961×300). Returns `None`, never raises, when
+  every legal position for that exact size is already occupied — the true
+  impossible case (e.g. 1000×1000, whose only legal position is (0, 0)).
+- `_backfill_zone_overlap` now returns a small `ZoneOverlapResult(moved,
+  unresolved)` instead of a flat list. A zone `place_new_zone_rect` cannot
+  place is left **completely unchanged** — not resized, not force-moved —
+  and reported in `.unresolved` (also surfaced in the boot log, prefixed
+  `UNRESOLVED:`, with no credentials or connection details — only this
+  project's own zone/floor ids and dimensions). Every other group in the
+  same run is still processed normally. Startup never halts for this.
+- The fail-closed `RuntimeError` is **narrowed, not removed**: it still
+  fires — still halting startup, matching every other backfill's own
+  discipline in this file — but only when a zone the function itself
+  should have moved or flagged is found still coincident afterward (a
+  genuine internal defect). It never fires for an honestly-reported
+  unresolved zone. Verified with two different forced scenarios: the
+  now-legitimate impossible case (no raise) and a simulated broken
+  placement function that lies about resolving a collision (still raises,
+  and rolls back an earlier group's already-issued `UPDATE` too).
+- **Policy, stated plainly for anyone reading this later:** for this
+  backfill, keeping the application available takes priority over fully
+  resolving an impossible zone-overlap geometry. A data condition that
+  cannot be perfectly fixed automatically must never become a reason the
+  whole system cannot run.
+
+**MEDIUM — architecture: layering violation, corrected.**
+`place_new_zone_rect` lived in `app/migrate.py` (a boot-time
+migration/backfill module) but was imported live by
+`app/routers/admin.py` (an HTTP handler) — no circular import today, but
+the wrong module for a live request path to depend on. Moved to a new,
+neutral `app/services/zone_geometry.py` (following this codebase's
+existing `app/services/*` convention): pure functions only, its only
+import is `from __future__ import annotations` — no router, no migration
+module, no Engine, no Session, confirmed by a test that inspects its
+actual import lines, not just a substring search. Both `app/migrate.py`
+and `app/routers/admin.py` import `place_new_zone_rect` from there
+symmetrically; the residual definition in `migrate.py` is gone.
+
+**MEDIUM — CSS: rect lost its visual distinction at high capacity,
+fixed.** `.map-chip[data-shape="rect"]` computed a wider `width`, but the
+base `.map-chip` rule's `max-width: 140px` still capped the *rendered*
+width regardless — at capacity ≳ 11, a rect table's final width was
+silently clamped back down to the exact same 140px ceiling as round/square,
+erasing the shape distinction exactly where it mattered most (no existing
+test caught this — the previous test only checked that CSS tokens were
+textually present, never the resulting computed width). Fixed: rect now
+declares its own `min-width`/`max-width` (`[97, 190]px`, the same ×1.35
+stretch applied to round/square's own `[72, 140]px`), which — by CSS
+specificity, not source order — overrides the inherited ceiling for rect
+specifically, leaving round/square's own bounds untouched. A new test
+computes the actual cascade-resolved effective width (formula → clamp,
+the same two-step a browser applies) for round/square vs. rect at
+capacities 1, 11, 20, 0, `None`, -5, and 999, and asserts rect stays
+meaningfully wider than round/square at every one of them, not just that
+the CSS mentions all three shapes.
+
+**LOW — concurrent zone creation on the same floor, addressed for
+PostgreSQL, honestly limited on SQLite.** `create_zones` computed `taken`
+and placed new zones without any database-level exclusivity — two
+concurrent `POST /admin/floors/{id}/zones/create` requests on the *same*
+floor could each read the same pre-insert snapshot and place a new zone
+on the same rectangle, silently reintroducing the bug this fix corrects.
+Fixed: the route now locks the `Floor` row
+(`SELECT ... FOR UPDATE`, the scalar-id-only shape already used
+throughout this codebase — reservations.py, sales.py,
+services/payments.py) before computing `taken`, re-reading zones fresh
+past the lock (never through the `floor.zones` relationship, which can
+already be populated in the identity map from before the lock — the same
+staleness class of bug fixed earlier in `seat_reservation_here`).
+- **PostgreSQL:** a real row lock, verified directly against the local
+  disposable database with two genuinely concurrent connections and
+  threads — a request on floor A blocks until the first transaction
+  commits; a concurrent request on floor B is never blocked by it.
+- **SQLite:** `.with_for_update()` compiles to a no-op there (confirmed
+  directly — SQLite's dialect defines no `FOR UPDATE` syntax at all); no
+  per-row lock is taken. SQLite's own file-level write-serialization
+  (one writer transaction at a time for the whole database) is coarser
+  than a row lock, and this fix makes **no claim of a proven guarantee on
+  SQLite** — only that the PostgreSQL guarantee is real and verified. This
+  app's SQLite use is single-process dev/test, where the race is not
+  realistically reachable; the guarantee that matters operationally is
+  the PostgreSQL one, which now holds.
+
+**LOW — test coverage, both addressed.**
+- The zone-creation collision test previously passed even with
+  `if candidate not in taken` removed, because the starting index alone
+  happened to avoid the one pre-existing zone — not the collision check.
+  Rewritten to seed the pre-existing zone at exactly the rectangle the
+  naive starting index would try first, so the check is what has to do
+  the work.
+- Added an end-to-end test that calls `_run_postgres()` itself (not
+  `_backfill_zone_overlap` directly) against real PostgreSQL, confirming
+  the zone-overlap backfill is genuinely wired into the production
+  startup path, not only reachable when called in isolation.
+
+**Runtime warning added, independent of the boot log.** A boot-time log
+line is not something a manager using the Floor Plan Builder will ever
+see, and an unresolved zone (the availability-over-geometry policy above)
+can legitimately persist. `GET /admin/tables` now independently detects,
+on every render, whether the current floor still has active zones sharing
+an exact rectangle, and shows a non-blocking amber banner naming them —
+never blocking or replacing the map, never claiming the condition is
+resolved. The two administrative paths it points to already exist and
+were verified present: `/admin/floors`'s numeric "Map box" position
+fields, and `/admin/tables`' own table list, which reassigns a table's
+zone by name via a plain `<select>`, entirely independent of geometry — a
+coincident zone is never a dead end for reassigning tables away from it,
+even before anyone fixes its rectangle.
+
+**Tests — real execution, extended `tests/test_floor_zone_overlap.py`
+(SQLite always; PostgreSQL gated by the same
+`assert_disposable_postgres_target`/`ALLOW_DESTRUCTIVE_PG_TESTS=1` guard,
+imported directly from `tests/test_floor_map_coordinates.py`):**
+
+```text
+SQLite: 27 tests, all pass — neutral-module import/shape checks; place_
+    new_zone_rect direct unit tests (961x961 alternative found, near-1000
+    asymmetric requiring the sweep, 1000x1000 impossible returns None,
+    fully-exhausted near-max also returns None, deterministic repeat);
+    create_zones (distinct batch, collision-check genuinely exercised,
+    floors independent, SQLite lock no-op documented); backfill (2-way/
+    3-way groups, table translation + NULL/inactive policy, idempotent,
+    impossible group unresolved not raised, resolvable+impossible
+    together, unresolved log has no credentials, a genuine internal
+    defect still raises AND rolls back an earlier group's work too,
+    migrate.run() wiring, migrate.run() completes with an impossible case
+    present); move-layout warning (exact-only, never on failure); the new
+    runtime UI warning banner (present when coincident, absent when
+    distinct, never blocks the map) and the admin paths it points to;
+    shape/capacity markup and the real cascade-computed effective-width
+    test (7 capacity values, including 0/None/-5/999).
+PostgreSQL (PG_TEST_DSN + ALLOW_DESTRUCTIVE_PG_TESTS=1, both required):
+    disposable database inside the existing local `rms-pgtest` Docker
+    container — never production. Backfill de-collides, anchor unchanged,
+    idempotent, impossible case does not raise, `_run_postgres()` itself
+    (not just the backfill function) verified wired, SQLite/PostgreSQL
+    determinism cross-check (identical starting state → identical
+    result), and a REAL two-connection, two-thread concurrency proof: a
+    lock on floor A genuinely blocks a second connection on floor A and
+    never blocks a concurrent operation on floor B. 10 PostgreSQL
+    -specific assertions, 0 failures. Disposable database dropped after every run;
+    the container itself untouched.
+Regression, all re-run standalone, all pass: tests/test_floor_admin_ui.py,
+    tests/test_floor_map_coordinates.py, tests/test_floor_spatial.py,
+    tests/test_reservations_map.py, tests/test_migrate.py.
+git diff --check: clean.
+```
+
+**Risks and limitations, disclosed (second pass):**
+- SQLite's concurrent-create protection is explicitly undemonstrated (see
+  the LOW finding above) — acceptable given this app's actual SQLite usage
+  pattern, not a general claim.
+- The 200,000-check sweep budget in `place_new_zone_rect` is a pragmatic
+  ceiling for an extreme, unrealistic zone size (larger than roughly half
+  the canvas in both dimensions); beyond it, a technically-findable
+  position could be reported as unresolved instead. Judged an acceptable
+  trade for a bounded, fast, always-terminating function.
+- The runtime warning banner is scoped to `GET /admin/tables`; it is not
+  (and was not asked to be) surfaced on `/admin/floors` or the operational
+  `floor.html`, which remains untouched.
+- ~~Independent re-review of this second pass has not yet occurred.~~
+  Superseded — see "third pass" below: it did occur, and returned
+  **APPROVED WITH NON-BLOCKING NOTES**.
+
+**This section, together with the diagnosis section above it, records a
+fix that has now been through one independent review and one response
+pass — since re-reviewed and closed; see "third pass" below for the
+current, final status.**
+
+## Floor Plan Builder zone-overlap fix — third pass (re-review notes incorporated) — CLOSED / APPROVED
+
+```text
+Branch/worktree: fix/floor-zone-overlap (same branch, third pass), from
+                  daa6d5a (unchanged — still the literal base SHA)
+Implementer: Claude
+Reviewer: independent re-review of the second pass — verdict APPROVED
+          WITH NON-BLOCKING NOTES (2 LOW notes, both incorporated below,
+          neither blocking)
+Files (this pass): app/services/zone_geometry.py, app/migrate.py,
+       tests/test_floor_zone_overlap.py, docs/03_CURRENT_WORK.md (no
+       behavioral change to app/routers/admin.py, web/static/app.css, or
+       web/templates/admin_tables.html this pass — untouched, carried
+       forward from the second pass unchanged)
+Status: CLOSED / APPROVED. NOT INTEGRATED, NOT PUSHED, NOT DEPLOYED —
+        those remain separate, later, explicitly-authorized steps.
+        `daa6d5a` (origin/main and local main) remains the current,
+        deployed, healthy state of production; nothing in this slice has
+        touched it.
+```
+
+**Re-review verdict: APPROVED WITH NON-BLOCKING NOTES.** The HIGH finding
+(boot-crashing backfill) and both MEDIUM findings (architecture layering,
+CSS max-width conflict) from the second pass's independent review were
+confirmed resolved. Two LOW notes remained, neither blocking approval;
+both are incorporated in this pass:
+
+**LOW note 1 — `place_new_zone_rect`'s docstring overstated what `None`
+proves.** The second pass's docstring said `None` means "every legal
+position for this exact size is already occupied" and called that
+"mathematically" certain — true only when the sweep phase's budget
+(`_SWEEP_BUDGET = 200_000`) was large enough to visit every legal
+position. For a rectangle size whose legal position space exceeds that
+budget, `None` instead means the search stopped without finding a free
+slot, not that none exists. **Fixed**: `place_new_zone_rect`'s docstring
+(`app/services/zone_geometry.py`) now states both cases explicitly —
+*proven impossible* when `legal_w * legal_h <= _SWEEP_BUDGET` (the sweep
+genuinely covered every legal position), and *budget exhausted, not
+proven impossible* otherwise — and states plainly that the caller's
+obligation is identical either way (treat as unresolved, never raise), so
+the distinction is documented honestly without requiring any caller to
+act on it differently.
+
+**LOW note 2 — legacy/corrupted NULL or invalid width/height could crash
+the backfill.** `Zone.width`/`Zone.height` are `NOT NULL` in the normal
+ORM schema (confirmed directly), so this codebase's own write paths can
+never produce it — but a database touched outside those paths (a
+hand-run migration, an external tool, a pre-hardening artifact) could
+carry `NULL`, a non-integer, `<= 0`, or `> 1000`. Before this pass,
+`_backfill_zone_overlap` would pass such a value straight into
+`place_new_zone_rect` → `_legal_range` → `1000 - width + 1`, raising
+`TypeError` on `NULL` (or producing a nonsensical negative/huge range for
+an out-of-bounds value) — an unhandled exception in the same
+unconditionally-run, fail-closed boot path the HIGH finding was about.
+**Fixed**: `_backfill_zone_overlap` now validates a GROUP's width/height
+(shared exactly by every member, by construction of the grouping key)
+*before* any member is passed to `place_new_zone_rect` — never
+`int(None)`, never arithmetic against `None`, no `TypeError` reaching the
+caller or the boot sequence. An invalid group (`width`/`height` not an
+integer in `[1, 1000]`) is reported unresolved **in full** — every
+member, including what would have been the anchor, since there is no
+zone size left to "anchor" once it cannot be trusted — and left
+completely untouched: not resized, not repositioned, not defaulted to a
+guessed value. Every other, validly-sized group in the same run is still
+processed normally, and the fail-closed post-condition correctly treats
+these as expected/excused (not a defect), the same mechanism already
+covering the ordinary "impossible geometry" unresolved case. Also fixed
+in the same pass: the group-processing sort order could itself have
+raised (`<` between `None` and `int`) when comparing group keys containing
+invalid values — replaced with a `str()`-based sort key, still fully
+deterministic, that never compares mismatched types.
+
+**Tests — real execution, extended `tests/test_floor_zone_overlap.py`:**
+
+```text
+SQLite (always): 7 new tests — NULL width, NULL height, and each of
+    width=0/height<0/width>1000/height>1000 individually, all reported
+    unresolved with zero crash and zero mutation; an invalid group
+    alongside a normal resolvable group in the same run (the resolvable
+    one corrected, the invalid one left intact and unresolved — the
+    exact scenario asked for); a second run over the same legacy data is
+    still idempotent (identical unresolved report, zero additional
+    change); the unresolved log line for an invalid-dimension group
+    contains no password/DSN/secret/token/@ substring, only this
+    project's own zone/floor ids and the stored values; a from-scratch
+    permissive "legacy" floor+zone schema (no NOT NULL anywhere) is used
+    for these — never Base.metadata's real constraint, never production.
+    Plus migrate.run() itself, against the FULL real schema
+    (Base.metadata.create_all) with zone.width/height specifically
+    relaxed via SQLite's rename-recreate-copy-drop technique (SQLite has
+    no ALTER COLUMN ... DROP NOT NULL) — completes without raising, with
+    the legacy zones surfaced as UNRESOLVED in the boot log.
+PostgreSQL (PG_TEST_DSN + ALLOW_DESTRUCTIVE_PG_TESTS=1, both required):
+    same NULL-width scenario against a REAL PostgreSQL server — the
+    disposable database's zone table relaxed via a genuine
+    `ALTER TABLE zone ALTER COLUMN width DROP NOT NULL` (PostgreSQL
+    supports this directly, unlike SQLite), never touching any
+    production constraint. Confirms no exception, both zones reported
+    unresolved and left byte-for-byte unchanged, and a second run is
+    still idempotent — executed for real, not only reasoned about.
+    Disposable database dropped after every run; the `rms-pgtest`
+    container itself untouched throughout every pass of this slice.
+Regression, all re-run standalone, all pass: tests/test_floor_admin_ui.py,
+    tests/test_floor_map_coordinates.py, tests/test_floor_spatial.py,
+    tests/test_reservations_map.py, tests/test_migrate.py.
+git diff --check: clean.
+```
+
+**Final state of invalid/legacy dimension handling:** a zone whose
+stored `width`/`height` cannot be trusted is never guessed at, resized,
+or silently defaulted — it is left exactly as found, reported by name
+(zone id + floor id) in the boot log and, like any other unresolved
+coincidence, surfaced in the `/admin/tables` runtime warning banner
+covered by the second pass (no additional code needed there — that
+banner already reads live zone state, not a special-cased list). Fixing
+the underlying corrupted value remains a manual, deliberate action
+outside this backfill's authority, by design.
+
+**This slice is CLOSED / APPROVED, but NOT INTEGRATED, NOT PUSHED, NOT
+DEPLOYED.** `daa6d5a` remains the current state of `origin/main` and of
+production, unaffected. **Next step:** a targeted, read-only review of
+the eventual commit (SHA, file list, diff) before any fast-forward
+integration — and integration itself remains a separate, later,
+explicitly-authorized action, same discipline as every other slice
+above.
+
 ## Next Authorized Action
 
 ```text

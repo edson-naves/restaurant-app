@@ -37,6 +37,7 @@ from app.deps import WEB_DIR, render, require, role_capabilities
 from app.security import hash_pin
 from app.services import settings as settings_svc
 from app.services.images import resize_to_data_uri, save_image
+from app.services.zone_geometry import place_new_zone_rect
 from app.models.oltp import (
     DAY_MENU_COURSES,
     DayMenu,
@@ -351,6 +352,19 @@ def tables_page(
     # spread otherwise (see _table_map_positions). Never written here.
     table_positions = _table_map_positions(on_floor, floor_zones)
 
+    # Runtime warning for a zone-overlap the boot-time backfill left
+    # unresolved (app/migrate.py::_backfill_zone_overlap — "availability
+    # over perfect geometry": a mathematically-impossible group is reported
+    # in the boot log, never fixed by force). The boot log alone is not
+    # something a manager using this page will ever see — this surfaces
+    # the SAME condition, freshly checked on every render (never a stale
+    # "resolved" claim), as a visible, non-blocking banner. The map itself
+    # still renders normally either way; this never blocks or replaces it.
+    _rect_groups: dict[tuple[int, int, int, int], list[Zone]] = {}
+    for z in floor_zones:
+        _rect_groups.setdefault((z.pos_x, z.pos_y, z.width, z.height), []).append(z)
+    overlapping_zone_groups = [g for g in _rect_groups.values() if len(g) > 1]
+
     return render(request, "admin_tables.html", {
         "db": db, "staff": staff,
         "tables": tables,
@@ -373,6 +387,7 @@ def tables_page(
         # Just this floor's, for adding a table to the floor on screen.
         "floor_zones": floor_zones,
         "table_positions": table_positions,
+        "overlapping_zone_groups": overlapping_zone_groups,
         "waiters": waiters,
         "zone_waiter": zone_waiter,
         "seats_total": sum(t.capacity for t in active),
@@ -897,7 +912,27 @@ def move_zone_layout(
         table.map_x_per_mille = max(0, min(1000, x))
         table.map_y_per_mille = max(0, min(1000, y))
     db.commit()
-    return Response(status_code=204)
+
+    # Non-blocking overlap warning (Floor Plan Builder zone-overlap fix,
+    # docs/03_CURRENT_WORK.md): overlap itself stays allowed by design, but
+    # landing on the EXACT same rectangle as another active zone on the
+    # same floor makes that other zone unreachable by drag — the bug this
+    # slice fixes for new/backfilled zones. The move above already
+    # succeeded; this only adds an advisory header for the client to show a
+    # warning. It never changes the status code or body, and must never be
+    # read as "the save failed" — a failed save is signalled purely by a
+    # non-2xx response, unrelated to this header.
+    resp = Response(status_code=204)
+    exact_match = db.execute(
+        select(Zone.id).where(
+            Zone.floor_id == zone.floor_id, Zone.is_active.is_(True), Zone.id != zone.id,
+            Zone.pos_x == zone.pos_x, Zone.pos_y == zone.pos_y,
+            Zone.width == zone.width, Zone.height == zone.height,
+        )
+    ).first()
+    if exact_match:
+        resp.headers["X-Zone-Overlap-Warning"] = "exact"
+    return resp
 
 
 
@@ -976,17 +1011,89 @@ def create_zones(
     if floor is None:
         raise HTTPException(404, "Floor not found")
 
+    # Serialize against a concurrent create on THIS SAME floor (review
+    # finding, LOW): two requests racing here could otherwise both compute
+    # `taken` from the same pre-insert snapshot and each place a new zone on
+    # the same rectangle — silently reintroducing the exact bug this fix
+    # corrects. Locks the scalar id, not the mapped entity, matching every
+    # other row lock in this codebase (reservations.py, sales.py,
+    # services/payments.py) — `Floor` has no eager relationship that would
+    # turn a direct lock into an outer join here, but the scalar-id shape is
+    # kept for consistency and because it is the only form this codebase's
+    # own reviewers expect. A different floor is never touched or locked —
+    # `floor_id` scopes the WHERE clause, so two floors' zone creation runs
+    # fully in parallel.
+    #
+    # PostgreSQL: a real row lock. A second concurrent request against the
+    # same floor blocks here until the first transaction commits, then
+    # re-reads a `taken` set that includes what the first one just added.
+    # SQLite: `.with_for_update()` compiles to a no-op (confirmed directly —
+    # SQLite's dialect has no FOR UPDATE syntax) — no per-row lock is taken.
+    # SQLite's own file-level write-serialization (one writer transaction at
+    # a time for the whole database) still prevents two commits from
+    # interleaving, but that is coarser than a row lock and this code makes
+    # no claim beyond it: a genuine cross-request race on SQLite is not
+    # proven impossible here, only that PostgreSQL's is. This app's SQLite
+    # use is single-process dev/test, where this race is not realistically
+    # reachable; the guarantee that matters is the PostgreSQL one, above.
+    db.execute(select(Floor.id).where(Floor.id == floor.id).with_for_update())
+
+    # Read fresh, past the lock — never through `floor.zones` (a relationship
+    # attribute can already be populated in the identity map from before the
+    # lock was taken, on either dialect; querying `Zone` directly is always
+    # a real read of current state, the same fix already applied to the
+    # locked-order/locked-table reads elsewhere in this codebase).
+    floor_zones = db.execute(
+        select(Zone).where(Zone.floor_id == floor.id)
+    ).scalars().all()
     wanted = _parse_names(names, limit=26)
-    existing = {z.name for z in floor.zones}
+    existing = {z.name for z in floor_zones}
     back = f"/admin/floors?floor={floor_id}"
-    top = max([z.sort_order for z in floor.zones], default=-1)
+    top = max([z.sort_order for z in floor_zones], default=-1)
+    # Deterministic placement so a batch of new zones never lands on a
+    # rectangle exactly identical to each other's or to an existing active
+    # zone on THIS floor — the Floor Plan Builder's drop hit-test otherwise
+    # cannot tell two coincident zones apart (docs/03_CURRENT_WORK.md).
+    # `idx` counts placements within this call, seeded from the actual
+    # number of active zones already here — not `sort_order`, which can
+    # repeat (e.g. after zones are reordered/retired elsewhere) and is not
+    # itself a placement count. Other floors are untouched: `taken` is
+    # seeded only from this floor's own zones, computed after the lock.
+    _ZONE_W, _ZONE_H = 360, 300   # Zone.width/height's own model defaults
+    taken = {
+        (z.pos_x, z.pos_y, z.width, z.height)
+        for z in floor_zones if z.is_active
+    }
+    idx = len(taken)
 
     made = 0
     for name in wanted:
         if name in existing:
             continue
         top += 1
-        db.add(Zone(floor_id=floor.id, name=name, sort_order=top, is_active=True))
+        placed = place_new_zone_rect(taken, idx, _ZONE_W, _ZONE_H)
+        idx += 1
+        if placed is None:
+            # Not reachable in ordinary use: every zone made here is the
+            # fixed 360x300 default, whose legal position space (641 x 701
+            # distinct points) cannot plausibly be exhausted by one floor's
+            # zone count — place_new_zone_rect only returns None once every
+            # one of those is already taken. If it ever does happen, this
+            # request fails loudly and by itself (a 409, not a crash, and
+            # nothing already committed in this loop is left half-applied —
+            # the whole batch shares one transaction, rolled back by
+            # raising before db.commit()) rather than silently placing a
+            # zone on top of another one.
+            raise HTTPException(
+                409, f"Could not find a free position for zone '{name}' on this "
+                "floor — every legal position for a 360x300 zone is already "
+                "occupied by another active zone. This should not happen in "
+                "ordinary use; contact support before adding more zones here."
+            )
+        x, y, w, h = placed
+        taken.add((x, y, w, h))
+        db.add(Zone(floor_id=floor.id, name=name, sort_order=top, is_active=True,
+                     pos_x=x, pos_y=y, width=w, height=h))
         existing.add(name)
         made += 1
 

@@ -34,6 +34,18 @@
   </nav>
   {% endif %}
 
+  {% if overlapping_zone_groups %}
+  <div class="warn-banner" style="margin-bottom:10px">
+    <strong>Zone position conflict{{ '' if overlapping_zone_groups|length == 1 else 's' }}:</strong>
+    {% for group in overlapping_zone_groups %}
+    {{ group|map(attribute='name')|join(' and ') }} occupy the exact same spot on the map —
+    only one of them can be dropped onto by dragging a table here.{{ ' ' if not loop.last else '' }}
+    {% endfor %}
+    Fix it from <a href="/admin/floors">Floors &amp; zones</a> (the "Map box" position fields), or
+    by dragging one of them to a new spot below — this is not automatically resolved.
+  </div>
+  {% endif %}
+
   {% if floor_zones %}
   <div class="legend" style="margin-bottom:10px">
     {% for z in floor_zones %}
@@ -58,9 +70,21 @@
     {% endfor %}
     {% for t in floor_tables %}
     {% set pos = table_positions.get(t.id, (500, 500)) %}
+    {# Chip width scales with seat count so a glance at the map hints at size
+       — a zero/NULL capacity (the model's own type says int, but nothing
+       enforces NOT NULL at the database level) falls back to 1 rather than
+       crashing the whole page on a `min()`/`max()` comparison against
+       None, then the result is clamped to [1,20] (the capacity field's own
+       bounds) before the formula runs. The CSS below adds a hard
+       min/max-width backstop on top of that, so no capacity value —
+       however it got here — can stretch or shrink a chip past a size that
+       still fits its own text. #}
+    {% set cap = t.capacity or 1 %}
+    {% set cap = [cap, 20]|min %}
+    {% set cap = [cap, 1]|max %}
     <div class="chip map-chip {{ t.status }}" data-id="{{ t.id }}" data-shape="{{ t.shape }}"
          data-zone-id="{{ t.zone_id or '' }}" data-x="{{ pos[0] }}" data-y="{{ pos[1] }}"
-         style="left:{{ pos[0] / 10 }}%; top:{{ pos[1] / 10 }}%;">
+         style="left:{{ pos[0] / 10 }}%; top:{{ pos[1] / 10 }}%; --cap-w: {{ 72 + (cap - 1) * 3 }}px;">
       {% if t.zone_ref %}
       <i class="zdot" style="background: {{ t.zone_ref.swatch }}"
          title="{{ t.zone_ref.name }}"></i>
@@ -507,6 +531,15 @@
           t.el.dataset.x = Math.round(t.curX !== undefined ? t.curX : t.x);
           t.el.dataset.y = Math.round(t.curY !== undefined ? t.curY : t.y);
         });
+        // Advisory only — the move already saved successfully above. Overlap
+        // itself is allowed by design; this only flags the one case where a
+        // manager can't tell two zones apart any more (exact coincidence),
+        // never confused with .unsaved (a failed save), which this leaves
+        // untouched either way.
+        d.el.classList.toggle('overlap-warn', r.headers.get('X-Zone-Overlap-Warning') === 'exact');
+        d.el.title = (r.headers.get('X-Zone-Overlap-Warning') === 'exact')
+          ? 'Saved — but this zone now exactly overlaps another active zone; one of them may be unreachable when dragging tables here.'
+          : '';
       }
     }).catch(function () {
       mark(d.el, false);

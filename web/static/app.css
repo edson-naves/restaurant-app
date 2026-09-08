@@ -1019,6 +1019,14 @@ tr.dim:hover > td { opacity: 1; }
   background: rgba(47,158,94,.12); border: 1px solid rgba(47,158,94,.4);
   color: #047857; padding: 12px 14px; border-radius: 10px;
 }
+/* A real but non-blocking data condition — distinct from .err (something
+   failed) and .note (success/confirmation): amber, using the same --warn
+   token as the rest of the app's warning badges. */
+.warn-banner {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  color: #92400e; padding: 12px 14px; border-radius: 10px;
+}
 
 /* Drag-to-arrange floor plan editor. */
 .plan {
@@ -1076,12 +1084,42 @@ tr.dim:hover > td { opacity: 1; }
   cursor: nwse-resize;
 }
 .zone-rect.unsaved { border-color: var(--occupied); }
+/* Advisory only (never a failure signal — that's .unsaved above, amber and
+   solid). A dashed blue outline flags a zone that now exactly overlaps
+   another active zone on the same floor, so it stays visually distinct
+   from a failed/cancelled save at a glance. */
+.zone-rect.overlap-warn { outline: 2px dashed var(--accent); outline-offset: 2px; }
 .map-chip {
-  position: absolute; transform: translate(-50%, -50%); width: 92px;
+  position: absolute; transform: translate(-50%, -50%);
+  width: var(--cap-w, 92px); min-width: 72px; max-width: 140px;
   touch-action: none; z-index: 2; cursor: grab;
 }
 .map-chip.dragging { opacity: .6; z-index: 5; cursor: grabbing; }
 .map-chip.unsaved { outline: 2px solid var(--occupied); }
+/* Shape, made visually real again (Floor Plan Builder parity fix): round is
+   a true ellipse, square keeps the chip's normal light rounding (and its
+   normal [72,140]px bounds from .map-chip above — no override needed),
+   rect stretches noticeably wider than round/square at the same capacity,
+   at every capacity, not just in the middle of the range. Driven straight
+   off the `data-shape` attribute the shape-cycle button already keeps
+   current — no extra class bookkeeping needed.
+
+   rect gets its OWN min-width/max-width ([97, 190]px, the same x1.35
+   stretch applied to round/square's own [72, 140]px bounds) rather than
+   inheriting .map-chip's [72, 140]px — a fix in itself: the base
+   max-width:140px caps the FINAL rendered width regardless of what a
+   later `width` rule computes, so a rect chip's width formula alone was
+   being silently clamped back down to 140px at capacity >~11, identical
+   to round/square right where the distinction matters most. Restating
+   both bounds here (higher specificity than the bare .map-chip class)
+   overrides that ceiling for rect specifically, without touching
+   round/square's. */
+.map-chip[data-shape="round"] { border-radius: 50%; }
+.map-chip[data-shape="square"] { border-radius: 10px; }
+.map-chip[data-shape="rect"] {
+  border-radius: 10px; width: calc(var(--cap-w, 92px) * 1.35);
+  min-width: 97px; max-width: 190px;
+}
 
 /* Zone marker. The card's left border already carries table status, so the
    zone gets its own channel (a corner dot) rather than competing for it. Shared

@@ -13,10 +13,13 @@ from __future__ import annotations
 
 import math
 import re
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+
+from app.services.zone_geometry import place_new_zone_rect
 
 # (table, column, DDL type + default). The default matters: existing rows are
 # backfilled with it, so it has to be the value that preserves current
@@ -232,6 +235,17 @@ def run(engine: Engine, strict: bool = False) -> list[str]:
         # backfilled yet" — exactly what the next run expects), just not by
         # the "everything vanishes together" mechanism the design describes.
         applied.extend(_backfill_table_map_positions(conn))
+    # Its own transaction, deliberately separate from the column-ALTER block
+    # above: pure DML (no ALTER involved), so unlike that block it has no
+    # auto-commit quirk to share — a raise here rolls back cleanly on its
+    # own and never touches the already-committed columns. Narrowly
+    # fail-closed (a genuine internal defect still halts startup), but an
+    # unresolved zone never does — see _backfill_zone_overlap's own
+    # docstring, "Availability policy".
+    with engine.begin() as conn:
+        _zone_overlap = _backfill_zone_overlap(conn)
+        applied.extend(_zone_overlap.moved)
+        applied.extend(_zone_overlap.unresolved)
     # The fire-batch unique index is a REQUIRED invariant — run it in its own
     # transaction (after the additive column work has committed) so that if it
     # halts on pre-existing duplicates, it does not roll back the column adds.
@@ -357,6 +371,15 @@ def _run_postgres(engine: Engine, strict: bool = False) -> list[str]:
     # assumed.
     with engine.begin() as conn:
         applied.extend(_backfill_table_map_positions(conn))
+    # Its own transaction, same reasoning as the SQLite call site in run():
+    # pure DML, no ALTER, so no auto-commit quirk to worry about on either
+    # dialect — a raise here rolls back cleanly on its own. Narrowly
+    # fail-closed, never for an honestly-unresolved zone (see
+    # _backfill_zone_overlap's own docstring, "Availability policy").
+    with engine.begin() as conn:
+        _zone_overlap = _backfill_zone_overlap(conn)
+        applied.extend(_zone_overlap.moved)
+        applied.extend(_zone_overlap.unresolved)
     # The backfill itself stays best-effort (a missing legacy task is caught by
     # the B2 readiness invariant, not a silent unprotected duplicate risk).
     try:
@@ -965,3 +988,287 @@ def _backfill_table_map_positions(conn) -> list[str]:
             "fail-closed, nothing left partially done. Startup halted."
         )
     return [f"backfilled map position for {len(pending)} table(s)"] if pending else []
+
+
+# --------------------------------------------------------------------------
+# Floor Plan Builder — the one-off zone-overlap backfill. The actual
+# placement geometry (place_new_zone_rect and its helpers) lives in
+# app/services/zone_geometry.py — a neutral module with no dependency on
+# this file, a router, an Engine, or a Session — imported from here AND
+# from app/routers/admin.py's live create-zone route, so both call sites
+# share exactly one algorithm rather than two copies that could drift.
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class ZoneOverlapResult:
+    """Testable outcome of _backfill_zone_overlap.
+
+    `moved`: one human-readable line per zone the backfill successfully
+    repositioned. `unresolved`: one line per zone it deliberately left
+    untouched because no distinct rectangle exists for it (see
+    place_new_zone_rect's `None` contract) — a real, expected outcome, not
+    an error. Both lists feed straight into run()/`_run_postgres()`'s own
+    flat `applied` log (unresolved entries stay clearly labelled there),
+    while a caller that wants to check "did anything get stuck" can read
+    `.unresolved` directly instead of parsing log text.
+    """
+    moved: list[str]
+    unresolved: list[str]
+
+
+def _backfill_zone_overlap(conn) -> ZoneOverlapResult:
+    """Floor Plan Builder — de-collide active zones on the same floor that
+    share an EXACTLY identical rectangle (pos_x, pos_y, width, height all
+    equal).
+
+    Why this exists: every zone (old and new, before this slice's fix to
+    `create_zones`) is created without an explicit position — `Zone`'s
+    pos_x/pos_y/width/height default to a fixed (60, 60, 360, 300) — so any
+    two zones neither has ever been dragged/resized/hand-edited land on the
+    literal same rectangle. The admin Floor Plan Builder's drop hit-test
+    (`document.elementsFromPoint`, web/templates/admin_tables.html) can then
+    only ever resolve to ONE of them for any point inside that shared
+    rectangle, making the other permanently unreachable by drag — confirmed
+    against a real production report (a table's reassignment silently never
+    reaching one of two coincident zones; see docs/03_CURRENT_WORK.md).
+
+    No reliable marker distinguishes "still at the untouched default" from
+    "a manager deliberately typed/dragged two zones onto the exact same
+    spot": `Zone` carries no "ever moved" flag, and the Map box's numeric
+    fields on `/admin/floors` (web/templates/admin_floors.html) let a
+    manager reproduce the exact default by hand anyway. So this treats
+    every EXACT match the same regardless of cause, and does nothing to
+    zones that merely overlap without being byte-identical — overlap
+    itself is allowed by design (docs/Evidence/Floor/
+    FLOOR_PLAN_BUILDER_DESIGN.md, and the historical `/tables/layout`
+    docstring this project inherited: "Overlap is allowed ... the manager
+    arranges the room as it really is."). Only an EXACT
+    (pos_x, pos_y, width, height) match is ever touched.
+
+    Algorithm, per (floor_id, pos_x, pos_y, width, height) group of two or
+    more ACTIVE zones sharing that exact rect:
+      - the zone with the lowest id is the anchor and is never moved;
+      - every other zone in the group is repositioned — position only,
+        width/height are preserved exactly — via place_new_zone_rect(),
+        against a `taken` set seeded with every active zone's rect
+        currently on that floor (the whole floor, not just this group), so
+        a moved zone can land on neither the anchor nor any other zone
+        already there, and is added to `taken` immediately after, so two
+        zones from the same group can't be placed on top of each other
+        either. If `place_new_zone_rect` returns `None` (no distinct
+        rectangle exists at that size — see the availability policy
+        below), that one zone is left completely unchanged and reported
+        in `.unresolved` instead of moved — never raised;
+      - each moved zone's own active tables that already carry a real
+        (non-NULL) map_x_per_mille/map_y_per_mille are translated by the
+        exact same (new_x - old_x, new_y - old_y) delta, clamped to
+        [0, 1000] — width/height are unchanged, so this is a pure
+        translation, not a proportional rescale: the zone's shape did not
+        change, only its position;
+      - inactive tables are never read or written — retired tables' stale
+        coordinates don't matter, the same convention as every other Floor
+        Plan Builder backfill/route in this codebase
+        (_backfill_table_map_positions above; _free_cells,
+        move_zone_layout in app/routers/admin.py);
+      - a table with NULL map_x_per_mille/map_y_per_mille is left NULL —
+        there is nothing real to translate, and `_table_map_positions()`
+        (app/routers/admin.py) computes a fresh ring-fallback position
+        around the zone's rectangle at render time regardless, from
+        whatever that rectangle currently is. A never-placed table
+        therefore "follows" the zone's corrected rectangle for free, with
+        no write needed here.
+
+    Pure DML (UPDATE only) — no ALTER TABLE, unlike the ADDED_COLUMNS work
+    elsewhere in this file. That matters: on this driver, an ALTER auto
+    -commits immediately on SQLite even inside `engine.begin()` (see
+    _backfill_table_map_positions's own docstring) — but plain DML does
+    not have that quirk on either dialect. A raised exception anywhere in
+    this function rolls back every UPDATE it already issued, completely
+    and identically, on both SQLite and PostgreSQL. Called inside its own
+    `engine.begin()` block on both call sites (run(), _run_postgres()).
+
+    Idempotent: only groups still sharing an exact rect right now are
+    touched. Once a group has been de-collided, its zones no longer match
+    exactly (position differs, width/height do not), so a later run finds
+    nothing left to do for it — and an unresolved zone (below) stays
+    reported as unresolved on every later run too, until someone actually
+    changes its size or its colliding neighbour's.
+
+    **Availability policy — read this before changing the exception
+    handling below.** `place_new_zone_rect` returns `None` when a zone's
+    exact size leaves no rectangle distinct from what is already occupied
+    on its floor — mathematically exhausted, not a bug (the canonical
+    example: two zones sized 1000x1000 leave exactly one legal position,
+    (0, 0), and both already sit there). Independent review of an earlier
+    version of this function found that treating this the same as every
+    other failure here — raise, halt startup — was itself the more severe
+    defect: it let a data state that is merely inconvenient (one zone
+    stays visually indistinguishable from another) escalate into the
+    entire application refusing to boot, in any environment, including
+    the very admin UI a manager would need to fix it. A zone this function
+    cannot place is instead left completely unchanged, reported in
+    `.unresolved` (surfaced in the boot log, and readable programmatically
+    by degrees — no `RuntimeError` involved), and every other group keeps
+    being processed normally. **Application availability takes priority
+    over fully resolving an impossible geometry.** The fail-closed
+    `RuntimeError` below is narrowed accordingly: it still fires — halting
+    startup, as every other backfill in this file does on a genuine
+    internal defect — only if a zone this function believed it moved (or
+    never even considered) is found still coincident afterward; it never
+    fires for a zone honestly reported as unresolved.
+
+    **Legacy/corrupted-data defense.** `Zone.width`/`Zone.height` are
+    declared `NOT NULL` by the normal ORM schema (`app/models/oltp.py`) —
+    this function does not doubt that contract for data written through
+    it. It guards against rows this codebase's own write paths could never
+    produce: a database touched outside those paths (a hand-run migration,
+    an external tool, a pre-schema-hardening artifact), where `width`/
+    `height` could be `NULL`, non-numeric, `<= 0`, or `> 1000`. A whole
+    GROUP's width/height (the group key requires every member to match
+    exactly, so validity is a per-group property, never mixed within one
+    group) is validated BEFORE any member is passed to
+    `place_new_zone_rect` — never `int(None)`, never arithmetic against
+    `None`, no `TypeError` reaching the caller. An invalid group is
+    reported unresolved in full (every member, anchor included — there is
+    no meaningful "anchor" to keep when the group's own size cannot be
+    trusted) and left completely untouched: not resized, not repositioned,
+    not defaulted to a guessed size. Every other, validly-sized group in
+    the same run is still processed normally.
+    """
+    def _valid_dimension(v: object) -> bool:
+        return isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 1000
+
+    if not _table_exists(conn, "zone"):
+        return ZoneOverlapResult([], [])
+
+    zones = conn.execute(text(
+        "SELECT id, floor_id, pos_x, pos_y, width, height FROM zone "
+        "WHERE is_active ORDER BY floor_id, pos_x, pos_y, width, height, id"
+    )).fetchall()
+    if not zones:
+        return ZoneOverlapResult([], [])
+
+    # x/y/w/h are `object`, not `int`, in this key type: a legacy/corrupted
+    # row can carry None or another non-int value here (see the function's
+    # own docstring, "Legacy/corrupted-data defense") — never assumed int
+    # until _valid_dimension has confirmed it, below.
+    by_group: dict[tuple[int, object, object, object, object], list[int]] = {}
+    # Same caveat as by_group above: entries here may echo an invalid
+    # legacy (x, y, w, h) verbatim (harmless bookkeeping — see the comment
+    # at the point they're added, below) — never read back out as if
+    # guaranteed valid.
+    taken_by_floor: dict[int, set[tuple[object, object, object, object]]] = {}
+    for zid, floor_id, x, y, w, h in zones:
+        by_group.setdefault((floor_id, x, y, w, h), []).append(zid)
+        # An invalid w/h is still recorded here for bookkeeping (it can
+        # never accidentally match a real candidate — place_new_zone_rect
+        # only ever returns valid ints — so it is inert, not a hazard),
+        # but is never read back out and passed to place_new_zone_rect.
+        taken_by_floor.setdefault(floor_id, set()).add((x, y, w, h))
+
+    tables_exist = _table_exists(conn, "restaurant_table")
+    moved: list[str] = []
+    unresolved: list[str] = []
+    unresolved_ids: set[int] = set()
+
+    def _group_sort_key(item):
+        # Deterministic processing order without ever comparing an invalid
+        # (possibly None, possibly non-numeric) x/y/w/h against a valid
+        # int one — `<` between None and int raises. floor_id is always a
+        # real int (never legacy/corrupted in this scenario); every other
+        # key component is compared as its str() instead.
+        (floor_id, x, y, w, h), _ids = item
+        return (floor_id, str(x), str(y), str(w), str(h))
+
+    for (floor_id, x, y, w, h), ids in sorted(by_group.items(), key=_group_sort_key):
+        if len(ids) < 2:
+            continue
+        if not (_valid_dimension(w) and _valid_dimension(h)):
+            # Legacy/corrupted data (see the function's own docstring):
+            # this group's shared width/height cannot be trusted enough to
+            # even attempt de-collision. No credentials, no DSN — only
+            # this project's own zone/floor ids and the raw stored values,
+            # safe to log.
+            for zid in sorted(ids):
+                unresolved_ids.add(zid)
+                unresolved.append(
+                    f"UNRESOLVED: zone.{zid} on floor {floor_id} has an "
+                    f"invalid stored size (width={w!r}, height={h!r} — "
+                    "expected an integer in [1,1000]) and was left "
+                    "completely unchanged; not resized or repositioned. "
+                    "This indicates legacy/corrupted data outside this "
+                    "zone's normal write path — correct the size directly "
+                    "before this can be de-collided."
+                )
+            continue
+        anchor_id, *movers = sorted(ids)
+        taken = taken_by_floor[floor_id]
+        for idx, zid in enumerate(movers):
+            placed = place_new_zone_rect(taken, idx, w, h)
+            if placed is None:
+                # No credentials, no DSN, no row content beyond ids/sizes
+                # that are already this project's own internal numbers —
+                # safe to log as-is.
+                unresolved_ids.add(zid)
+                unresolved.append(
+                    f"UNRESOLVED: zone.{zid} on floor {floor_id} has no "
+                    f"rectangle distinct from its current {w}x{h} size "
+                    f"available — still exactly coincident with zone."
+                    f"{anchor_id} at ({x},{y}), left unchanged. Resolve by "
+                    "resizing or repositioning one of them (the Map box on "
+                    "/admin/floors, or dragging on /admin/tables)."
+                )
+                continue
+            new_x, new_y, new_w, new_h = placed
+            taken.add((new_x, new_y, new_w, new_h))
+            conn.execute(
+                text("UPDATE zone SET pos_x = :x, pos_y = :y WHERE id = :id"),
+                {"x": new_x, "y": new_y, "id": zid},
+            )
+            moved.append(
+                f"zone.{zid} de-collided from zone.{anchor_id} on floor "
+                f"{floor_id}: ({x},{y}) -> ({new_x},{new_y})"
+            )
+            if tables_exist:
+                dx, dy = new_x - x, new_y - y
+                movable = conn.execute(text(
+                    "SELECT id, map_x_per_mille, map_y_per_mille FROM restaurant_table "
+                    "WHERE zone_id = :zid AND is_active "
+                    "AND map_x_per_mille IS NOT NULL AND map_y_per_mille IS NOT NULL"
+                ), {"zid": zid}).fetchall()
+                for tid, mx, my in movable:
+                    nmx, nmy = max(0, min(1000, mx + dx)), max(0, min(1000, my + dy))
+                    conn.execute(
+                        text("UPDATE restaurant_table SET map_x_per_mille = :x, "
+                             "map_y_per_mille = :y WHERE id = :id"),
+                        {"x": nmx, "y": nmy, "id": tid},
+                    )
+
+    # Narrowed fail-closed post-condition (see the availability policy
+    # above): a remaining coincident group is fine — expected, even — if
+    # every member beyond one (the anchor) was explicitly reported as
+    # unresolved. It is only a genuine internal defect, and only then
+    # still halts startup, if MORE than one member of a remaining group is
+    # NOT accounted for in `unresolved_ids` — a zone this function should
+    # have moved (or should have flagged) but silently didn't do either.
+    remaining = conn.execute(text(
+        "SELECT id, floor_id, pos_x, pos_y, width, height FROM zone WHERE is_active"
+    )).fetchall()
+    remaining_groups: dict[tuple[int, int, int, int, int], list[int]] = {}
+    for zid, floor_id, x, y, w, h in remaining:
+        remaining_groups.setdefault((floor_id, x, y, w, h), []).append(zid)
+    unexplained = [
+        ids for ids in remaining_groups.values()
+        if len(ids) > 1 and sum(1 for zid in ids if zid not in unresolved_ids) > 1
+    ]
+    if unexplained:
+        raise RuntimeError(
+            f"Floor Plan Builder zone-overlap backfill: {len(unexplained)} "
+            "floor/rectangle group(s) still have more than one active zone "
+            "sharing an exact rectangle, beyond what this run reported as "
+            "unresolved — that indicates a defect in the backfill itself "
+            "(a zone it should have moved or flagged was silently left "
+            "alone), not a data limitation. Fail-closed. Startup halted."
+        )
+    return ZoneOverlapResult(moved, unresolved)
