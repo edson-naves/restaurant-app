@@ -301,8 +301,29 @@ h2 { font-family: var(--serif); font-weight: 600; font-size: 18px; margin: 0 0 1
 .icon-btn:hover { opacity: 1; }
 
 /* ---------- Reservations & waitlist page (4.1.5) ---------- */
-.res-grid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 16px; align-items: start; }
-@media (max-width: 1000px) { .res-grid { grid-template-columns: 1fr; } }
+/* Main picker/forms split — the picker gets whatever width is left over
+   (minmax(0,1fr), so it actually grows on a wide desktop instead of staying
+   pinned to a fraction), the forms column stays a fixed, comfortable width.
+   Ported from the old feat/floor-map prototype's own reservations layout. */
+.res-split { display: grid; grid-template-columns: minmax(0, 1fr) 560px; gap: 18px; align-items: start; }
+.res-split-map, .res-side-forms { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+@media (max-width: 1200px) { .res-split { grid-template-columns: 1fr; } }
+/* Upcoming reservations + walk-in waitlist, side by side under the picker. */
+.res-lists { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+@media (max-width: 760px) { .res-lists { grid-template-columns: 1fr; } }
+/* Zone panels flow into as many columns as the picker's own width allows
+   (native CSS columns — no JS, no media-query column-count table to keep in
+   sync as zones are added/removed) instead of stacking in one long column. */
+.zflow { columns: 340px; column-gap: 16px; }
+.reszone-panel {
+  break-inside: avoid; -webkit-column-break-inside: avoid; display: inline-block;
+  width: 100%; margin: 0 0 14px;
+}
+.reszone-panel .zpanel-head { flex-wrap: wrap; }
+/* Zone names are free-text (owner-configured) and not always consistently
+   capitalized ("balcony" alongside "Main", "Window", ...) — display-only
+   fix, the stored value is untouched. */
+.reszone-panel .zp-name { text-transform: capitalize; }
 .count-badge {
   display: inline-block; background: var(--accent); color: #fff;
   border-radius: 999px; padding: 0 8px; font-size: 12px; font-weight: 700;
