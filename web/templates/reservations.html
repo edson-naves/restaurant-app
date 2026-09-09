@@ -340,7 +340,8 @@ document.querySelectorAll('.reszone-all').forEach(function (btn) {
     var tables = Array.from(panel.querySelectorAll('.restbl')).filter(function (b) {
       return !b.dataset.booked;
     });
-    var allSelected = tables.length > 0 && tables.every(function (b) {
+    if (!tables.length) return;   // every table here is already booked — nothing to select
+    var allSelected = tables.every(function (b) {
       return b.getAttribute('aria-pressed') === 'true';
     });
     tables.forEach(function (b) { setTableSelected(b, !allSelected); });

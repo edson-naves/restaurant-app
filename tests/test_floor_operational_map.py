@@ -303,6 +303,10 @@ def test_reservation_picker_has_select_all_that_skips_booked_tables():
     check("setTableSelected(" in body, "table selection is a shared, force-able function (not just a toggle)")
     check("reszone-all" in body and "data-booked" in body,
           "select-all reads each table's booked marker to decide what to skip")
+    handler = body[body.index(".reszone-all'"):]
+    handler = handler[:handler.index("btn.textContent") + 100]
+    check("if (!tables.length) return;" in handler,
+          "select-all is a no-op (never relabels itself 'clear') in a zone where every table is already booked")
     app.dependency_overrides.clear()
     db.close()
 
