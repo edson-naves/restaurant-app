@@ -1123,8 +1123,26 @@ tr.dim:hover > td { opacity: 1; }
 
 /* Zone marker. The card's left border already carries table status, so the
    zone gets its own channel (a corner dot) rather than competing for it. Shared
-   by the admin layout chips and the operational floor-plan cards. */
-.chip, .tbl { position: relative; }
+   by the admin layout chips and the operational floor-plan cards.
+   `:not(.map-chip)` — found while testing the table-visible-bounds fix:
+   `.map-chip` also carries the bare `.chip` class (`class="chip map-chip
+   ..."`), and this rule's `position: relative` was silently overriding
+   `.map-chip`'s own `position: absolute` (same specificity, later in the
+   file — plain CSS cascade, confirmed via computed style: every free-map
+   table was rendering `position: relative`, stacking in #freemap's normal
+   document flow instead of being positioned purely by its left/top percent
+   — every table past the first drifted further down by roughly one
+   table-height per earlier sibling, compounding the reported edge-clipping
+   bug for any table whose intended position was already close to an edge.
+   Pre-existing since 9f063d6 (confirmed: this file's rule order is
+   unchanged by that fix's own diff) — not introduced by the visible-bounds
+   fix, but the visible-bounds fix cannot actually work without this, since
+   it assumes `.map-chip` really is positioned absolute/centred as designed.
+   The bare `.chip` class (grid-drag editor) is not rendered by any
+   template any more (confirmed: `grep 'class="chip'` matches only
+   `admin_tables.html`'s `class="chip map-chip ..."`), so this exclusion
+   changes nothing for anything still using plain `.chip`. */
+.chip:not(.map-chip), .tbl { position: relative; }
 /* Trash on a free table card's corner: click, confirm, gone. Muted until
    hovered so it doesn't shout, and it sits above the summary so the whole card
    stays tappable. */

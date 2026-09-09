@@ -1936,31 +1936,328 @@ integration — and integration itself remains a separate, later,
 explicitly-authorized action, same discipline as every other slice
 above.
 
+## Floor Plan Builder — table visible-bounds fix — APPROVED, NOT INTEGRATED
+
+```text
+Branch/worktree: fix/floor-table-visible-bounds, from 9f063d6 (literal SHA,
+                  fetched via `git fetch origin main` and confirmed as
+                  origin/main before branching — new worktree, not a reused
+                  historical one)
+Implementer: Claude
+Reviewer: independent review — first pass FIX REQUIRED (1 MEDIUM, 1 LOW,
+          both below, both addressed); second pass APPROVED WITH
+          NON-BLOCKING NOTE (addressed in place, no further review needed)
+Files: web/static/floor_bounds.js (new), web/static/app.css,
+       web/templates/admin_tables.html, tests/test_floor_bounds.js (new)
+Status: APPROVED WITH NON-BLOCKING NOTE. Not committed, not integrated,
+        not pushed, not deployed. `9f063d6` (origin/main) itself remains
+        deployed and healthy — this is a follow-up visual-correctness fix
+        on top of it,
+        not a regression in what's already live.
+```
+
+**Independent review, first pass: FIX REQUIRED.**
+
+- **MEDIUM** — a table with a historical/raw `0`/`1000` coordinate renders
+  at its clamped, fully-visible position (`positionChip`, on load), but a
+  drag on it started from the *raw* `dataset.x`/`dataset.y` as the gesture's
+  origin, not from that same clamped position — creating a dead zone of
+  roughly half the table's own size the pointer had to cross before the
+  chip visibly moved at all, worst when dragging back toward the same edge.
+  The same raw-origin baseline was also used for every table a zone
+  move/resize carries along, so the dead zone applied there too.
+- **LOW** — "Next Authorized Action" (below) still described a stale,
+  earlier integration step and did not mention this fix at all, so it
+  contradicted this section's own status.
+
+**Both fixed, this pass:**
+
+1. A new `visualOrigin(chip, bounds)` returns the same clamped
+   `{x, y}` `positionChip()` already paints on screen — `pointerdown` for a
+   lone table drag, and for every table a zone `move`/`resize` carries,
+   now seeds `origX`/`origY` (or `x`/`y` in the carried-tables list) from
+   `visualOrigin`, never from the raw dataset value directly. The zone
+   rectangle's own `origX`/`origY` (top-left semantics, unaffected by any
+   centring correction) is untouched.
+2. "Next Authorized Action" corrected to state `9f063d6` is the current
+   integrated/pushed/deployed state of `origin/main` and production, and
+   that this fix's re-review is the actual next step — see below.
+```
+
+**Second, independently-discovered root cause — found while writing the
+local browser verification for the bug above, not part of the original
+report, but the reported fix does not actually work in production without
+also fixing this:** `web/static/app.css`'s `.chip, .tbl { position:
+relative; }` rule (intended to give the *grid* `.chip` and the operational
+`.tbl` card a positioning context for their own corner `.zdot` badge) also
+matches `.map-chip`, because the template renders `class="chip map-chip
+..."` — and, same specificity, later in the file, it silently overrides
+`.map-chip`'s own `position: absolute`. Confirmed directly via computed
+style in a real headless-browser session: every free-map table was actually
+rendering `position: relative`, not `absolute` — meaning it was laid out in
+`#freemap`'s normal document flow (stacking one table's rendered height
+below the previous one, in DOM order) with the `left`/`top` percentage then
+added on top of that flow position, not applied purely relative to
+`#freemap` the way the whole free-map design assumes. Each table past the
+first therefore drifted further from its intended position by roughly one
+table-height per earlier sibling — compounding, table-count-dependent, and
+independent of the `[0, 1000]` clamp bug: even a perfectly-computed
+visible-bounds clamp still gets pushed past the edge once enough drift
+stacks on top of it, which is exactly what a first pass at the fix (clamp
+math only, `app.css` untouched) showed under the browser test — 3 of 8
+seeded tables still rendered partly outside `.freemap`. **Confirmed
+pre-existing in `9f063d6`, not introduced by this fix:** `git diff
+9f063d6 -- web/static/app.css` was empty before this rule was touched, and
+this rule's position in the file is unchanged by `9f063d6`'s own diff.
+Fixed with a one-line, narrowly-scoped exclusion,
+`.chip:not(.map-chip), .tbl { position: relative; }` — confirmed safe
+because the bare `.chip` class (without `.map-chip`) is not rendered by any
+template any more (`grep 'class="chip'` across `web/templates/` matches
+only `admin_tables.html`'s `class="chip map-chip ..."`), and `.map-chip`'s
+own `position: absolute` already supplies the non-static positioning
+context its `.zdot` child needs, so nothing about the corner-badge pattern
+changes for either `.chip` or `.tbl`. This is included in the same slice
+because the reported clamp fix is not meaningfully testable — and does not
+actually resolve the reported bug for a floor with more than one or two
+tables — without it; flagged here prominently rather than silently folded
+in, since it goes beyond the original bug report's own diagnosis.
+
+**Bug, confirmed visually in production after `9f063d6`:** a table chip's
+stored `map_x_per_mille`/`map_y_per_mille` is its *centre* — `.map-chip` is
+positioned with `left`/`top` at that point and `transform:
+translate(-50%, -50%)` recentres the rendered box around it — but the
+existing drag/clamp code (`web/templates/admin_tables.html`) restricted that
+centre to the raw `[0, 1000]` range the coordinate is *stored* in, not the
+narrower range that keeps the whole rendered box inside `.freemap`. A table
+dragged to (or already persisted at) `x=0` or `y=0` therefore renders with
+roughly half its own box past the map's edge — clipped by `.freemap`'s
+`overflow: hidden` — and the same is true at `x=1000`/`y=1000` on the
+opposite edges. A bigger rendered chip (a wide `rect` shape, or a
+high-capacity table — both made visually real by `9f063d6`) makes it worse:
+more of the box is missing, because the *fraction* of it past the edge is
+the same but the *absolute* size lost is bigger. Confirmed by reading the
+code (the four drag/resize clamps, and the initial server-rendered
+`style="left:...; top:..."`, all used bare `0`/`1000`) and reproducing it
+against a disposable local database (a table saved at each of `x=0`,
+`x=1000`, `y=0`, `y=1000`, in each of `round`/`square`/`rect` at small and
+large capacity) — see "Evidência visual local" below.
+
+**Root cause, precisely:** three independent things had to combine, and the
+fix addresses exactly those three, nothing else:
+1. Coordinates are stored/interpreted as the table's *centre*, not its
+   top-left corner (unlike `Zone`'s `pos_x`/`pos_y`, which already are
+   top-left — confirmed `.zone-rect` needs no equivalent correction: its own
+   box is described directly by its stored rect, nothing is centred on a
+   point).
+2. `transform: translate(-50%, -50%)` is what actually recentres the
+   rendered box on that point — without it, this bug would not exist (a
+   top-left-positioned box would already stay fully inside `[0, 1000]` by
+   construction, since a zone's own clamps subtract width/height from the
+   upper bound already).
+3. Every place a per-mille position got clamped — table drag, zone
+   move/resize (which carries its tables), the initial server-side render —
+   used the coordinate's *storage* range (`[0, 1000]`), not a range that
+   accounts for the rendered box's own size.
+
+**Fix — presentation/interaction only, no backend or schema change:**
+
+- `web/static/floor_bounds.js` (new): one pure function,
+  `visibleBounds(mapWidth, mapHeight, tableWidth, tableHeight)`, returning
+  `{minX, maxX, minY, maxY}` per the review's own formula (`minX =
+  halfTableWidth / mapWidth * 1000`, `maxX = 1000 - minX`, same for Y).
+  Guards `mapWidth`/`mapHeight <= 0` (returns the old, uncorrected
+  `[0, 1000]` range rather than dividing by zero) and a table larger than
+  the map itself (collapses to the single centre point, `500`, rather than
+  an inverted range). No DOM access, no side effect, no dependency — loaded
+  as a plain global (`window.FloorTableBounds`) via `<script src="/static/
+  floor_bounds.js?v={{ asset_v('floor_bounds.js') }}">`, same pattern this
+  app already uses for `schedule.js`; also `require()`-able directly under
+  plain Node for `tests/test_floor_bounds.js` (module.exports branch) —
+  one formula, two consumers, never two copies that could drift.
+- `web/templates/admin_tables.html`:
+  - every table clamp (`kind === 'table'` drag, and each table carried by a
+    `kind === 'move'`/`'resize'` zone gesture) now uses that table's own
+    `visibleBounds(...)`, captured once per gesture at `pointerdown` (each
+    table in a zone can have a different rendered size, so one shared limit
+    for a whole zone's tables was never correct — a big table would still
+    clip, a small one would be over-restricted).
+  - a new `positionChip(chip, mapRect)` helper moves a chip's *visual*
+    `style.left`/`style.top` to the clamped position, reading — but never
+    writing — `dataset.x`/`dataset.y` (the persisted, possibly-still-raw
+    coordinate). Called once for every table on page load
+    (`positionAllChips()`), so a table already stored at `0`/`1000` renders
+    fully visible immediately, with **no write to the server just for
+    opening the page** — the persisted value is left exactly as it was
+    until an actual drag saves a new one.
+  - a drag's `origX`/`origY` (the lone dragged table, and every table a
+    zone `move`/`resize` carries) are seeded from `visualOrigin(chip,
+    bounds)` — the same clamped position `positionChip()` already painted
+    on screen — never from the raw `dataset.x`/`dataset.y` directly
+    (review finding, MEDIUM: reading the raw value here opened a dead zone
+    of roughly half the table's own size the pointer had to cross before
+    the chip visibly moved, worst dragging back toward the same edge;
+    fixed by seeding the gesture's origin from the visible position
+    itself, not by re-deriving it from a delta of zero). So the very first
+    frame of a drag starts exactly where the table is already rendered —
+    no jump, and no dead zone in either direction. The move that follows
+    persists a position that is *already* inside the visible range (the
+    drag's own clamp), so a reload after any real drag shows the table
+    where it was dropped, fully visible, with no further correction
+    needed.
+  - `positionChip` is also re-run, visual-only, after a successful shape
+    cycle (`round`/`square`/`rect` render at different widths) and from a
+    single `ResizeObserver` on `#freemap` (map/viewport resize/zoom) — one
+    observer instance for the page's lifetime, skipping any chip currently
+    mid-drag (`.dragging`) so it doesn't fight that gesture's own
+    `pointermove`-driven position. Repositioning only ever touches
+    absolutely-positioned children's `left`/`top`, never `#freemap`'s own
+    box, so the observer cannot retrigger itself.
+  - zone move/resize's own rectangle clamp (`0`/`1000 - width`, top-left
+    semantics) is untouched — only the *tables* carried with it were
+    corrected. `pos_x`/`pos_y` (the separate, older grid columns) are still
+    never read or written anywhere in this file. The zone atomic-save
+    payload shape (`pos_x, pos_y, width, height, tables`) is unchanged;
+    only the *values* inside `tables` differ, staying within the
+    per-endpoint validation `/admin/zones/{id}/move-layout` already
+    enforces (`[0, 1000]`, a superset of the new tighter visual range, so
+    every value this fix ever sends still passes unchanged).
+  - `pointerId` ownership, `pointercancel` cleanup, autosave, the
+    `elementsFromPoint` zone hit-test, and `.unsaved`/`.overlap-warn`
+    marking are all untouched — confirmed by reading the diff, this pass
+    touches only the clamp bounds and adds the load/shape-change/resize
+    repositioning calls.
+
+**No migration. No backend change.** `app/routers/admin.py`,
+`app/migrate.py`, and `app/services/zone_geometry.py` are untouched by this
+slice — the backend still accepts and stores any value in `[0, 1000]`
+exactly as before; this is purely how the client chooses, displays, and
+drags within that range. A table's historical stored coordinate (however it
+got there — backfilled, manually dragged before this fix, or anything else)
+stays interpretable and compatible; only its *on-screen* position changes,
+never what's saved unless a manager actually drags it.
+
+**Tests — real execution:**
+
+```text
+tests/test_floor_bounds.js (Node, no framework, no dependency — plain
+    `node tests/test_floor_bounds.js`; same ok/FAIL convention as this
+    project's Python test files): 27 assertions, all pass — the formula
+    against hand-computed values for all four edges (minX/maxX/minY/maxY);
+    different table sizes get different (non-shared) bounds; a large rect
+    chip gets a visibly wider horizontal margin than round/square at the
+    same capacity; the two coordinates the production bug was reported
+    against (persisted 0/0 and 1000/1000) land inside the safe range once
+    clamped, never on the true edge; zero/negative map or table dimensions
+    never throw and fall back to the safe [0,1000] range; an oversized
+    table (bigger than the map) collapses to the centre point rather than
+    an inverted range; the function is pure (fresh object per call,
+    identical output for identical input).
+py -3 tests/test_floor_admin_ui.py     — all pass (pointerId/pointercancel
+    coverage from feat/floor-admin-ui unaffected — this slice's own diff
+    never touches the ownership-guard lines those tests target)
+py -3 tests/test_floor_zone_overlap.py — all pass (zone-overlap backfill,
+    create_zones locking, shape/capacity CSS — none of this slice's files
+    intersect that one's Python surface)
+py -3 tests/test_floor_map_coordinates.py — all pass
+py -3 tests/test_floor_spatial.py         — all pass
+py -3 tests/test_reservations_map.py      — all pass
+py -3 tests/test_migrate.py               — ALL PASS (confirms, again,
+    that this slice adds no migration — nothing here touches app/migrate.py)
+git diff --check: clean.
+```
+
+**Evidência visual local (disposable SQLite file in the OS temp dir, headless
+Chromium via Playwright, never production, never Neon/Render):** seeded a
+floor with 8 tables, one at each of the 8 edge/corner
+`map_x_per_mille`/`map_y_per_mille` combinations — `(0,0)`, `(1000,1000)`,
+`(0,500)`, `(1000,500)`, `(500,0)`, `(500,1000)`, `(0,1000)`, `(1000,0)` —
+mixing `round`/`square`/`rect` and capacity 1/20, then rendered
+`/admin/tables` for real (`uvicorn`, `APP_ENV=development`,
+`ALLOW_INSECURE_DEV_SECRET=1`, `DATABASE_URL` pointed at the throwaway
+file — never the project's own dev DB). Measured each chip's real
+`getBoundingClientRect()` against `#freemap`'s own, on all four edges:
+- **Before the `app.css` fix above** (clamp-math change only): 3 of the 8
+  seeded chips still rendered partly outside `.freemap` — the compounding
+  `position: relative` drift described above pushing an already
+  correctly-clamped-by-formula position back past the edge.
+- **With both fixes:** all 8 chips fully inside `.freemap` on every edge,
+  zero browser console errors. Confirmed by direct DB read
+  (`sqlite3`) that opening the page made **no write** — every seeded row's
+  `map_x_per_mille`/`map_y_per_mille` was byte-identical before and after
+  the page load, before any drag. Dragged the `(0,0)` table further toward
+  the same corner, released — it landed and autosaved at the formula's own
+  `minX`/`minY` for its rendered size (`(32, 42)` for that small round
+  chip, matching `visibleBounds`' output for its actual measured box), not
+  the raw edge, still fully visible, `.unsaved` never set. Reloaded the
+  page (F5-equivalent) — the table rendered at the same, still fully
+  visible position, from the now-updated persisted coordinate. Screenshots
+  taken at each step (initial load, mid-drag, post-drag, post-reload);
+  server and disposable DB file torn down afterward.
+
+**Risks, disclosed:**
+- The visible-bounds formula uses the chip's rendered CSS pixel size
+  (`getBoundingClientRect()`), which depends on the loaded stylesheet —
+  if a future CSS change alters `.map-chip`'s effective width/height
+  formula (the `--cap-w` custom property, or the shape-specific
+  min/max-width bounds `9f063d6` added), the JS needs no change — it reads
+  the live rendered box, not a duplicated copy of the CSS numbers.
+- `ResizeObserver` is supported by every currently-shipping evergreen
+  browser; on one without it, tables simply keep their last-computed visual
+  position across a resize (the pre-this-fix behavior) rather than
+  re-clamping — a graceful, non-crashing degradation, not a silent failure.
+- This fix does not retroactively move any already-saved coordinate on the
+  server — a table stored at a raw edge value stays stored there
+  (compatible, unambiguous) until a manager drags it; only its rendered
+  position changes.
+
+**Independent review, second pass: APPROVED WITH NON-BLOCKING NOTE.** Both
+findings from the first pass (MEDIUM, LOW, above) confirmed fixed —
+`test_floor_bounds.js`, `test_floor_admin_ui.py`, and `git diff --check`
+re-run independently, all pass. Non-blocking note: this section's own
+description of the drag-origin fix (above) still described the prior, now-
+corrected behaviour as if it were current — fixed in place, no code change
+needed. **No further review required.**
+
+**This slice is IMPLEMENTED, self-tested, and APPROVED WITH NON-BLOCKING
+NOTE. It is NOT committed, NOT integrated, NOT pushed, NOT deployed** —
+integration remains a separate, later, explicitly-authorized step, same
+discipline as every other slice above. `9f063d6` remains the current,
+deployed, healthy state of `origin/main` and of production, unaffected by
+anything in this section.
+
 ## Next Authorized Action
 
 ```text
 The Floor Plan Builder design (design/floor-plan-builder) is CLOSED /
-APPROVED. Both implementation slices built against it are done:
+APPROVED. Every implementation slice through the zone-overlap fix is
+integrated, pushed, and deployed:
 
-  Slice 1 (model, migration, backfill, branch feat/floor-map-coordinates)
-  — VALIDATED IN PRODUCTION (see "Implementation slice 1" above). Not
-  future, not pending — it is live.
+  Slice 1 (model, migration, backfill) and slice 2 (admin visual builder)
+  — VALIDATED IN PRODUCTION, integrated into `main` and deployed (see
+  their own sections above). Not future, not pending — live.
 
-  Slice 2 (admin visual builder, branch feat/floor-admin-ui) — CLOSED /
-  APPROVED by independent re-review (see "Implementation slice 2" above),
-  committed to its own branch by this pass. NOT YET integrated into main,
-  NOT pushed, NOT deployed.
+  fix/floor-zone-overlap (`9f063d6`) — CLOSED / APPROVED by independent
+  re-review, fast-forwarded into `main`, pushed to `origin/main`, and
+  confirmed Live/healthy (see the push/verification record and the
+  "Floor Plan Builder — production diagnosis" section above). This is the
+  current state of `origin/main` and of production.
+
+  fix/floor-table-visible-bounds (this file's most recent section, above)
+  — table centring/clamp fix on top of `9f063d6`, CLOSED / APPROVED WITH
+  NON-BLOCKING NOTE by independent review (a first pass returned FIX
+  REQUIRED — one MEDIUM, one LOW — both addressed; a second pass approved,
+  no further review needed). NOT committed, NOT integrated, NOT pushed,
+  NOT deployed.
 
 **Next authorized administrative step (still requires explicit
-authorization before acting — not self-authorizing):** fast-forward
-`feat/floor-admin-ui` into `main` (a fast-forward is possible only if
-`main` has not moved past this branch's own base, `c18b9e0` — re-verify
-`git merge-base` immediately before merging, not assumed from this note).
-No push and no deploy are implied by that merge; each remains its own,
-later, separately authorized step. The operational Map/List + Arrange
-mode and the staff-color picker (out of scope for both slices above)
-still require their own separate, explicit authorization each, same as
-before.
+authorization before acting — not self-authorizing):** commit
+`fix/floor-table-visible-bounds`'s approved diff, then fast-forward it into
+`main` (verify `git merge-base` against `9f063d6` immediately before
+merging, not assumed from this note). No push and no deploy are implied by
+that merge; each remains its own, later, separately authorized step. The
+operational Map/List + Arrange mode and the staff-color picker (out of
+scope for every slice above) still require their own separate, explicit
+authorization each, same as before.
 
 open_order_on_table's proven PostgreSQL race remains a real, tracked risk
 (see "Residual risks" below) and a candidate for its own future,

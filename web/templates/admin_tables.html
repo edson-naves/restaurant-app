@@ -311,6 +311,14 @@
 {% endblock %}
 
 {% block scripts %}
+{% if current_floor %}
+{# Pure geometry only (web/static/floor_bounds.js) — needed by the Floor Plan
+   Builder script below, only on this page's own free-map, which only
+   renders when a floor is selected. Loaded as a plain global
+   (window.FloorTableBounds), same pattern as schedule.js elsewhere in this
+   app — no bundler, no module system to wire up. #}
+<script src="/static/floor_bounds.js?v={{ asset_v('floor_bounds.js') }}"></script>
+{% endif %}
 <script>
 // "Assign a waiter to a zone" picker: show the waiter already covering the
 // chosen zone (rather than always "unassigned"), so it reflects reality and an
@@ -378,6 +386,73 @@
       .filter(function (c) { return c.dataset.zoneId === zoneEl.dataset.zoneId; });
   }
 
+  // Table-visible-bounds fix: `.map-chip` is centred on (left, top)
+  // (`transform: translate(-50%, -50%)`), so the raw stored per-mille range
+  // [0, 1000] lets a table's centre sit right on the map's own edge — half
+  // its box then renders past `.freemap`'s border, clipped by
+  // `overflow: hidden` (confirmed in production after 9f063d6). The real
+  // safe range depends on the chip's own rendered size (shape/capacity),
+  // computed once here from the map's and chip's actual boxes and reused
+  // everywhere a per-mille position gets clamped, instead of the old bare
+  // [0, 1000]. Pure formula lives in web/static/floor_bounds.js (also
+  // covered by tests/test_floor_bounds.js under plain Node — no DOM
+  // involved in the math itself).
+  function chipBounds(chip, mapRect) {
+    const r = chip.getBoundingClientRect();
+    return window.FloorTableBounds.visibleBounds(mapRect.width, mapRect.height, r.width, r.height);
+  }
+  // The visual position a chip's persisted `dataset.x`/`dataset.y` clamps
+  // to for a given bounds — the same clamp positionChip() paints on screen.
+  // A drag must start from THIS, not the raw dataset value: a table
+  // persisted at a raw edge (0/1000) already renders at its clamped
+  // position (positionChip, on load), so seeding a drag's origin from the
+  // raw value re-opens the dead zone the whole fix exists to close — the
+  // pointer has to cross the gap between the raw and clamped position
+  // before the chip visibly moves at all, worst dragging back toward the
+  // same edge. Review finding (MEDIUM), fixed at every pointerdown site
+  // that reads a table's starting position: the lone dragged chip, and
+  // every table a zone move/resize carries with it.
+  function visualOrigin(chip, bounds) {
+    return {
+      x: clamp(parseFloat(chip.dataset.x), bounds.minX, bounds.maxX),
+      y: clamp(parseFloat(chip.dataset.y), bounds.minY, bounds.maxY),
+    };
+  }
+  // Visual-only: moves a chip's on-screen position to keep it fully inside
+  // the map, WITHOUT touching `dataset.x`/`dataset.y` (the persisted,
+  // possibly-raw-0/1000 coordinate) and WITHOUT any network call. Safe to
+  // call as often as needed (page load, after a shape change, on resize):
+  // same inputs, same output, no state to drift.
+  function positionChip(chip, mapRect) {
+    const b = chipBounds(chip, mapRect);
+    const orig = visualOrigin(chip, b);
+    chip.style.left = pct(orig.x);
+    chip.style.top = pct(orig.y);
+  }
+  function positionAllChips() {
+    const r = map.getBoundingClientRect();
+    Array.from(map.querySelectorAll('.map-chip')).forEach(function (c) {
+      // An actively-dragged chip drives its own position every pointermove
+      // frame already — repositioning it here too would fight that, not
+      // just be redundant.
+      if (c.classList.contains('dragging')) return;
+      positionChip(c, r);
+    });
+  }
+  // Initial paint: a table already persisted at (or near) the raw 0/1000
+  // edge must render fully visible immediately, with no drag needed and no
+  // write to the server just for opening the page — this only ever touches
+  // `style.left`/`style.top`.
+  positionAllChips();
+  // Map/viewport resize (responsive layout, browser zoom, window resize):
+  // keep every table fully visible without an autosave. One observer,
+  // created once per page load, observing only `#freemap` — repositioning
+  // absolutely-positioned children never changes `#freemap`'s own box, so
+  // this can't retrigger itself (no layout loop).
+  if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(function () { positionAllChips(); }).observe(map);
+  }
+
   let drag = null;
 
   map.addEventListener('pointerdown', function (e) {
@@ -393,10 +468,13 @@
     const zoneEl = !handle && e.target.closest('.zone-rect');
 
     if (chip) {
+      const bounds = chipBounds(chip, r);
+      const orig = visualOrigin(chip, bounds);
       drag = {
         kind: 'table', el: chip, mapRect: r, pointerId: e.pointerId,
-        origX: parseFloat(chip.dataset.x), origY: parseFloat(chip.dataset.y),
+        origX: orig.x, origY: orig.y,
         origZone: chip.dataset.zoneId, startX: e.clientX, startY: e.clientY,
+        bounds: bounds,
       };
       chip.setPointerCapture(e.pointerId);
       chip.classList.add('dragging');
@@ -408,8 +486,16 @@
         origX: parseFloat(z.dataset.x), origY: parseFloat(z.dataset.y),
         origW: parseFloat(z.dataset.w), origH: parseFloat(z.dataset.h),
         startX: e.clientX, startY: e.clientY,
+        // Each table keeps its OWN visible-bounds — a zone can carry tables
+        // of different shapes/capacities, so one shared limit for all of
+        // them would either clip a big one or under-restrict a small one.
+        // Baseline is each table's own visualOrigin (its clamped, rendered
+        // position), not its raw dataset value — same dead-zone fix as the
+        // lone-table drag above.
         tables: tablesOf(z).map(function (c) {
-          return { el: c, x: parseFloat(c.dataset.x), y: parseFloat(c.dataset.y) };
+          const b = chipBounds(c, r);
+          const o = visualOrigin(c, b);
+          return { el: c, x: o.x, y: o.y, bounds: b };
         }),
       };
       z.setPointerCapture(e.pointerId);
@@ -421,7 +507,9 @@
         origW: parseFloat(zoneEl.dataset.w), origH: parseFloat(zoneEl.dataset.h),
         startX: e.clientX, startY: e.clientY,
         tables: tablesOf(zoneEl).map(function (c) {
-          return { el: c, x: parseFloat(c.dataset.x), y: parseFloat(c.dataset.y) };
+          const b = chipBounds(c, r);
+          const o = visualOrigin(c, b);
+          return { el: c, x: o.x, y: o.y, bounds: b };
         }),
       };
       zoneEl.setPointerCapture(e.pointerId);
@@ -436,11 +524,17 @@
     const dyPm = (e.clientY - drag.startY) / drag.mapRect.height * 1000;
 
     if (drag.kind === 'table') {
-      drag.curX = clamp(drag.origX + dxPm, 0, 1000);
-      drag.curY = clamp(drag.origY + dyPm, 0, 1000);
+      // Clamped to THIS table's own visible-bounds, not the raw [0, 1000]
+      // the coordinate is stored in — keeps the whole rendered chip inside
+      // the map at every point along the drag, all four edges.
+      drag.curX = clamp(drag.origX + dxPm, drag.bounds.minX, drag.bounds.maxX);
+      drag.curY = clamp(drag.origY + dyPm, drag.bounds.minY, drag.bounds.maxY);
       drag.el.style.left = pct(drag.curX);
       drag.el.style.top = pct(drag.curY);
     } else if (drag.kind === 'move') {
+      // The zone rectangle itself keeps top-left semantics unchanged — a
+      // rect's own (x, y, width, height) already describes its full box, no
+      // centre-transform to correct for.
       const x = clamp(drag.origX + dxPm, 0, 1000 - drag.origW);
       const y = clamp(drag.origY + dyPm, 0, 1000 - drag.origH);
       const realDx = x - drag.origX, realDy = y - drag.origY;
@@ -448,8 +542,8 @@
       drag.el.style.left = pct(x);
       drag.el.style.top = pct(y);
       drag.tables.forEach(function (t) {
-        t.curX = clamp(t.x + realDx, 0, 1000);
-        t.curY = clamp(t.y + realDy, 0, 1000);
+        t.curX = clamp(t.x + realDx, t.bounds.minX, t.bounds.maxX);
+        t.curY = clamp(t.y + realDy, t.bounds.minY, t.bounds.maxY);
         t.el.style.left = pct(t.curX);
         t.el.style.top = pct(t.curY);
       });
@@ -461,11 +555,14 @@
       drag.el.style.height = pct(h);
       // Proportional resize (design §6.2): each table's offset from the
       // zone's own top-left corner scales with the rectangle, same as the
-      // zone itself growing or shrinking around that corner.
+      // zone itself growing or shrinking around that corner — then clamped
+      // to that table's own visible-bounds (captured per-table on
+      // pointerdown), never a single shared limit for tables of different
+      // shapes/capacities.
       const sx = w / drag.origW, sy = h / drag.origH;
       drag.tables.forEach(function (t) {
-        t.curX = clamp(drag.origX + (t.x - drag.origX) * sx, 0, 1000);
-        t.curY = clamp(drag.origY + (t.y - drag.origY) * sy, 0, 1000);
+        t.curX = clamp(drag.origX + (t.x - drag.origX) * sx, t.bounds.minX, t.bounds.maxX);
+        t.curY = clamp(drag.origY + (t.y - drag.origY) * sy, t.bounds.minY, t.bounds.maxY);
         t.el.style.left = pct(t.curX);
         t.el.style.top = pct(t.curY);
       });
@@ -589,7 +686,15 @@
     btn.textContent = SHAPE_ICON[next];
     const x = Math.round(parseFloat(chip.dataset.x)), y = Math.round(parseFloat(chip.dataset.y));
     post('/admin/tables/map-layout', { tables: chip.dataset.id + ':' + x + ':' + y + ':' + next })
-      .then(function (r) { mark(chip, r.ok); })
+      .then(function (r) {
+        mark(chip, r.ok);
+        // round/square/rect render at different widths (app.css) — the
+        // stored position (dataset.x/y, unchanged by a shape cycle) is the
+        // same, but the visible-bounds clamp around it may have just
+        // shifted. Re-check it now rather than leaving the chip wherever
+        // its OLD shape's bounds last put it.
+        if (r.ok) positionChip(chip, map.getBoundingClientRect());
+      })
       .catch(function () { mark(chip, false); });
   });
 })();
