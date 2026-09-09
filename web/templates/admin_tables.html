@@ -47,10 +47,19 @@
   {% endif %}
 
   {% if floor_zones %}
-  <div class="legend" style="margin-bottom:10px">
+  <div class="legend" style="margin-bottom:4px">
     {% for z in floor_zones %}
     <span><i class="dot" style="background: {{ z.swatch }}"></i>{{ z.name }}</span>
     {% endfor %}
+  </div>
+  {# Each table's own colour (the left edge of its chip — a full ring once it
+     turns into a circle in map mode) is its status, not its zone; only the
+     small corner dot above is zone. No legend for that existed anywhere on
+     this page, which is exactly what made the two easy to mix up. #}
+  <div class="legend" style="margin-bottom:10px">
+    <span><i class="dot" style="background: var(--free)"></i>Free</span>
+    <span><i class="dot" style="background: var(--occupied)"></i>Occupied</span>
+    <span><i class="dot" style="background: var(--ready)"></i>Ready to pay</span>
   </div>
   {% endif %}
 
