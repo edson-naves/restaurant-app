@@ -314,8 +314,21 @@
   let waiterFilter = null;
   // "My tables" defaults on for anyone actually covering tables; someone with
   // none assigned (owner, manager, kitchen) has no such card, so it stays off
-  // and they see the whole floor.
-  let mineFilter = document.querySelector('.tbl[data-mine="1"]') !== null;
+  // and they see the whole floor. Once a viewer has explicitly toggled it,
+  // that choice is remembered (localStorage, per browser) and wins over the
+  // default on every later visit — restored feature, dropped along with the
+  // rest of the free-map prototype, never resurrected until now.
+  const MINE_KEY = 'rms-floor-mine';
+  function storedMine() {
+    try { return localStorage.getItem(MINE_KEY); } catch (e) { return null; }
+  }
+  function storeMine(v) {
+    try { localStorage.setItem(MINE_KEY, v ? '1' : '0'); } catch (e) { /* private mode etc. */ }
+  }
+  const remembered = storedMine();
+  let mineFilter = remembered !== null
+    ? remembered === '1'
+    : document.querySelector('.tbl[data-mine="1"]') !== null;
   // "Ready to serve" — tables with food up, waiting to be run. Hash-driven from
   // the sidebar overview (/#ready_serve); no legend button of its own.
   let readyFilter = false;
@@ -478,6 +491,7 @@
   // it again clears it. It ANDs with the floor tab and the search.
   if (mineBtn) mineBtn.addEventListener('click', function () {
     mineFilter = !mineFilter;
+    storeMine(mineFilter);
     apply();
   });
 

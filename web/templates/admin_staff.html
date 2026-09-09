@@ -113,6 +113,12 @@
             </td>
             <td>
               <input form="saveall" type="hidden" name="staff_id" value="{{ p.id }}">
+              {# Floor-plan colour — saves on its own via /admin/staff/{id}/color
+                 (AJAX, no page reload), independent of the "save all" form so
+                 picking a colour never risks resubmitting every other row. #}
+              <input type="color" class="staff-color" data-id="{{ p.id }}" value="{{ p.swatch }}"
+                     title="Floor-plan colour (saves automatically)"
+                     style="width:32px;min-height:30px;padding:2px;vertical-align:middle">
               <input form="saveall" type="text" name="name" value="{{ p.name }}" style="width:150px">
               {% if not p.is_active %}<span class="pill open">inactive</span>{% endif %}
             </td>
@@ -180,6 +186,17 @@
     if (el.type === 'hidden') return;
     el.addEventListener('change', function () {
       document.getElementById('saveall').submit();
+    });
+  });
+
+  // Floor-plan colour saves on its own (no page reload) — restored feature,
+  // the backend route (/admin/staff/{id}/color) never stopped existing.
+  document.querySelectorAll('.staff-color').forEach(function (el) {
+    el.addEventListener('change', function () {
+      fetch('/admin/staff/' + el.dataset.id + '/color',
+            { method: 'POST',
+              body: new URLSearchParams({ color: el.value }),
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' } });
     });
   });
 </script>
