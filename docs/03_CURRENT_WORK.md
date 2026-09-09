@@ -2225,7 +2225,7 @@ discipline as every other slice above. `9f063d6` remains the current,
 deployed, healthy state of `origin/main` and of production, unaffected by
 anything in this section.
 
-## Operational Floor port (Map/Arrange, reservations picker, staff colour, My-tables) — IMPLEMENTED, FIRST REVIEW ROUND DONE (FIX REQUIRED → fixed), NOT RE-REVIEWED, NOT INTEGRATED
+## Operational Floor port (Map/Arrange, reservations picker, staff colour, My-tables) — APPROVED WITH NON-BLOCKING NOTE, NOT INTEGRATED
 
 ```text
 Branch/worktree: feat/floor-operational-port, from 3c32968 (literal SHA,
@@ -2418,15 +2418,28 @@ git diff --check: clean, all seven commits.
   zone text are. A deliberate, narrower fix than a full rebuild of that
   header (would need each table's capacity available client-side, which
   it currently isn't); the count self-corrects on the next reload, same
-  as other live figures on this page (guest count, elapsed time).
+  as other live figures on this page (guest count, elapsed time). Called
+  out again below because it's the one thing the confirming review pass
+  chose to flag — explicitly as non-blocking, not something to fix before
+  integrating.
 
-**This slice is IMPLEMENTED, self-tested, and has one independent review
-round on record (FIX REQUIRED → both findings fixed). It is NOT re-reviewed
-after those fixes, NOT integrated, NOT pushed, NOT deployed** — a second,
-confirming pass from CODEX (or explicit sign-off that the two fixes are
-sufficient) is the next step. `3c32968` remains the current, deployed,
-healthy state of `origin/main` and of production, unaffected by anything in
-this section.
+**Independent review (CODEX), confirming pass on `ffab5ca`: APPROVED WITH
+NON-BLOCKING NOTE.** Both prior findings confirmed fixed correctly; the only
+remaining item is the zone-header-counts limitation already disclosed above
+(next-reload staleness), explicitly flagged as non-blocking, not requiring
+a fix before integration. All 7 Python suites, the Node bounds test, and
+`git diff --check` re-confirmed clean on a clean worktree at `ffab5ca`.
+
+**This slice is IMPLEMENTED, self-tested, and APPROVED WITH NON-BLOCKING
+NOTE by independent review. It is NOT integrated, NOT pushed, NOT
+deployed** — commit is already final (`ffab5ca`, no amend needed); local
+fast-forward integration into `main`, then push to `origin/main`, then
+production verification are the remaining steps, each requiring its own
+explicit authorization per this project's standing discipline (see the
+migration/admin-builder/zone-overlap/visible-bounds slices above for the
+exact pattern each of those steps follows). `3c32968` remains the current,
+deployed, healthy state of `origin/main` and of production, unaffected by
+anything in this section.
 
 ## Next Authorized Action
 
@@ -2452,27 +2465,26 @@ integrated, pushed, and deployed:
   NOT deployed. This is the SHA the port below branched from.
 
   feat/floor-operational-port (this file's most recent section, above,
-  7 commits: `f360244`, `d529f28`, `0932b06`, `392d3b6`, `c82b0d7`,
-  `edfa6ea`, plus the fix-of-CODEX-findings commit) — Map/Arrange on the
-  operational Floor page, the reservations table-picker's floor tabs +
-  select-all + picker-first column layout, the staff colour picker, and
-  My-tables persistence. IMPLEMENTATION COMPLETE, self-tested, **ONE
-  INDEPENDENT REVIEW ROUND DONE** (CODEX: FIX REQUIRED, 2 findings, both
-  fixed — see that section for detail). NOT re-reviewed after the fixes,
-  NOT integrated, NOT pushed, NOT deployed.
+  7 commits, top at `ffab5ca`: `f360244`, `d529f28`, `0932b06`, `392d3b6`,
+  `c82b0d7`, `edfa6ea`, `ffab5ca`) — Map/Arrange on the operational Floor
+  page, the reservations table-picker's floor tabs + select-all +
+  picker-first column layout, the staff colour picker, and My-tables
+  persistence. IMPLEMENTATION COMPLETE, self-tested, **CLOSED / APPROVED
+  WITH NON-BLOCKING NOTE** by independent review (CODEX: first pass FIX
+  REQUIRED with 2 findings, both fixed in `ffab5ca`; confirming pass
+  APPROVED WITH NON-BLOCKING NOTE — see that section for detail). NOT
+  integrated, NOT pushed, NOT deployed.
 
 **Next authorized administrative step (still requires explicit
-authorization before acting — not self-authorizing):** a confirming
-independent-review pass on `feat/floor-operational-port`'s two post-review
-fix commits (or explicit sign-off that they're sufficient without a second
-full pass), then — only once approved — fast-forward BOTH
-`fix/floor-table-visible-bounds` (`3c32968`) and this port into
-`main`/`origin/main` in sequence (verify `git merge-base` against the
-actual current `origin/main` immediately before merging either, not
-assumed from this note; push and deploy each remain their own, later,
-separately authorized steps). The operational Map/List + Arrange mode and
-the staff colour picker are addressed by this port; no other slice remains
-scoped-but-undone from the Floor Plan Builder line at this point.
+authorization before acting — not self-authorizing):** fast-forward BOTH
+`fix/floor-table-visible-bounds` (`3c32968`) and this port
+(`feat/floor-operational-port`, `ffab5ca`) into `main`/`origin/main` in
+sequence (verify `git merge-base` against the actual current `origin/main`
+immediately before merging either, not assumed from this note; push and
+deploy each remain their own, later, separately authorized steps). The
+operational Map/List + Arrange mode and the staff colour picker are
+addressed by this port; no other slice remains scoped-but-undone from the
+Floor Plan Builder line at this point.
 
 open_order_on_table's proven PostgreSQL race remains a real, tracked risk
 (see "Residual risks" below) and a candidate for its own future,
