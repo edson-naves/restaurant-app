@@ -121,13 +121,7 @@
         {% endfor %}
       </nav>
       {% endif %}
-      {% for floor_entry in map_floors %}
-      <div data-picker-floor-panel="{{ floor_entry.floor.id if floor_entry.floor else 0 }}">
-      {# Zones flow into as many columns as the picker's own width allows
-         (native CSS columns) instead of stacking in one long column — a
-         wide desktop can show several zones side by side. #}
-      <div class="zflow">
-      {% for zone_entry in floor_entry.zones %}
+      {% macro zone_panel(zone_entry) %}
       <div class="zpanel reszone-panel">
         <div class="zpanel-head">
           <span class="zp-dot" style="background: {{ zone_entry.zone.swatch if zone_entry.zone else '#8a9bb0' }}"></span>
@@ -150,7 +144,26 @@
           {% endfor %}
         </div>
       </div>
-      {% endfor %}
+      {% endmacro %}
+      {% for floor_entry in map_floors %}
+      <div data-picker-floor-panel="{{ floor_entry.floor.id if floor_entry.floor else 0 }}">
+      {# Two independent column stacks, each just flowing its own zones
+         top to bottom — NOT a shared-row grid (a shorter zone in the left
+         column would otherwise leave a gap waiting for its row partner on
+         the right to finish) and NOT CSS multi-column (its default
+         height-balancing produces the same kind of gap, since it aims to
+         equalize total column height rather than simply fill one column
+         then the next). Split by alternating index so the visual order
+         stays stable (left: 1st, 3rd, 5th zone; right: 2nd, 4th, 6th) —
+         collapses to a single column, in that same left-then-right order,
+         under the responsive breakpoint. #}
+      <div class="zsplit">
+        <div class="zsplit-col">
+          {% for zone_entry in floor_entry.zones[0::2] %}{{ zone_panel(zone_entry) }}{% endfor %}
+        </div>
+        <div class="zsplit-col">
+          {% for zone_entry in floor_entry.zones[1::2] %}{{ zone_panel(zone_entry) }}{% endfor %}
+        </div>
       </div>
       </div>
       {% endfor %}

@@ -88,24 +88,60 @@ def test_page_is_full_width_and_uses_the_split_layout():
     db.close()
 
 
-def test_zone_panels_flow_into_columns_not_one_long_stack():
+def test_zones_split_into_two_independent_columns_not_a_shared_row_grid():
+    """CSS multi-column's default height-balancing (and a shared-row grid)
+    both leave a gap under a short zone while it waits to line up with a
+    taller one — reported by the user against the live deploy. Two literal,
+    independent column stacks (alternating by index, so the visual order
+    stays stable) avoid that entirely: each column's height depends only on
+    its own content."""
     db = _session()
-    owner = _seed(db)
+    owner = Staff(name="Owner", role="owner", pin_code="x", is_active=True)
+    floor = Floor(name="Main")
+    ch = Channel(code="dine_in", name="Dine-in", channel_type="dine_in")
+    db.add_all([owner, floor, ch])
+    db.flush()
+    # The page sorts zones by (sort_order, name) — set sort_order explicitly
+    # so this test controls the order directly, rather than relying on these
+    # particular names happening to already be alphabetical.
+    names = ["Main", "Window", "Patio", "Bar"]
+    for i, name in enumerate(names):
+        z = Zone(name=name, floor_id=floor.id, sort_order=i)
+        db.add(z)
+        db.flush()
+        db.add(RestaurantTable(number=100 + i, zone_id=z.id, capacity=2, is_active=True, status="free"))
+    db.commit()
     c = _client(db, owner)
     body = c.get("/reservations").text
-    check('class="zflow"' in body, "zone panels sit inside a multi-column flow container")
+
+    check('class="zsplit"' in body, "the picker uses the two-column split wrapper")
+    check(body.count('class="zsplit-col"') == 2, "exactly two independent column stacks, not a variable/auto column count")
     check('class="zpanel reszone-panel"' in body,
-          "each zone panel keeps its existing .zpanel styling/behaviour and gains the flow-column class alongside it")
+          "each zone panel keeps its existing .zpanel styling/behaviour and gains the split-item class alongside it")
+    check("zflow" not in body and "columns:" not in body, "the old CSS multi-column mechanism is fully gone, not left dormant")
+
+    col1 = body[body.index('class="zsplit-col"'):]
+    col1_end = col1.index('class="zsplit-col"', 1)
+    col1_block = col1[:col1_end]
+    col2_block = col1[col1_end:]
+    # Zones seeded in order Main, Window, Patio, Bar -> alternating split
+    # puts Main/Patio in column 1, Window/Bar in column 2.
+    check(col1_block.index("Main") < col1_block.index("Patio"),
+          "column 1 holds the 1st and 3rd zones, in their original relative order")
+    check(col2_block.index("Window") < col2_block.index("Bar"),
+          "column 2 holds the 2nd and 4th zones, in their original relative order")
+    check("Window" not in col1_block and "Bar" not in col1_block,
+          "column 1 never picks up a zone that belongs in column 2")
+
     css = open(
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "static", "app.css"),
         encoding="utf-8",
     ).read()
-    zflow_start = css.index("\n.zflow {") + 1
-    zflow_block = css[zflow_start:css.index("}", zflow_start) + 1]
-    check("columns:" in zflow_block.replace(" ", ""), "the flow is native CSS columns (width-driven), not a hardcoded column count")
-    panel_start = css.index("\n.reszone-panel {") + 1
-    panel_block = css[panel_start:css.index("}", panel_start) + 1]
-    check("break-inside: avoid" in panel_block, "a zone panel never splits across two columns mid-panel")
+    split_start = css.index("\n.zsplit {") + 1
+    split_block = css[split_start:css.index("}", split_start) + 1]
+    check("flex" in split_block, "plain flexbox side-by-side, not a shared-row grid or CSS multi-column")
+    app.dependency_overrides.clear()
+    db.close()
 
 
 def test_zone_name_display_is_capitalized_without_touching_stored_data():
@@ -161,7 +197,7 @@ def test_book_form_groups_fields_into_three_compact_rows():
 if __name__ == "__main__":
     for fn in (
         test_page_is_full_width_and_uses_the_split_layout,
-        test_zone_panels_flow_into_columns_not_one_long_stack,
+        test_zones_split_into_two_independent_columns_not_a_shared_row_grid,
         test_zone_name_display_is_capitalized_without_touching_stored_data,
         test_upcoming_and_waitlist_sit_side_by_side_under_the_picker,
         test_book_form_groups_fields_into_three_compact_rows,

@@ -311,14 +311,15 @@ h2 { font-family: var(--serif); font-weight: 600; font-size: 18px; margin: 0 0 1
 /* Upcoming reservations + walk-in waitlist, side by side under the picker. */
 .res-lists { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
 @media (max-width: 760px) { .res-lists { grid-template-columns: 1fr; } }
-/* Zone panels flow into as many columns as the picker's own width allows
-   (native CSS columns — no JS, no media-query column-count table to keep in
-   sync as zones are added/removed) instead of stacking in one long column. */
-.zflow { columns: 340px; column-gap: 16px; }
-.reszone-panel {
-  break-inside: avoid; -webkit-column-break-inside: avoid; display: inline-block;
-  width: 100%; margin: 0 0 14px;
-}
+/* Two independent zone columns, each just its own top-to-bottom stack — not
+   CSS multi-column (its default height-balancing leaves a gap under a
+   shorter zone while it waits for the "row" to line up with a taller one
+   in the other column) and not a shared-row grid (same problem). Each
+   .zsplit-col has its own height; the shorter one simply ends earlier. */
+.zsplit { display: flex; gap: 16px; align-items: flex-start; }
+.zsplit-col { display: flex; flex-direction: column; gap: 14px; flex: 1; min-width: 0; }
+@media (max-width: 700px) { .zsplit { flex-direction: column; } }
+.reszone-panel { margin: 0; }
 .reszone-panel .zpanel-head { flex-wrap: wrap; }
 /* Zone names are free-text (owner-configured) and not always consistently
    capitalized ("balcony" alongside "Main", "Window", ...) — display-only
