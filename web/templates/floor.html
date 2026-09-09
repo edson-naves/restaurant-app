@@ -1,4 +1,10 @@
 {% extends "base.html" %}
+{# Full screen width, not the normal ~1240px column — the map (and, at a big
+   party size, the list too) has tables to spread across every pixel; the
+   narrow column just wastes the sides. Same override the old feat/floor-map
+   prototype used for this same reason, never carried over when Map/Arrange
+   was ported here. #}
+{% block wrap_extra %}wrap-wide{% endblock %}
 {% block body %}
 <div class="between">
   <div>

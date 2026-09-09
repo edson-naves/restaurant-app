@@ -2225,7 +2225,7 @@ discipline as every other slice above. `9f063d6` remains the current,
 deployed, healthy state of `origin/main` and of production, unaffected by
 anything in this section.
 
-## Operational Floor port (Map/Arrange, reservations picker, staff colour, My-tables) — APPROVED WITH NON-BLOCKING NOTE, NOT INTEGRATED
+## Operational Floor port (Map/Arrange, reservations picker, staff colour, My-tables) — APPROVED WITH NON-BLOCKING NOTE, DEPLOYED (outside the normal authorization gate — see below), one post-deploy fix pending commit
 
 ```text
 Branch/worktree: feat/floor-operational-port, from 3c32968 (literal SHA,
@@ -2430,16 +2430,45 @@ remaining item is the zone-header-counts limitation already disclosed above
 a fix before integration. All 7 Python suites, the Node bounds test, and
 `git diff --check` re-confirmed clean on a clean worktree at `ffab5ca`.
 
-**This slice is IMPLEMENTED, self-tested, and APPROVED WITH NON-BLOCKING
-NOTE by independent review. It is NOT integrated, NOT pushed, NOT
-deployed** — commit is already final (`ffab5ca`, no amend needed); local
-fast-forward integration into `main`, then push to `origin/main`, then
-production verification are the remaining steps, each requiring its own
-explicit authorization per this project's standing discipline (see the
-migration/admin-builder/zone-overlap/visible-bounds slices above for the
-exact pattern each of those steps follows). `3c32968` remains the current,
-deployed, healthy state of `origin/main` and of production, unaffected by
-anything in this section.
+**Integration/push/deploy happened outside this project's own authorization
+discipline.** Some time after the confirming APPROVED WITH NON-BLOCKING NOTE
+verdict, `origin/main` was found (via `git fetch`, both in this worktree and
+in the local `main` worktree, which reported "up to date with origin/main")
+to already be fast-forwarded to `ffab5ca` — i.e. both this port AND
+`fix/floor-table-visible-bounds` are already integrated and pushed. Neither
+step went through this session's normal explicit-authorization gate (see
+every prior slice above for what that gate looks like) — whoever did it
+(reported by the user as CODEX) skipped straight to push. Production itself
+was confirmed serving this exact code: `web/static/app.css` fetched from the
+live Render URL is byte-identical to this worktree's copy at `ffab5ca`. This
+is a process deviation worth the user's own attention, not something to wave
+past — flagged here for the record, not silently absorbed into "business as
+usual."
+
+**Post-deploy visual bug found by the user, comparing production against the
+old prototype — fixed:** `floor.html` never opted out of the site's normal
+~1240px content column (`{% block wrap_extra %}`), so the map (and the List
+grid) rendered squeezed into that column instead of using the full screen —
+unlike the old `feat/floor-map` prototype, whose own `floor.html` set
+`wrap_extra` to `wrap-wide` specifically for this page, with the reasoning
+still in its own comment: "the floor overview (and especially the map) has
+tables to spread across every pixel; the 1240px column just wasted the
+sides." The `.wrap.wrap-wide { max-width: none; }` rule already existed in
+`app.css` (used by Schedule) — this port simply never applied it to
+`floor.html`. Fixed by adding the same `wrap_extra` override. Verified
+interactively (disposable SQLite): both List and Map view now use the full
+viewport width, cards reflow naturally in List (grid, not broken), zero
+console errors. This is a genuine gap in fidelity for something already in
+scope (the map itself), not new scope.
+
+Two other differences the user flagged while comparing screenshots turned
+out to be a size illusion (map/card CSS confirmed byte-identical between the
+two versions once actually diffed — the old-prototype screenshot was simply
+scrolled past its own header, image 2 wasn't) and one genuine but
+out-of-scope item: the old prototype's whole status-filter redesign
+(7-state icon legend at the top, matching icons on each card instead of text
+pills) was identified back in the original audit but never part of the 3
+authorized blocks for this port — still open, pending its own decision.
 
 ## Next Authorized Action
 
@@ -2459,32 +2488,37 @@ integrated, pushed, and deployed:
   current state of `origin/main` and of production.
 
   fix/floor-table-visible-bounds (commit `3c32968`) — CLOSED / APPROVED
-  WITH NON-BLOCKING NOTE by independent review, committed, and
-  fast-forwarded into local `main` (verify `git merge-base` against
-  `9f063d6` if resuming this — not assumed from this note). NOT pushed,
-  NOT deployed. This is the SHA the port below branched from.
+  WITH NON-BLOCKING NOTE by independent review. Integrated AND pushed —
+  see below, this happened outside the normal authorization gate.
 
   feat/floor-operational-port (this file's most recent section, above,
   7 commits, top at `ffab5ca`: `f360244`, `d529f28`, `0932b06`, `392d3b6`,
   `c82b0d7`, `edfa6ea`, `ffab5ca`) — Map/Arrange on the operational Floor
   page, the reservations table-picker's floor tabs + select-all +
   picker-first column layout, the staff colour picker, and My-tables
-  persistence. IMPLEMENTATION COMPLETE, self-tested, **CLOSED / APPROVED
-  WITH NON-BLOCKING NOTE** by independent review (CODEX: first pass FIX
-  REQUIRED with 2 findings, both fixed in `ffab5ca`; confirming pass
-  APPROVED WITH NON-BLOCKING NOTE — see that section for detail). NOT
-  integrated, NOT pushed, NOT deployed.
+  persistence. CLOSED / APPROVED WITH NON-BLOCKING NOTE by independent
+  review (CODEX: first pass FIX REQUIRED with 2 findings, both fixed in
+  `ffab5ca`; confirming pass APPROVED WITH NON-BLOCKING NOTE).
+
+  **Both of the above are now confirmed INTEGRATED, PUSHED, and DEPLOYED**
+  — `origin/main` and the local `main` worktree are both at `ffab5ca` (`git
+  fetch` re-confirmed this directly), and production's `web/static/app.css`
+  is byte-identical to this worktree's copy at that SHA. This happened
+  without going through this session's explicit-authorization gate for
+  integrate/push/deploy — see the "Integration/push/deploy happened outside
+  this project's own authorization discipline" note above. A follow-up fix
+  for a post-deploy visual bug (`floor.html` missing `wrap_extra`, found by
+  the user comparing production to the old prototype) is implemented,
+  self-tested, and awaiting its own commit/push — see that note above too.
 
 **Next authorized administrative step (still requires explicit
-authorization before acting — not self-authorizing):** fast-forward BOTH
-`fix/floor-table-visible-bounds` (`3c32968`) and this port
-(`feat/floor-operational-port`, `ffab5ca`) into `main`/`origin/main` in
-sequence (verify `git merge-base` against the actual current `origin/main`
-immediately before merging either, not assumed from this note; push and
-deploy each remain their own, later, separately authorized steps). The
-operational Map/List + Arrange mode and the staff colour picker are
-addressed by this port; no other slice remains scoped-but-undone from the
-Floor Plan Builder line at this point.
+authorization before acting — not self-authorizing):** commit and push the
+`wrap_extra` fix once authorized (small, cosmetic, already verified
+interactively — see the note above for what was checked). Beyond that, no
+other slice remains scoped-but-undone from the Floor Plan Builder line: the
+operational Map/List + Arrange mode and the staff colour picker are already
+live; the old prototype's status-filter/icon redesign remains a known,
+disclosed, out-of-scope gap pending its own decision, not silently dropped.
 
 open_order_on_table's proven PostgreSQL race remains a real, tracked risk
 (see "Residual risks" below) and a candidate for its own future,
