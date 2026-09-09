@@ -2553,7 +2553,7 @@ cards.
 Do not start Stage 2c, B3/B4, reopen B2, or touch `open_order_on_table`'s or
 `set_zone_tables`'s locking without a new authorized slice.
 
-## Floor card redesign (7-state status legend, icon-based cards, adaptive height) — IMPLEMENTED, SELF-TESTED, NOT REVIEWED, NOT INTEGRATED
+## Floor card redesign (7-state status legend, icon-based cards, adaptive height) — APPROVED, NOT INTEGRATED
 
 Authorized by an explicit, detailed task spec (pasted in full by the user) naming production's Floor Plan cards as IMAGE 1 (current baseline, not the target) and the abandoned feat/floor-map prototype's own card design as IMAGE 2 (approved target — confirmed via the spec's own worked examples, "Table 18 · Bar · 4 guests · due 22:00 · Gri⏳ Bar⏳ · $30.50" and "Table 10 · 22:00 · 3 tables", matching the prototype's actual seeded data byte for byte). No screenshots were actually attached to the message; the prototype's real source (worktree restaurant_app, branch feat/floor-map) was used as ground truth instead — a strictly better reference than pixels, since exact spacing/markup/permission gates could be read directly rather than guessed.
 
@@ -2580,4 +2580,6 @@ Tests: tests/test_floor_card_redesign.py (new) — 16 assertions across 6 tests:
 
 Explicitly out of scope, not touched: kitchen/order/payment lifecycle semantics, coursing, station routing, Arrange/drag mechanics and persisted table coordinates, the zone-header live-count staleness already disclosed in the port section above, and the Map-view position-collision behaviour noted above.
 
-This slice is IMPLEMENTED and self-tested. It is NOT reviewed, NOT integrated, NOT pushed, NOT deployed — independent review is the next step, same authorization discipline as every prior slice.
+Independent review (CODEX) on d190436: no CRITICAL/HIGH/MEDIUM/LOW findings. Confirmed scope (1 commit, 4 files over b723a8b), the 7 backend-derived states, permissions on Seat party/No-show against require("reservations"), the card-height and retire-button-overlap fixes present, border colour independent of status, waiter name preserved via title, the removed .dot.* rules have no remaining consumers, and Map/Arrange/drag sections byte-identical to base. All 9 requested tests plus git diff --check passed. Verdict: APPROVED.
+
+This slice is IMPLEMENTED, self-tested, and APPROVED by independent review. It is NOT integrated, NOT pushed, NOT deployed — push/integrate only happens on explicit user authorization, restated firmly after the earlier unauthorized-push incident on this same Floor Plan Builder line (see the "Integration/push/deploy happened outside this project's own authorization discipline" note above).
