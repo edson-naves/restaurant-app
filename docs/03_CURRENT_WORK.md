@@ -2225,7 +2225,7 @@ discipline as every other slice above. `9f063d6` remains the current,
 deployed, healthy state of `origin/main` and of production, unaffected by
 anything in this section.
 
-## Operational Floor port (Map/Arrange, reservations picker, staff colour, My-tables) — IMPLEMENTED, NOT REVIEWED, NOT INTEGRATED
+## Operational Floor port (Map/Arrange, reservations picker, staff colour, My-tables) — IMPLEMENTED, FIRST REVIEW ROUND DONE (FIX REQUIRED → fixed), NOT RE-REVIEWED, NOT INTEGRATED
 
 ```text
 Branch/worktree: feat/floor-operational-port, from 3c32968 (literal SHA,
@@ -2337,40 +2337,96 @@ the picker's own state. Verified interactively (disposable SQLite,
 zero console errors): picker column renders left of the booking form,
 summary field updates on select and on deselect.
 
-**Tests — real execution, per block, re-confirmed together at the end:**
+**Self-review (before any independent eyes) — `edfa6ea`:**
+A second read of the whole diff, specifically looking for what a reviewer
+would find, caught one real bug the first pass missed: reservations
+"select all" flipped its own label to "clear" even when it selected
+nothing (a zone where every table already carries a booking has no
+selectable tables at all). Fixed with an early return, plus a source-level
+assertion in `tests/test_floor_operational_map.py` — no browser harness in
+this repo, same declared limitation as the admin builder's own pointer
+tests.
+
+**Independent review (CODEX) — first pass: FIX REQUIRED, 2 findings, both
+fixed:**
+- MEDIUM — a table dragged into a different zone updated `dataset.zone`
+  but never moved in the DOM. Map view didn't notice (cards are
+  positioned by `--x`/`--y`, not by which `.zpanel` they sit in — the
+  wrapper is `display:contents` there), but List view kept showing the
+  card under its old zone, with the old zone's name in its own `.meta`
+  line, until the next full reload. Fixed with `moveCardToZonePanel()`:
+  moves the card node into the target zone's `.zpanel-grid` and rewrites
+  the zone-name segment of its first `.meta` span, called right after a
+  successful cross-zone save. Verified interactively (disposable SQLite):
+  dragging a table from one non-empty zone into another instantly shows
+  the correct zone in both the card's own text and its List-view grouping
+  after switching views, zero console errors.
+  A related edge case surfaced while fixing this: a zone with *no* tables
+  yet has no List-view panel at all (the server only renders one per zone
+  that already has a card), so there's nothing to move the card into.
+  `moveCardToZonePanel()` falls back to `location.reload()` in that one
+  case — verified interactively too: dragging into a previously-empty
+  zone lands, after the reload, with the table correctly shown under that
+  zone. `ponytail:` that reload is a deliberate corner cut (vs.
+  hand-building a zpanel-head — dot colour, name, live counts — in JS for
+  a rare case); upgrade only if arranging into brand-new empty zones turns
+  out to be common in practice.
+- LOW — the reservations "select all"/"clear" label only updated inside
+  its own click handler, so deselecting a single table by hand (not
+  through the bulk action) left the zone's button reading "clear" even
+  though not every table was selected anymore. Fixed at the root: the
+  label is now recomputed inside `setTableSelected()` itself (the one
+  function every selection path — individual click and select-all —
+  already routes through), and the now-redundant explicit set in the
+  select-all handler was removed so there's exactly one place that owns
+  the label.
+Both fixes covered by new/updated assertions in
+`tests/test_floor_operational_map.py` and verified with real headless-Chromium
+sessions (disposable SQLite, never production, servers torn down after).
+CODEX also independently re-confirmed everything the self-reviews had
+already checked: endpoint payload contracts (`id:x:y[:shape[:zone_id]]`,
+exact-set requirement for zone moves), pointer ownership, pointercancel,
+visual (clamped) drag origin, the `settings`-only Arrange gate, `table_pref`
+being optional server-side, and no migration/new endpoint anywhere in the
+diff — all correct as implemented, no changes needed there.
+
+**Tests — real execution, re-confirmed together at the end:**
 ```text
-tests/test_floor_operational_map.py (new, this branch): 40 assertions
+tests/test_floor_operational_map.py (new, this branch): 45 assertions
     across 10 tests, all pass — Map/Arrange markup and pointer/bounds
-    wiring, permission gating (Arrange hidden without settings), NULL
+    wiring (including the zone-panel DOM move and its empty-zone
+    fallback), permission gating (Arrange hidden without settings), NULL
     map-position fallback, staff colour picker, My-tables persistence,
-    reservations floor tabs + select-all.
+    reservations floor tabs + select-all (including the fully-booked-zone
+    no-op and the single-source-of-truth label sync).
 tests/test_floor_bounds.js: 27 assertions, all pass (unchanged module,
     reused as-is on a second page).
 tests/test_floor_spatial.py, tests/test_reservations_map.py,
     tests/test_floor_admin_ui.py, tests/test_floor_zone_overlap.py,
     tests/test_floor_map_coordinates.py, tests/test_migrate.py: all pass,
-    re-run after each block and again at the end.
-git diff --check: clean, all four commits.
+    re-run after every commit and again at the end.
+git diff --check: clean, all seven commits.
 ```
 
 **Risks, disclosed:**
-- Four commits, one review pass expected to cover all of them — by
-  explicit user instruction, trading finer-grained review checkpoints for
-  finishing more work inside a fixed time/token window. Block 2 (Arrange)
-  is where the real risk concentrates; it got the most scrutiny (a real
-  browser session exercising the true edge case, structural tests
-  mirroring the admin builder's own reviewed pointer tests) but has not
-  had independent eyes on it yet.
 - The `.tbl` card in map mode is a fixed 132px box regardless of its real
   content (stations strip, ready-to-serve pill, price) — dense cards may
   visually crowd; this matches the old branch's own design exactly and
   was not changed, but is untested against a very busy real card.
+- The zone-panel header counts (`.zp-meta`, "N tables · M seats") are not
+  updated by a cross-zone table drag — only the card's own placement and
+  zone text are. A deliberate, narrower fix than a full rebuild of that
+  header (would need each table's capacity available client-side, which
+  it currently isn't); the count self-corrects on the next reload, same
+  as other live figures on this page (guest count, elapsed time).
 
-**This slice is IMPLEMENTED and self-tested. It is NOT reviewed, NOT
-integrated, NOT pushed, NOT deployed** — independent review of the full
-diff (all four commits) is the next step. `3c32968` remains the current,
-deployed, healthy state of `origin/main` and of production, unaffected by
-anything in this section.
+**This slice is IMPLEMENTED, self-tested, and has one independent review
+round on record (FIX REQUIRED → both findings fixed). It is NOT re-reviewed
+after those fixes, NOT integrated, NOT pushed, NOT deployed** — a second,
+confirming pass from CODEX (or explicit sign-off that the two fixes are
+sufficient) is the next step. `3c32968` remains the current, deployed,
+healthy state of `origin/main` and of production, unaffected by anything in
+this section.
 
 ## Next Authorized Action
 
@@ -2396,25 +2452,27 @@ integrated, pushed, and deployed:
   NOT deployed. This is the SHA the port below branched from.
 
   feat/floor-operational-port (this file's most recent section, above,
-  3 commits: `f360244`, `d529f28`, `0932b06`) — Map/Arrange on the
+  7 commits: `f360244`, `d529f28`, `0932b06`, `392d3b6`, `c82b0d7`,
+  `edfa6ea`, plus the fix-of-CODEX-findings commit) — Map/Arrange on the
   operational Floor page, the reservations table-picker's floor tabs +
-  select-all, the staff colour picker, and My-tables persistence.
-  IMPLEMENTATION COMPLETE, self-tested, **NOT YET INDEPENDENTLY
-  REVIEWED**. NOT integrated, NOT pushed, NOT deployed.
+  select-all + picker-first column layout, the staff colour picker, and
+  My-tables persistence. IMPLEMENTATION COMPLETE, self-tested, **ONE
+  INDEPENDENT REVIEW ROUND DONE** (CODEX: FIX REQUIRED, 2 findings, both
+  fixed — see that section for detail). NOT re-reviewed after the fixes,
+  NOT integrated, NOT pushed, NOT deployed.
 
 **Next authorized administrative step (still requires explicit
-authorization before acting — not self-authorizing):** independent review
-of `feat/floor-operational-port`'s full diff (all three commits together —
-see that section's own "Risks, disclosed" for why they were not reviewed
-one at a time), then — only once that returns APPROVED or APPROVED WITH
-NON-BLOCKING NOTES — fast-forward BOTH `fix/floor-table-visible-bounds`
-(`3c32968`) and this port into `main`/`origin/main` in sequence (verify
-`git merge-base` against the actual current `origin/main` immediately
-before merging either, not assumed from this note; push and deploy each
-remain their own, later, separately authorized steps). The operational
-Map/List + Arrange mode and the staff colour picker are addressed by this
-port; no other slice remains scoped-but-undone from the Floor Plan
-Builder line at this point.
+authorization before acting — not self-authorizing):** a confirming
+independent-review pass on `feat/floor-operational-port`'s two post-review
+fix commits (or explicit sign-off that they're sufficient without a second
+full pass), then — only once approved — fast-forward BOTH
+`fix/floor-table-visible-bounds` (`3c32968`) and this port into
+`main`/`origin/main` in sequence (verify `git merge-base` against the
+actual current `origin/main` immediately before merging either, not
+assumed from this note; push and deploy each remain their own, later,
+separately authorized steps). The operational Map/List + Arrange mode and
+the staff colour picker are addressed by this port; no other slice remains
+scoped-but-undone from the Floor Plan Builder line at this point.
 
 open_order_on_table's proven PostgreSQL race remains a real, tracked risk
 (see "Residual risks" below) and a candidate for its own future,

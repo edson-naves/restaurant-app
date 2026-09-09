@@ -189,6 +189,14 @@ def test_arrange_script_reuses_pointer_ownership_and_visible_bounds():
     check("/admin/zones/' + d.el.dataset.id + '/move-layout" in up,
           "a zone move/resize saves through the current atomic endpoint, never the old /admin/tables/layout")
     check("elementsFromPoint" in up, "zone drop hit-test uses the browser's own paint order, not hand-rolled geometry")
+    check("moveCardToZonePanel(" in up,
+          "a table dropped into a different zone also moves in the DOM (List view groups by zone) — "
+          "not just its dataset.zone, or List would show it under the old zone until reload")
+    mover = _slice(body, "function moveCardToZonePanel", "function positionCard")
+    check(".zpanel-grid" in mover, "the DOM move actually targets the List-view zone panel")
+    check("location.reload()" in mover,
+          "falls back to a reload if the target zone has no panel yet (a zone with no tables "
+          "at all isn't rendered in List view) rather than silently dropping the card")
     app.dependency_overrides.clear()
     db.close()
 
@@ -303,10 +311,17 @@ def test_reservation_picker_has_select_all_that_skips_booked_tables():
     check("setTableSelected(" in body, "table selection is a shared, force-able function (not just a toggle)")
     check("reszone-all" in body and "data-booked" in body,
           "select-all reads each table's booked marker to decide what to skip")
-    handler = body[body.index(".reszone-all'"):]
-    handler = handler[:handler.index("btn.textContent") + 100]
+    handler = _slice(body, "document.querySelectorAll('.reszone-all')", "</script>")
     check("if (!tables.length) return;" in handler,
           "select-all is a no-op (never relabels itself 'clear') in a zone where every table is already booked")
+    setter = _slice(body, "function setTableSelected", "document.querySelectorAll('.restbl')")
+    check("reszone-all" in setter and ".textContent = " in setter,
+          "setTableSelected() itself keeps the zone's select-all/clear label honest — "
+          "so a single table toggled by hand (not through select-all) still updates it, "
+          "not just the bulk action's own click handler")
+    check("btn.textContent = allSelected" not in handler,
+          "the label is set in exactly one place (setTableSelected), not duplicated in the "
+          "select-all handler too — the duplication is what let the two drift apart before")
     app.dependency_overrides.clear()
     db.close()
 

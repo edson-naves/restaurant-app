@@ -644,6 +644,36 @@
     el.classList.toggle('unsaved', !ok);
     el.title = ok ? '' : (reason || 'Save failed — drag again to retry');
   }
+  // A table dropped into a different zone saves its new zone instantly (see
+  // pointerup below), but List view groups cards by zone in the DOM — without
+  // this, the card would keep showing under its old zone's panel (and its own
+  // "Zone · ..." line would still name the old zone) until the next reload.
+  // Map view doesn't care (cards are positioned by --x/--y, not by which
+  // panel they sit in — .zpanel is display:contents there), so this only
+  // needs to fix up the List-view grouping and the card's own zone text.
+  function moveCardToZonePanel(card, zoneId, zoneName) {
+    const plane = card.closest('.map-plane');
+    const targetGrid = plane && plane.querySelector(
+      '.zpanel[data-zone-id="' + zoneId + '"] .zpanel-grid');
+    if (!targetGrid) {
+      // The target zone had no tables at all before this drop, so the server
+      // never rendered a List-view panel for it (one exists per zone that
+      // already has a card, not per zone that could). Nothing to move the
+      // card into. ponytail: a reload beats hand-building a zpanel-head (dot
+      // colour, name, live counts) in JS for a rare edge case — upgrade to
+      // that only if arranging into brand-new empty zones turns out common.
+      location.reload();
+      return;
+    }
+    targetGrid.appendChild(card);
+    // First .meta span is always "{{ zone }} · ..." (guests/duration or seats) —
+    // replace just the zone-name segment, leave the rest (which is live data
+    // anyway, already refreshed by the idle auto-reload) untouched.
+    const metaSpan = card.querySelector('.meta');
+    if (zoneName && metaSpan) {
+      metaSpan.textContent = metaSpan.textContent.replace(/^[^·]*/, zoneName + ' ');
+    }
+  }
   function chipBounds(el, planeRect) {
     const r = el.getBoundingClientRect();
     return window.FloorTableBounds.visibleBounds(planeRect.width, planeRect.height, r.width, r.height);
@@ -810,13 +840,17 @@
         const topZone = document.elementsFromPoint(cx, cy)
           .find(function (el) { return el.classList.contains('fzrect'); });
         const newZoneId = topZone ? topZone.dataset.id : d.origZone;
+        const newZoneName = topZone ? topZone.querySelector('.fzrect-name').textContent : null;
         let entry = d.el.dataset.id + ':' + x + ':' + y;
         if (newZoneId && newZoneId !== d.origZone) entry += '::' + newZoneId;
         post('/admin/tables/map-layout', { tables: entry }).then(function (r) {
           mark(d.el, r.ok);
           if (r.ok) {
             d.el.dataset.x = x; d.el.dataset.y = y;
-            if (newZoneId !== d.origZone) d.el.dataset.zone = newZoneId;
+            if (newZoneId !== d.origZone) {
+              d.el.dataset.zone = newZoneId;
+              moveCardToZonePanel(d.el, newZoneId, newZoneName);
+            }
           }
         }).catch(function () { mark(d.el, false); });
         return;

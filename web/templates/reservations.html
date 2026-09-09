@@ -323,6 +323,20 @@ function setTableSelected(button, selected) {
       ? 'Table' + (numbers.length === 1 ? '' : 's') + ' ' + numbers.join(', ')
       : 'No tables — pick on the panels';
   }
+  // Keep this zone's "select all"/"clear" label honest — a single table
+  // toggled by hand (not through the bulk action) must still flip it back,
+  // the same way as if it had gone through select-all itself.
+  var panel = button.closest('.zpanel');
+  var allBtn = panel && panel.querySelector('.reszone-all');
+  if (allBtn) {
+    var selectable = Array.from(panel.querySelectorAll('.restbl')).filter(function (b) {
+      return !b.dataset.booked;
+    });
+    var allSel = selectable.length > 0 && selectable.every(function (b) {
+      return b.getAttribute('aria-pressed') === 'true';
+    });
+    allBtn.textContent = allSel ? 'clear' : 'select all';
+  }
 }
 
 document.querySelectorAll('.restbl').forEach(function (button) {
@@ -344,8 +358,10 @@ document.querySelectorAll('.reszone-all').forEach(function (btn) {
     var allSelected = tables.every(function (b) {
       return b.getAttribute('aria-pressed') === 'true';
     });
+    // setTableSelected() itself keeps this button's label in sync (see there) —
+    // no need to set it here too, and doing it in one place only is what fixed
+    // the label going stale after an individual click in the first place.
     tables.forEach(function (b) { setTableSelected(b, !allSelected); });
-    btn.textContent = allSelected ? 'select all' : 'clear';
   });
 });
 
