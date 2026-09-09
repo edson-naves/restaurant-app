@@ -335,9 +335,20 @@ def floor_plan(request: Request, floor: str = "", db: Session = Depends(get_db),
         .order_by(Zone.floor_id, Zone.sort_order, Zone.name)
     ).scalars().all()
 
+    # Free-map display position for every table — real coordinates where an
+    # Owner has dragged one, a deterministic fallback spread inside its own
+    # zone's rectangle otherwise (see _table_map_positions). Never written
+    # here. Shared with the admin Floor Plan Builder so a table freshly
+    # created here (map_x_per_mille still NULL) renders inside its assigned
+    # zone instead of the whole plane's centre, exactly like it already does
+    # there — this page had its own naive "plane centre" fallback baked into
+    # the template instead of reusing this, which is the bug this fixes.
+    from app.routers.admin import _table_map_positions   # lazy: admin imports from here
+    table_positions = _table_map_positions(tables, all_zones)
+
     return render(request, "floor.html", {
         "db": db, "staff": staff, "cards": cards, "counts": counts,
-        "sections": sections,
+        "sections": sections, "table_positions": table_positions,
         "floor_tabs": floor_tabs, "current_floor_id": current_floor_id,
         "current_zones": current_zones, "all_zones": all_zones,
         "show_all": show_all,

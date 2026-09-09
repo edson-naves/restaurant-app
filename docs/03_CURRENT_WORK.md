@@ -2629,4 +2629,24 @@ Verified interactively (disposable SQLite reproducing the exact reported scenari
 
 tests/test_reservations_layout.py: the old CSS-multi-column-specific test was replaced with one asserting the two-column split explicitly (exactly two `.zsplit-col` elements, alternating-index assignment verified against a controlled `sort_order`, plain flexbox not `columns:`, the old `.zflow` mechanism fully gone). Full regression suite and `git diff --check` re-run clean.
 
-This slice is IMPLEMENTED, self-tested, and committed locally (fix commit pending — see below). It is NOT pushed, NOT deployed — awaiting the same explicit authorization every push on this project requires.
+This slice was pushed on explicit authorization ("sim") — origin/main confirmed at 784d026, /healthz 200.
+
+## New table renders outside its zone — IMPLEMENTED, SELF-TESTED, NOT REVIEWED, NOT INTEGRATED
+
+Real bug reported by the user (with its own focused investigation spec): a table created for zone "Main" rendered outside that zone's boundary on the Floor page's Map view.
+
+Root cause (confirmed by reading code, not guessed): `app/routers/admin.py::_table_map_positions()` already computes exactly the right fallback for a table with no saved map position — a point inside its own zone's rectangle (a ring centred on the zone, radius bounded by the zone's own width/height, design §4.4) — but it was **only ever wired into the admin Floor Plan Builder's route**. `sales.py::floor_plan()` (the operational Floor page every "Add New Table" click lands on) had never called it; `floor.html`'s own template instead had a naive, zone-blind fallback baked directly into its Jinja (`else 500`, the flat plane's centre) for any table with a NULL map position — which every newly created table has, until it's dragged once in Arrange. A table's *data* assignment to its zone (zone_id) was always correct; only its *display* position ignored the zone.
+
+Files changed:
+- `app/routers/sales.py` — `floor_plan()` now calls the same `_table_map_positions(tables, all_zones)` the admin builder already uses (lazy import, same pattern `create_table_from_floor` already uses for `_add_tables`), and passes the result as `table_positions` in the render context. Nothing written to the database — purely a display computation, recomputed fresh every render, identical to how the admin page already behaves.
+- `web/templates/floor.html` — replaced the naive `{% set mx = c.table.map_x_per_mille if ... else 500 %}` with `table_positions.get(c.table.id, (500, 500))`, the exact same pattern `admin_tables.html` already uses. A table with no zone at all still falls back to the plane's centre (there's no zone to place it inside).
+
+Coordinate system: unchanged — still `map_x_per_mille`/`map_y_per_mille` (per-mille 0-1000), the same system Arrange mode reads and writes. This fix only changes what a NULL value *displays as*; a real dragged position is never touched or reinterpreted.
+
+Placement logic: entirely reused from the existing, already-reviewed `_table_map_positions()` — a table with a real saved position uses it as-is; an unplaced table is centred inside its own zone's rectangle, and when a zone has more than one unplaced table they're spread around a ring (distinct angles by id rank) so they don't all land on the exact same point. No new algorithm was written for this fix.
+
+Verified interactively (disposable SQLite, two zones placed away from the plane's centre so a regression would be visually obvious; never production, server torn down after): created tables via the real `POST /tables/create` endpoint (not by hand-setting a map position) in both zones — every new table's rendered position, measured against its zone's own `.fzrect` bounding box, fell inside it. Dragged one of the new tables in Arrange, confirmed the save endpoint returned 204 and the dragged position (not the zone fallback) persisted correctly across a reload — Arrange itself is untouched by this fix. Zero console errors throughout.
+
+Tests: `tests/test_floor_operational_map.py` — the existing test asserting the *old* (buggy) plane-centre fallback was corrected to assert the new zone-aware fallback instead (a single unplaced table in a known zone falls back to exactly that zone's centre point, computed from the test's own zone geometry); a new end-to-end test creates a table through the actual `/tables/create` endpoint and confirms its rendered position falls within the zone's per-mille bounds. Full regression suite re-run clean: `test_floor_spatial.py`, `test_floor_admin_ui.py`, `test_floor_zone_overlap.py`, `test_floor_map_coordinates.py`, `test_reservations_map.py`, `test_floor_card_redesign.py`, `test_reservations_layout.py`, `test_migrate.py`, `test_floor_bounds.js`. `git diff --check`: clean.
+
+This slice is IMPLEMENTED, self-tested. It is NOT reviewed, NOT integrated, NOT pushed, NOT deployed — independent review is the next step, same authorization discipline as every prior slice.

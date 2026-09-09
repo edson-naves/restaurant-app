@@ -118,7 +118,17 @@ def test_floor_page_renders_map_plane_and_zone_rects():
     db.close()
 
 
-def test_never_placed_table_defaults_to_plane_centre_not_null_or_crash():
+def test_never_placed_table_falls_back_inside_its_own_zone_not_the_plane_centre():
+    """Bug fix: a table with no saved map position (never dragged — including
+    one just created) used to fall back to the flat plane's centre (500,500
+    per-mille) regardless of its zone, so a table created in a zone off to
+    one side rendered outside that zone's own rectangle. The admin Floor
+    Plan Builder already had a correct, zone-aware fallback for this exact
+    case (_table_map_positions — a point inside the zone's own rectangle);
+    this page just never called it. Zone here: pos_x=10, pos_y=20,
+    width=300, height=250 -> centre (160, 145) -> 16.0%/14.5%, and with
+    only one unplaced table in the zone the fallback is exactly that
+    centre point (see _table_map_positions's n==1 case)."""
     db = _session()
     owner, waiter, floor, zone = _seed(db)
     t = RestaurantTable(number=1, zone_id=zone.id, capacity=4, is_active=True)  # map position never set
@@ -128,8 +138,38 @@ def test_never_placed_table_defaults_to_plane_centre_not_null_or_crash():
 
     r = c.get(f"/?floor={floor.id}")
     check(r.status_code == 200, f"a never-placed table does not crash the page (got {r.status_code})")
-    check('--x: 50.0%; --y: 50.0%' in r.text,
-          "a NULL map position falls back to the plane's centre, same as the CSS default")
+    check('--x: 50.0%; --y: 50.0%' not in r.text,
+          "a NULL map position no longer falls back to the flat plane's centre")
+    check('--x: 16.0%; --y: 14.5%' in r.text,
+          "it falls back to a point inside its own zone's rectangle instead (the zone's centre, for a single unplaced table)")
+    app.dependency_overrides.clear()
+    db.close()
+
+
+def test_table_created_from_the_floor_page_renders_inside_its_zone():
+    """End-to-end regression for the reported bug: create a table through
+    the actual "Add table" endpoint (not by hand-setting a map position),
+    then confirm the very next render places it inside the zone's own
+    rectangle — not at the flat plane's centre, and not merely correct in
+    the database while the page still mis-renders it."""
+    db = _session()
+    owner, waiter, floor, zone = _seed(db)
+    db.commit()
+    c = _client(db, owner)
+
+    r = c.post("/tables/create", data={"floor_id": floor.id, "zone_id": zone.id, "capacity": 4})
+    check(r.status_code in (200, 303), f"table creation succeeds (got {r.status_code})")
+
+    body = c.get(f"/?floor={floor.id}").text
+    # Zone bounds: x in [10, 310], y in [20, 270] (pos_x/pos_y/width/height
+    # above) -> per-mille [1.0%, 31.0%] x [2.0%, 27.0%].
+    import re
+    m = re.search(r'--x: ([\d.]+)%; --y: ([\d.]+)%', body)
+    check(m is not None, "the new table's map position is rendered on the page")
+    if m:
+        x, y = float(m.group(1)), float(m.group(2))
+        check(1.0 <= x <= 31.0, f"the new table's x ({x}%) falls inside the zone's own horizontal bounds")
+        check(2.0 <= y <= 27.0, f"the new table's y ({y}%) falls inside the zone's own vertical bounds")
     app.dependency_overrides.clear()
     db.close()
 
@@ -329,7 +369,8 @@ def test_reservation_picker_has_select_all_that_skips_booked_tables():
 if __name__ == "__main__":
     for fn in (
         test_floor_page_renders_map_plane_and_zone_rects,
-        test_never_placed_table_defaults_to_plane_centre_not_null_or_crash,
+        test_never_placed_table_falls_back_inside_its_own_zone_not_the_plane_centre,
+        test_table_created_from_the_floor_page_renders_inside_its_zone,
         test_waiter_without_settings_permission_gets_no_arrange_button,
         test_arrange_script_reuses_pointer_ownership_and_visible_bounds,
         test_idle_auto_reload_is_paused_while_arranging,

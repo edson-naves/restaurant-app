@@ -167,10 +167,14 @@
     {% set bc = '#3b82f6' if c.disp_status == 'reserved' else (c.waiter_color or '#8a9bb0') %}
     {# Spatial (map) position — per-mille, the same map_x_per_mille/map_y_per_mille
        the admin Floor Plan Builder writes. A table with no real position yet
-       (never dragged there) defaults to the plane's centre, same as the CSS
-       fallback below — nothing is written here, this is display only. #}
-    {% set mx = c.table.map_x_per_mille if c.table.map_x_per_mille is not none else 500 %}
-    {% set my = c.table.map_y_per_mille if c.table.map_y_per_mille is not none else 500 %}
+       (never dragged there — including one just created) falls back to a
+       point inside its own zone's rectangle, computed server-side
+       (table_positions, shared with the admin builder) — nothing is
+       written here, this is display only. A table with no zone at all
+       falls back to the plane's centre, same as the CSS default below. #}
+    {% set pos = table_positions.get(c.table.id, (500, 500)) %}
+    {% set mx = pos[0] %}
+    {% set my = pos[1] %}
     {% if c.order %}
       <a class="tbl {{ c.disp_status }}{{ ' due-soon' if (c.reservation and c.disp_status != 'reserved') }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
          data-id="{{ c.table.id }}" data-x="{{ mx }}" data-y="{{ my }}"
