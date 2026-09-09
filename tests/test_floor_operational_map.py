@@ -242,6 +242,71 @@ def test_my_tables_preference_persists_via_localstorage():
     db.close()
 
 
+# --------------------------------------------------------------------------
+# Reservations picker: floor tabs + "select all" (Block 3)
+# --------------------------------------------------------------------------
+
+def test_reservation_picker_shows_floor_tabs_only_with_more_than_one_floor():
+    db = _session()
+    owner, waiter, floor_a, zone_a = _seed(db)
+    floor_b = Floor(name="Patio Floor")
+    db.add(floor_b)
+    db.flush()
+    zone_b = Zone(name="Outside", floor_id=floor_b.id)
+    db.add(zone_b)
+    db.flush()
+    t1 = RestaurantTable(number=1, zone_id=zone_a.id, capacity=4, is_active=True, status="free")
+    t2 = RestaurantTable(number=2, zone_id=zone_b.id, capacity=4, is_active=True, status="free")
+    db.add_all([t1, t2])
+    db.commit()
+    c = _client(db, owner)
+
+    r = c.get("/reservations")
+    check(r.status_code == 200, f"page renders (got {r.status_code})")
+    body = r.text
+    check('id="resFloorTabs"' in body, "floor tabs render when the picker spans more than one floor")
+    check(f'data-picker-floor="{floor_a.id}"' in body and f'data-picker-floor="{floor_b.id}"' in body,
+          "one tab per floor, keyed by the real floor id")
+    check(f'data-picker-floor-panel="{floor_a.id}"' in body and f'data-picker-floor-panel="{floor_b.id}"' in body,
+          "one panel per floor for the tabs to show/hide")
+    check("resFloorTabs" in body and "data-picker-floor" in body, "the tab-switch script targets these same attributes")
+    app.dependency_overrides.clear()
+    db.close()
+
+
+def test_reservation_picker_no_floor_tabs_with_a_single_floor():
+    db = _session()
+    owner, waiter, floor, zone = _seed(db)
+    t = RestaurantTable(number=1, zone_id=zone.id, capacity=4, is_active=True, status="free")
+    db.add(t)
+    db.commit()
+    c = _client(db, owner)
+
+    r = c.get("/reservations")
+    check(r.status_code == 200, f"page renders (got {r.status_code})")
+    check('id="resFloorTabs"' not in r.text, "no tab bar when there is only one floor to pick from")
+    app.dependency_overrides.clear()
+    db.close()
+
+
+def test_reservation_picker_has_select_all_that_skips_booked_tables():
+    db = _session()
+    owner, waiter, floor, zone = _seed(db)
+    t1 = RestaurantTable(number=1, zone_id=zone.id, capacity=4, is_active=True, status="free")
+    t2 = RestaurantTable(number=2, zone_id=zone.id, capacity=4, is_active=True, status="free")
+    db.add_all([t1, t2])
+    db.commit()
+    c = _client(db, owner)
+
+    body = c.get("/reservations").text
+    check('class="reszone-all"' in body, "the zone header offers a select-all action")
+    check("setTableSelected(" in body, "table selection is a shared, force-able function (not just a toggle)")
+    check("reszone-all" in body and "data-booked" in body,
+          "select-all reads each table's booked marker to decide what to skip")
+    app.dependency_overrides.clear()
+    db.close()
+
+
 if __name__ == "__main__":
     for fn in (
         test_floor_page_renders_map_plane_and_zone_rects,
@@ -251,6 +316,9 @@ if __name__ == "__main__":
         test_idle_auto_reload_is_paused_while_arranging,
         test_staff_page_has_colour_picker_calling_the_existing_route,
         test_my_tables_preference_persists_via_localstorage,
+        test_reservation_picker_shows_floor_tabs_only_with_more_than_one_floor,
+        test_reservation_picker_no_floor_tabs_with_a_single_floor,
+        test_reservation_picker_has_select_all_that_skips_booked_tables,
     ):
         print(f"- {fn.__name__}")
         fn()

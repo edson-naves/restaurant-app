@@ -127,18 +127,39 @@
         <h2 style="margin:0">Pick tables on floor map</h2>
         <span class="sub" id="selected-tables">No tables selected</span>
       </div>
+      {# Floor tabs — one floor's zones shown at a time instead of every floor
+         stacked and scrolled through. No-JS fallback: without the script
+         below, every floor's zones stay visible (nothing here is hidden by
+         default; the script narrows it), same progressive-enhancement
+         convention as floor.html's own floor tabs. #}
+      {% if map_floors|length > 1 %}
+      <nav class="subtabs" id="resFloorTabs" style="margin-bottom:12px">
+        {% for floor_entry in map_floors %}
+        <button type="button" class="subtab-btn{{ ' on' if loop.first else '' }}"
+                data-picker-floor="{{ floor_entry.floor.id if floor_entry.floor else 0 }}">
+          {{ floor_entry.floor.name if floor_entry.floor else 'Main floor' }}
+        </button>
+        {% endfor %}
+      </nav>
+      {% endif %}
       {% for floor_entry in map_floors %}
-      {% if map_floors|length > 1 %}<h3 style="margin:12px 0 8px">{{ floor_entry.floor.name if floor_entry.floor else 'Main floor' }}</h3>{% endif %}
+      <div data-picker-floor-panel="{{ floor_entry.floor.id if floor_entry.floor else 0 }}">
       {% for zone_entry in floor_entry.zones %}
       <div class="zpanel" style="margin-bottom:12px">
         <div class="zpanel-head">
           <span class="zp-dot" style="background: {{ zone_entry.zone.swatch if zone_entry.zone else '#8a9bb0' }}"></span>
           <strong class="zp-name">{{ zone_entry.zone.name if zone_entry.zone else 'No zone' }}</strong>
           <span class="zp-meta">{{ zone_entry.tables|length }} table{{ '' if zone_entry.tables|length == 1 else 's' }} · {{ zone_entry.seats }} seats</span>
+          {# Selects every table in this zone at once. A table already
+             carrying a booking is skipped by "select all" specifically —
+             still individually pickable by hand, same as today, since a
+             pending booking there isn't necessarily for this same slot. #}
+          <button type="button" class="reszone-all" title="Select every available table in this zone">select all</button>
         </div>
         <div class="restbl-grid">
           {% for table in zone_entry.tables %}
           <button type="button" class="restbl" data-table-id="{{ table.id }}" aria-pressed="false"
+                  data-booked="{{ '1' if table.id in booked_ids else '' }}"
                   title="Table {{ table.number }} · seats {{ table.capacity }}{% if table.id in booked_ids %} · already has a booking{% endif %}">
             <span class="rt-n">Table {{ table.number }}{% if table.id in booked_ids %} <span title="Already has a booking">📅</span>{% endif %}</span>
             <span class="rt-seats">{{ table.capacity }} seats</span>
@@ -147,6 +168,7 @@
         </div>
       </div>
       {% endfor %}
+      </div>
       {% endfor %}
     </div>
     {% endif %}
@@ -254,26 +276,68 @@ function bump(id, d) {
   el.value = Math.max(lo, Math.min(hi, (parseInt(el.value, 10) || 0) + d));
 }
 
+// Set (not just toggle) one table button's selected state, so "select all"
+// can force every table in a zone to the SAME state (all-on, or all-off if
+// they were all already selected) without each one flipping the other's work.
+function setTableSelected(button, selected) {
+  var was = button.getAttribute('aria-pressed') === 'true';
+  if (was === selected) return;
+  button.setAttribute('aria-pressed', String(selected));
+  button.classList.toggle('sel', selected);
+  var id = button.dataset.tableId;
+  var form = document.getElementById('bookform');
+  var input = form.querySelector('input[data-table-id="' + id + '"]');
+  if (!selected) {
+    if (input) input.remove();
+  } else if (!input) {
+    input = document.createElement('input');
+    input.type = 'hidden'; input.name = 'table_ids'; input.value = id;
+    input.dataset.tableId = id; form.appendChild(input);
+  }
+  var count = form.querySelectorAll('input[data-table-id]').length;
+  document.getElementById('selected-tables').textContent = count
+    ? count + ' table' + (count === 1 ? '' : 's') + ' selected'
+    : 'No tables selected';
+}
+
 document.querySelectorAll('.restbl').forEach(function (button) {
   button.addEventListener('click', function () {
-    var selected = button.getAttribute('aria-pressed') === 'true';
-    button.setAttribute('aria-pressed', String(!selected));
-    button.classList.toggle('sel', !selected);
-    var id = button.dataset.tableId;
-    var form = document.getElementById('bookform');
-    var input = form.querySelector('input[data-table-id="' + id + '"]');
-    if (selected) {
-      if (input) input.remove();
-    } else if (!input) {
-      input = document.createElement('input');
-      input.type = 'hidden'; input.name = 'table_ids'; input.value = id;
-      input.dataset.tableId = id; form.appendChild(input);
-    }
-    var count = form.querySelectorAll('input[data-table-id]').length;
-    document.getElementById('selected-tables').textContent = count
-      ? count + ' table' + (count === 1 ? '' : 's') + ' selected'
-      : 'No tables selected';
+    setTableSelected(button, button.getAttribute('aria-pressed') !== 'true');
   });
 });
+
+// "select all" in a zone header toggles every table in that zone panel.
+// Skips a table already carrying a booking (data-booked) — still pickable by
+// hand, just not swept in blind by the bulk action.
+document.querySelectorAll('.reszone-all').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var panel = btn.closest('.zpanel');
+    var tables = Array.from(panel.querySelectorAll('.restbl')).filter(function (b) {
+      return !b.dataset.booked;
+    });
+    var allSelected = tables.length > 0 && tables.every(function (b) {
+      return b.getAttribute('aria-pressed') === 'true';
+    });
+    tables.forEach(function (b) { setTableSelected(b, !allSelected); });
+    btn.textContent = allSelected ? 'select all' : 'clear';
+  });
+});
+
+// Floor tabs on the picker — show one floor's zones at a time instead of
+// every floor stacked. A tab switch never touches which tables are already
+// selected (they stay selected even while their floor is hidden).
+(function () {
+  const tabs = Array.from(document.querySelectorAll('#resFloorTabs [data-picker-floor]'));
+  if (!tabs.length) return;
+  const panels = Array.from(document.querySelectorAll('[data-picker-floor-panel]'));
+  function show(floorId) {
+    panels.forEach(function (p) { p.hidden = p.dataset.pickerFloorPanel !== floorId; });
+    tabs.forEach(function (t) { t.classList.toggle('on', t.dataset.pickerFloor === floorId); });
+  }
+  tabs.forEach(function (tab) {
+    tab.addEventListener('click', function () { show(tab.dataset.pickerFloor); });
+  });
+  show(tabs[0].dataset.pickerFloor);   // first floor active by default, same as the server render
+})();
 </script>
 {% endblock %}
