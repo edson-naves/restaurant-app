@@ -235,6 +235,25 @@ def test_status_icon_is_pinned_to_the_card_not_floated_inside_dot_n():
     check("float" not in block, "no leftover float rule that could re-anchor the icon inconsistently")
 
 
+def test_map_view_has_its_own_icon_and_retire_button_spacing():
+    """Map's card is much smaller (132px, tighter padding) than List's — the
+    icon and .tbl-del both need their own map-specific offsets, not List's
+    wider ones, or they collide in the smaller box. Confirmed with a real
+    browser session: the retire button was fully unclickable in Map view (a
+    real click at its own center hit a sibling element instead) until both
+    got dedicated, non-overlapping map offsets."""
+    css = open(
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "web", "static", "app.css"),
+        encoding="utf-8",
+    ).read()
+    check(".floor.as-map .tbl .n .sicon {" in css,
+          "Map view has its own status-icon position, not just List's")
+    start = css.index(".floor.as-map .tbl-del {")
+    block = css[start:css.index("}", start) + 1]
+    check("right: 28px" in block, "Map view's retire button is shifted clear of Map's icon spot (right: 6px)")
+
+
 if __name__ == "__main__":
     for fn in (
         test_legend_offers_all_seven_states_with_real_counts,
@@ -244,6 +263,7 @@ if __name__ == "__main__":
         test_zpanel_grid_does_not_stretch_cards_to_match_tallest_row_neighbour,
         test_card_title_row_reserves_room_for_the_corner_retire_button,
         test_status_icon_is_pinned_to_the_card_not_floated_inside_dot_n,
+        test_map_view_has_its_own_icon_and_retire_button_spacing,
     ):
         print(f"- {fn.__name__}")
         fn()

@@ -538,7 +538,14 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .floor.as-map .tbl .meta { font-size: 11px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .floor.as-map .tbl .tot { margin-top: 4px; }
-.floor.as-map .tbl-del { top: 6px; right: 6px; width: 22px; height: 22px; }
+/* Map's card is much smaller (132px, tighter padding) than the List one —
+   the icon and the retire button both need tighter, map-specific spots so
+   they still land clear of each other instead of inheriting List's wider
+   offsets and overlapping in the smaller box (confirmed with a real
+   session: the retire button was unclickable in Map view, a real click at
+   its own centre landed on .meta behind it instead). */
+.floor.as-map .tbl .n .sicon { top: 6px; right: 6px; }
+.floor.as-map .tbl-del { top: 4px; right: 28px; width: 20px; height: 20px; }
 .floor.as-map .tbl.unsaved { outline: 2px solid var(--occupied); }
 
 /* Zone rectangles — behind the cards, only in map mode. */
