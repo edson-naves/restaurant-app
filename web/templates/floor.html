@@ -5,6 +5,19 @@
    prototype used for this same reason, never carried over when Map/Arrange
    was ported here. #}
 {% block wrap_extra %}wrap-wide{% endblock %}
+{# Status icons replace the words on the cards to save room: border colour is
+   WHO (the covering waiter), icon is WHAT (the table's operational state).
+   Ported from the old feat/floor-map prototype's own approach — no chef-hat
+   emoji exists, so "preparing" uses a small inline SVG that inherits the
+   surrounding text colour (the prototype hardcoded it white, invisible on a
+   light card; fixed to currentColor here). #}
+{% set CHEF_SVG = '<svg class="chef" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 14.5h10V18a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1v-3.5z"/><path d="M7 14.5a3.2 3.2 0 0 1-.7-6.35 3.5 3.5 0 0 1 6.2-2.6 3.5 3.5 0 0 1 5 2.6 3.2 3.2 0 0 1-.5 6.35"/><path d="M10 15v3.5M14 15v3.5"/></svg>' %}
+{% set STATUS_ICON = {'free': '🪑', 'seated': '🙋', 'occupied': CHEF_SVG,
+                      'ready_serve': '🔔', 'served': '✅', 'ready_to_pay': '💳',
+                      'reserved': '📅'} %}
+{% set STATUS_LABEL = {'free': 'free', 'seated': 'seated', 'occupied': 'preparing',
+                       'ready_serve': 'ready to serve', 'served': 'served', 'ready_to_pay': 'ready to pay',
+                       'reserved': 'reserved'} %}
 {% block body %}
 <div class="between">
   <div>
@@ -20,19 +33,32 @@
       <button type="button" class="btn sm" id="findClear" hidden>Clear</button>
     </div>
     <div class="legend">
-      {# Buttons, not labels: clicking a status filters the plan to it. Counts are
-         kept current for the shown scope by the script. #}
-      <button type="button" class="legend-btn" data-status="free">
-        <i class="dot free"></i>Free <span data-count="free">{{ counts.free }}</span>
+      {# Buttons, not labels: clicking a status filters the plan to it. Counts
+         come straight from the backend's own tally (app/routers/sales.py) —
+         already computed for all 7 states, just not all rendered here until
+         now — and are re-derived for the visible scope by the script below.
+         Each state gets its own filter/count (no more folding seated/
+         preparing/ready-to-serve/served into one "occupied" bucket). #}
+      <button type="button" class="legend-btn" data-status="free" title="Empty tables">
+        <span class="sicon">🪑</span>Free <span data-count="free">{{ counts.free }}</span>
       </button>
-      <button type="button" class="legend-btn" data-status="occupied">
-        <i class="dot occupied"></i>Occupied <span data-count="occupied">{{ counts.occupied }}</span>
+      <button type="button" class="legend-btn" data-status="seated" title="Guests seated, no waiter yet">
+        <span class="sicon">🙋</span>Seated <span data-count="seated">{{ counts.seated }}</span>
       </button>
-      <button type="button" class="legend-btn" data-status="ready_to_pay">
-        <i class="dot ready_to_pay"></i>Ready to pay <span data-count="ready_to_pay">{{ counts.ready }}</span>
+      <button type="button" class="legend-btn" data-status="occupied" title="Order in — kitchen preparing">
+        <span class="sicon">{{ CHEF_SVG|safe }}</span>Preparing <span data-count="occupied">{{ counts.occupied }}</span>
+      </button>
+      <button type="button" class="legend-btn" data-status="ready_serve" title="Food up — run it to the table">
+        <span class="sicon">🔔</span>Ready to serve <span data-count="ready_serve">{{ counts.ready_serve }}</span>
+      </button>
+      <button type="button" class="legend-btn" data-status="served" title="Delivered — guests dining">
+        <span class="sicon">✅</span>Served <span data-count="served">{{ counts.served }}</span>
+      </button>
+      <button type="button" class="legend-btn" data-status="ready_to_pay" title="Ready to pay">
+        <span class="sicon">💳</span>Ready to pay <span data-count="ready_to_pay">{{ counts.ready }}</span>
       </button>
       <button type="button" class="legend-btn" data-status="reserved" title="Held for a booking — seat from the table">
-        <i class="dot reserved"></i>Reserved <span data-count="reserved">{{ counts.reserved }}</span>
+        <span class="sicon">📅</span>Reserved <span data-count="reserved">{{ counts.reserved }}</span>
       </button>
       {% if delivery_pending %}<span>· <a href="/delivery">{{ delivery_pending }} delivery in queue</a></span>{% endif %}
     </div>
@@ -154,16 +180,28 @@
          data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
          data-waiter="{{ c.waiter_id or '' }}"
          style="border-left-color: {{ bc }}; --x: {{ (mx / 10)|round(2) }}%; --y: {{ (my / 10)|round(2) }}%; --wc: {{ bc }}"
+         title="Table {{ c.table.number }}{% if c.waiter %} · {{ c.waiter }}{% else %} · unclaimed{% endif %}"
          href="/orders/{{ c.order.id }}">
-        <span class="n">Table {{ c.table.number }}</span>
-        <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes|duration }}</span>
+        {# One status icon (no words) carries the state; border colour is WHO
+           (waiter), this icon is WHAT. On "ready to serve" it also shows how
+           many plates are up to run — the same information the old
+           ready-serve pill and the disp_status pill used to spell out in
+           separate rows, now folded into the one icon so a simple card
+           (nothing cooking, nothing due) doesn't carry rows it doesn't need. #}
+        <span class="n">Table {{ c.table.number }}
+          <span class="sicon{{ ' sicon-run' if c.disp_status == 'ready_serve' }}"
+                title="{{ STATUS_LABEL[c.disp_status] }}{% if c.disp_status == 'ready_serve' %} — {{ c.ready_count }} up, run to the table{% endif %}"
+          >{{ STATUS_ICON[c.disp_status]|safe }}{% if c.disp_status == 'ready_serve' %} {{ c.ready_count }}{% endif %}</span></span>
+        <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes|duration }}{% if c.disp_status == 'seated' %} waiting{% endif %}</span>
         {% if c.reservation %}
         {# This occupied table is held for an incoming booking — turn it in time. #}
         <span class="res-due" title="Reserved — {{ c.reservation.guest_name }} · {{ c.reservation.party_size }} guests at {{ c.reservation.at.strftime('%H:%M') }} — turn this table">📅 due {{ c.reservation.at.strftime('%H:%M') }}</span>
         {% endif %}
         {% if c.stations %}
         {# Per-station readiness of what's fired — the detail behind the card's
-           aggregate status (hover a chip for the station name + count). #}
+           aggregate status (hover a chip for the station name + count). Only
+           row that appears when there's something to say — an empty order
+           carries no stations row at all. #}
         <span class="tbl-stations">
           {% for s in c.stations %}
           <span class="tst {{ 'rdy' if s.ready else 'prep' }}" style="--sc: {{ s.station.swatch if s.station else '#f59e0b' }}"
@@ -171,23 +209,6 @@
           {% endfor %}
         </span>
         {% endif %}
-        <span class="meta">{{ c.waiter or '—' }}</span>
-        {# Food that's plated and waiting — the waiter's run cue. Shown whenever
-           any item is up, even while the rest of the order is still cooking, so
-           partial readiness isn't hidden behind the aggregate status below. #}
-        {% if c.ready_count %}
-        <span class="pill ready-serve" title="{{ c.ready_count }} item{{ '' if c.ready_count == 1 else 's' }} up — run to the table">🔔 {{ c.ready_count }} ready to serve</span>
-        {% endif %}
-        {# Cooking stage as a badge; the card colour still carries the table
-           status (occupied / ready to pay). Preparing jumps to the kitchen;
-           Served (and the table pill) stay on the order. Full readiness is
-           covered by the run cue above, so no separate "ready" pill. #}
-        {% if c.order.status == 'preparing' %}
-        <span class="pill os-preparing os-jump" onclick="event.preventDefault();event.stopPropagation();window.location='/kitchen';" title="Go to the kitchen display">{{ c.order.status|ostatus }}</span>
-        {% elif c.order.status == 'served' %}
-        <span class="pill os-served">{{ c.order.status|ostatus }}</span>
-        {% endif %}
-        <span class="pill {{ c.disp_status }}">{{ c.disp_status.replace('_',' ') }}</span>
         <span class="tot">${{ c.total_cents|money }}</span>
       </a>
     {% else %}
@@ -197,15 +218,33 @@
          data-mine="{{ '1' if c.table.current_waiter_id == staff.id else '' }}"
          data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
          style="border-left-color: {{ bc }}; --x: {{ (mx / 10)|round(2) }}%; --y: {{ (my / 10)|round(2) }}%; --wc: {{ bc }}">
+        {% if c.reservation %}
+        {# A held table: booking incoming. Tap to seat the guest straight from
+           the map, or release the hold as a no-show — no need for the
+           reservations page. Name + party stay off the card face (they'd be
+           the tallest row on the card for no operational reason) — shown on
+           hover (title) instead, same as the old prototype's own choice. #}
+        <summary style="cursor:pointer;list-style:none" title="Reserved — {{ c.reservation.guest_name }} · {{ c.reservation.party_size }} guests · {{ c.reservation.at.strftime('%H:%M') }}">
+          <span class="n">Table {{ c.table.number }}
+            <span class="sicon">{{ STATUS_ICON['reserved']|safe }}</span></span><br>
+          <span class="meta">📅 {{ c.reservation.at.strftime('%H:%M') }}{% if c.reservation.tables|length > 1 %} · {{ c.reservation.tables|length }} tables{% endif %}</span>
+        </summary>
+        {% if can('reservations') %}
+        <form method="post" action="/reservations/{{ c.reservation.id }}/seat-here" style="margin-top:10px">
+          <button class="btn primary sm" style="width:100%">Seat party of {{ c.reservation.party_size }}</button>
+        </form>
+        <form method="post" action="/reservations/{{ c.reservation.id }}/no-show" style="margin-top:6px">
+          <input type="hidden" name="next" value="/?floor={{ sec_floor_id }}">
+          <button class="btn sm" style="width:100%">No-show · release table</button>
+        </form>
+        {% else %}
+          <p class="meta" style="margin-top:8px">Held for {{ c.reservation.guest_name }}.</p>
+        {% endif %}
+        {% else %}
         <summary style="cursor:pointer;list-style:none">
-          <span class="n">Table {{ c.table.number }}</span><br>
+          <span class="n">Table {{ c.table.number }}
+            <span class="sicon" title="{{ STATUS_LABEL[c.disp_status] }}">{{ STATUS_ICON[c.disp_status]|safe }}</span></span><br>
           <span class="meta">{{ c.table.zone }} · seats {{ c.table.capacity }}</span><br>
-          {% if c.waiter %}<span class="meta">{{ c.waiter }}</span><br>{% endif %}
-          {% if c.reservation %}
-          <span class="pill reserved">📅 {{ c.reservation.guest_name }} · {{ c.reservation.at.strftime('%H:%M') }}</span>
-          {% else %}
-          <span class="pill free">free</span>
-          {% endif %}
           {% if can('settings') %}
           {# Trash on the card corner: click, confirm, retired. Stops the click
              from also toggling the card open. Nothing is deleted — the table is
@@ -217,14 +256,6 @@
           {% endif %}
         </summary>
         {% if can('orders.manage') %}
-        {% if c.reservation %}
-        {# Held for an incoming booking — one tap seats the party that's
-           actually arriving, straight onto this table, no re-picking. #}
-        <form method="post" action="/reservations/{{ c.reservation.id }}/seat-here" style="margin-top:10px">
-          <button class="btn primary sm" style="width:100%">Seat {{ c.reservation.guest_name }} here</button>
-        </form>
-        <p class="meta" style="margin-top:6px">Or open for a walk-in instead:</p>
-        {% endif %}
         <form method="post" action="/tables/{{ c.table.id }}/open" style="margin-top:10px">
           <div class="field">
             <label>Guests</label>
@@ -251,6 +282,7 @@
         </form>
         {% else %}
           <p class="meta" style="margin-top:8px">No permission to open tables.</p>
+        {% endif %}
         {% endif %}
         {% if can('settings') %}
         <form id="del-{{ c.table.id }}" method="post" action="/tables/{{ c.table.id }}/remove" hidden></form>
@@ -406,18 +438,16 @@
   }
   if (addFloor) addFloor.addEventListener('change', fillZones);
 
-  // "Occupied" is a bucket, not one raw disp_status: seated / ready_serve /
-  // served are all still an occupied table underneath, just with a finer badge
-  // on the card. The legend only offers Free / Occupied / Ready to pay /
-  // Reserved, so those three collapse into the one filter/count.
-  const OCCUPIED_GROUP = ['occupied', 'seated', 'ready_serve', 'served'];
-
+  // Each status button is its own literal disp_status filter/count now — no
+  // more folding seated/preparing/ready-to-serve/served into one "occupied"
+  // bucket, so the legend can offer all 7 states individually.
   function apply() {
     const searching = parse(box.value).length > 0;
     // A text search or a zone pick reaches across floors; otherwise the active
     // floor tab scopes the view.
     const floorFree = searching || zoneFilter !== null;
-    const avail = { free: 0, occupied: 0, ready_to_pay: 0, reserved: 0 };
+    const avail = {};
+    statusBtns.forEach(function (b) { avail[b.dataset.status] = 0; });
     let shown = 0;
 
     cards.forEach(function (card) {
@@ -430,10 +460,8 @@
       const mineOk = !mineFilter || card.dataset.mine === '1' || card.dataset.status === 'reserved';
       const readyOk = !readyFilter || card.dataset.ready === '1';
       const scopeOk = textOk && zoneOk && waiterOk && floorOk && mineOk && readyOk;   // everything but status
-      const bucket = OCCUPIED_GROUP.indexOf(card.dataset.status) !== -1 ? 'occupied' : card.dataset.status;
-      if (scopeOk && avail.hasOwnProperty(bucket)) avail[bucket]++;
-      const statusOk = !statusFilter || card.dataset.status === statusFilter ||
-        (statusFilter === 'occupied' && OCCUPIED_GROUP.indexOf(card.dataset.status) !== -1);
+      if (scopeOk && avail.hasOwnProperty(card.dataset.status)) avail[card.dataset.status]++;
+      const statusOk = !statusFilter || card.dataset.status === statusFilter;
       const hit = scopeOk && statusOk;
       card.hidden = !hit;
       if (hit) shown++;

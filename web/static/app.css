@@ -451,10 +451,6 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 /* ---------- floor plan (4.1.1) ---------- */
 .legend { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
-.dot.free { background: var(--free); }
-.dot.occupied { background: var(--occupied); }
-.dot.ready_to_pay { background: var(--ready); }
-.dot.reserved { background: var(--reserved); }
 
 /* Menu admin: item photo thumbnail + upload/remove controls. */
 .menu-thumb {
@@ -481,6 +477,11 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .zp-meta { color: var(--muted); font-size: 12px; }
 .zpanel-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px;
+  /* Grid's default is to stretch every card in a row to match its tallest
+     neighbour — exactly the "every card is as tall as the busiest one"
+     problem the compact/adaptive card redesign exists to avoid. Each card
+     sizes to its own content (min-height still sets a floor) instead. */
+  align-items: start;
 }
 /* Legend bar: zone keys on the left, the waiter key pushed to the right. */
 .legend-bar { align-items: center; }
@@ -616,9 +617,25 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   background: color-mix(in srgb, var(--warn) 15%, transparent);
   border-radius: 8px; padding: 1px 6px; align-self: flex-start;
 }
-.tbl .n { font-weight: 700; font-size: 16px; }
+/* Room for the corner retire button (.tbl-del, absolutely positioned over
+   this same corner on a free table) so the floated status icon never sits
+   underneath it — a pre-existing collision in both this card layout and the
+   old prototype's own (identical .tbl-del position), only ever visible once
+   a status icon was added to this same corner. */
+.tbl .n { font-weight: 700; font-size: 16px; padding-right: 24px; }
 .tbl .meta { color: var(--muted); font-size: 12px; }
 .tbl .tot { margin-top: auto; font-weight: 700; font-variant-numeric: tabular-nums; }
+/* Status glyphs (replace the words on cards): border colour says WHO (the
+   covering waiter), this icon says WHAT (the table's operational state) —
+   the two must never be confused for one another. */
+.sicon { font-size: 1.05em; line-height: 1; }
+.tbl .n .sicon { float: right; margin-left: 6px; }
+.legend-btn .sicon { margin-right: 5px; font-size: 1em; }
+.sicon svg.chef { width: 1.15em; height: 1.15em; vertical-align: -0.22em; display: inline-block; }
+/* "Ready to serve" is the actionable one — the bell + plate count reads as a
+   small red run-cue so it stands out from the calmer states. */
+.tbl .n .sicon-run { color: #dc2626; font-weight: 800;
+  background: rgba(239, 68, 68, .16); border-radius: 8px; padding: 0 5px; }
 
 /* ---------- kitchen (4.1.3) ---------- */
 .tickets { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
