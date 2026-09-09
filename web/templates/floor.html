@@ -48,6 +48,10 @@
   {% endfor %}
   {% endif %}
   <button type="button" id="mineTab" class="subtab-btn" title="Only tables assigned to you, in service">👤 My tables</button>
+  <button type="button" id="viewToggle" class="subtab-btn" title="Switch between the map and the list" style="margin-left:auto">🗺 Map</button>
+  {% if can('settings') %}
+  <button type="button" id="arrangeToggle" class="subtab-btn" title="Drag tables and zones to match the real room; changes save automatically">✏️ Arrange</button>
+  {% endif %}
 </nav>
 
 <p class="empty" id="findNone" hidden>No table matches that.</p>
@@ -88,6 +92,24 @@
   {% endif %}
 
 <div class="floor">
+  {# In map mode this becomes the large scrollable plane the cards are
+     positioned on (per-mille of the plane, not the viewport). In list mode
+     it is display:contents, so the cards fall straight into the zone panels
+     below exactly as before — same cards, same data, just laid out
+     differently depending on which view is active. #}
+  <div class="map-plane">
+  {# Zone rectangles for the spatial (map) view — drawn behind the cards at
+     their real floor-plan geometry. Hidden entirely in the list view.
+     Already computed server-side (sec.map_zones), just never rendered
+     until now. #}
+  {% for z in sec.map_zones %}
+  <div class="fzrect" data-id="{{ z.id }}"
+       data-x="{{ z.pos_x }}" data-y="{{ z.pos_y }}" data-w="{{ z.width }}" data-h="{{ z.height }}"
+       style="--fx: {{ (z.pos_x / 10)|round(2) }}%; --fy: {{ (z.pos_y / 10)|round(2) }}%; --fw: {{ (z.width / 10)|round(2) }}%; --fh: {{ (z.height / 10)|round(2) }}%; --zc: {{ z.swatch }}">
+    <span class="fzrect-name">{{ z.name }}</span>
+    {% if can('settings') %}<span class="fzrect-handle" title="Drag to resize — repositions this zone's tables with it"></span>{% endif %}
+  </div>
+  {% endfor %}
   {% for zg in sec.zone_groups %}
   <div class="zpanel" data-zone-id="{{ zg.zone.id if zg.zone else '' }}">
     <div class="zpanel-head">
@@ -111,14 +133,21 @@
     {# Border colour: reserved = calm blue (a booking, nobody serving yet),
        otherwise the responsible waiter's colour (grey when unclaimed). #}
     {% set bc = '#3b82f6' if c.disp_status == 'reserved' else (c.waiter_color or '#8a9bb0') %}
+    {# Spatial (map) position — per-mille, the same map_x_per_mille/map_y_per_mille
+       the admin Floor Plan Builder writes. A table with no real position yet
+       (never dragged there) defaults to the plane's centre, same as the CSS
+       fallback below — nothing is written here, this is display only. #}
+    {% set mx = c.table.map_x_per_mille if c.table.map_x_per_mille is not none else 500 %}
+    {% set my = c.table.map_y_per_mille if c.table.map_y_per_mille is not none else 500 %}
     {% if c.order %}
       <a class="tbl {{ c.disp_status }}{{ ' due-soon' if (c.reservation and c.disp_status != 'reserved') }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
+         data-id="{{ c.table.id }}" data-x="{{ mx }}" data-y="{{ my }}"
          data-status="{{ c.disp_status }}" data-floor="{{ sec_floor_id }}"
          data-mine="{{ '1' if c.table.current_waiter_id == staff.id else '' }}"
          data-ready="{{ '1' if c.ready_count else '' }}"
          data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
          data-waiter="{{ c.waiter_id or '' }}"
-         style="border-left-color: {{ bc }}"
+         style="border-left-color: {{ bc }}; --x: {{ (mx / 10)|round(2) }}%; --y: {{ (my / 10)|round(2) }}%; --wc: {{ bc }}"
          href="/orders/{{ c.order.id }}">
         <span class="n">Table {{ c.table.number }}</span>
         <span class="meta">{{ c.table.zone }} · {{ c.guests }} guests · {{ c.minutes|duration }}</span>
@@ -157,10 +186,11 @@
       </a>
     {% else %}
       <details class="tbl {{ c.disp_status }}" data-find="{{ haystack }}" data-number="{{ c.table.number }}"
+         data-id="{{ c.table.id }}" data-x="{{ mx }}" data-y="{{ my }}"
          data-status="{{ c.disp_status }}" data-floor="{{ sec_floor_id }}"
          data-mine="{{ '1' if c.table.current_waiter_id == staff.id else '' }}"
          data-zone="{{ c.table.zone_ref.id if c.table.zone_ref else '' }}"
-         style="border-left-color: {{ bc }}">
+         style="border-left-color: {{ bc }}; --x: {{ (mx / 10)|round(2) }}%; --y: {{ (my / 10)|round(2) }}%; --wc: {{ bc }}">
         <summary style="cursor:pointer;list-style:none">
           <span class="n">Table {{ c.table.number }}</span><br>
           <span class="meta">{{ c.table.zone }} · seats {{ c.table.capacity }}</span><br>
@@ -225,6 +255,7 @@
     </div>
   </div>
   {% endfor %}
+  </div>
 </div>
 </section>
 {% endfor %}
@@ -263,6 +294,9 @@
 {% endblock %}
 
 {% block scripts %}
+{# Pure geometry (web/static/floor_bounds.js) — same module the admin Floor
+   Plan Builder uses, needed here by Arrange mode below. #}
+<script src="/static/floor_bounds.js?v={{ asset_v('floor_bounds.js') }}"></script>
 <script>
 (function () {
   const box = document.getElementById('tableFind');
@@ -537,12 +571,321 @@
   // the client and a reload would wipe them (mine/ready ride the URL hash).
   function idleView() {
     return document.visibilityState === 'visible' &&
+      !document.body.classList.contains('fp-editing') &&   // never reload mid-arrange
       !box.value.trim() && statusFilter === null && zoneFilter === null;
   }
   document.addEventListener('visibilitychange', function () {
     if (idleView()) location.reload();
   });
   setInterval(function () { if (idleView()) location.reload(); }, 30000);
+})();
+
+// Map / List toggle. The list and the map are the SAME cards — the map just
+// lays them out by their floor-plan position (.as-map). So switching is only
+// a class flip, the one filter script above still drives them, and the
+// choice sticks (localStorage, per browser).
+(function () {
+  const viewToggle = document.getElementById('viewToggle');
+  const floorWraps = Array.from(document.querySelectorAll('.floor'));
+  if (!floorWraps.length) return;
+
+  function storedView() {
+    try { return localStorage.getItem('rms-floor-view'); } catch (e) { return null; }
+  }
+  function storeView(v) {
+    try { localStorage.setItem('rms-floor-view', v); } catch (e) { /* private mode etc. */ }
+  }
+  let mapView = storedView() === 'map';
+
+  function applyView() {
+    floorWraps.forEach(function (el) { el.classList.toggle('as-map', mapView); });
+    if (viewToggle) {
+      viewToggle.textContent = mapView ? '📋 List' : '🗺 Map';
+      viewToggle.classList.toggle('on', mapView);
+    }
+    if (mapView) window.dispatchEvent(new CustomEvent('rms-floor-map-shown'));
+  }
+  if (viewToggle) viewToggle.addEventListener('click', function () {
+    mapView = !mapView;
+    storeView(mapView ? 'map' : 'list');
+    applyView();
+  });
+  applyView();
+})();
+
+// Arrange mode (Owner/settings only): drag tables and drag/resize zones right
+// on the operational map. Pointer-ownership, visible-bounds and hit-test
+// logic are the SAME pattern already reviewed and fixed in the admin Floor
+// Plan Builder (web/templates/admin_tables.html) — same pure geometry module
+// (floor_bounds.js), same atomic endpoints (POST /admin/tables/map-layout,
+// POST /admin/zones/{id}/move-layout). Deliberately NOT a port of the old
+// feat/floor-map branch's own Arrange script: that one clamped a table's
+// centre to a raw [0,100]% range with no allowance for the card's own
+// rendered size (the exact bug class table-visible-bounds fixed elsewhere)
+// and had no pointerId ownership check (the exact bug class the admin
+// builder's own review found and fixed). Off by default — a plain tap still
+// opens the order / seats the table.
+(function () {
+  const toggle = document.getElementById('arrangeToggle');
+  const planes = Array.from(document.querySelectorAll('.map-plane'));
+  const viewToggle = document.getElementById('viewToggle');
+  if (!toggle || !planes.length || !window.FloorTableBounds) return;
+
+  function post(url, data) {
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(data),
+    });
+  }
+  function pct(v) { return (v / 10) + '%'; }
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+  function mark(el, ok, reason) {
+    el.classList.toggle('unsaved', !ok);
+    el.title = ok ? '' : (reason || 'Save failed — drag again to retry');
+  }
+  function chipBounds(el, planeRect) {
+    const r = el.getBoundingClientRect();
+    return window.FloorTableBounds.visibleBounds(planeRect.width, planeRect.height, r.width, r.height);
+  }
+  // The visual (clamped) position a card's persisted data-x/data-y maps to —
+  // a drag must start from THIS, not the raw value (review finding on the
+  // admin builder: starting from raw re-opens a dead zone at the edges).
+  function visualOrigin(el, bounds) {
+    return {
+      x: clamp(parseFloat(el.dataset.x), bounds.minX, bounds.maxX),
+      y: clamp(parseFloat(el.dataset.y), bounds.minY, bounds.maxY),
+    };
+  }
+  function positionCard(el, planeRect) {
+    const b = chipBounds(el, planeRect);
+    const o = visualOrigin(el, b);
+    el.style.setProperty('--x', pct(o.x));
+    el.style.setProperty('--y', pct(o.y));
+  }
+  // Re-clamp every table's visual position against the plane's real size —
+  // needed once entering map view (the plane has no box at all while
+  // display:contents in list view, so nothing could be measured before now)
+  // and again on resize. Never touches data-x/data-y (persisted) or the
+  // server, and skips whichever card is actively mid-drag.
+  function positionAllCards() {
+    planes.forEach(function (plane) {
+      const r = plane.getBoundingClientRect();
+      if (!(r.width > 0) || !(r.height > 0)) return;   // still in list view, nothing to do
+      Array.from(plane.querySelectorAll('.tbl[data-id]')).forEach(function (c) {
+        if (c.classList.contains('dragging')) return;
+        positionCard(c, r);
+      });
+    });
+  }
+  window.addEventListener('rms-floor-map-shown', positionAllCards);
+  if (typeof ResizeObserver !== 'undefined') {
+    planes.forEach(function (plane) {
+      new ResizeObserver(function () { positionAllCards(); }).observe(plane);
+    });
+  }
+  // In case the view was already "map" on load (remembered from a previous
+  // visit), the shown-event above already fired before this listener existed
+  // — catch that same case once, on the next frame.
+  requestAnimationFrame(positionAllCards);
+
+  function tablesOfZone(plane, zoneId) {
+    return Array.from(plane.querySelectorAll('.tbl[data-id]'))
+      .filter(function (c) { return c.dataset.zone === zoneId; });
+  }
+
+  let editing = false;
+  let drag = null;
+
+  planes.forEach(function (plane) {
+    plane.addEventListener('pointerdown', function (e) {
+      if (!editing) return;
+      if (drag) return;   // one active gesture at a time — see admin builder's own note
+      const handle = e.target.closest('.fzrect-handle');
+      const card = !handle && e.target.closest('.tbl[data-id]');
+      const zoneEl = !handle && !card && e.target.closest('.fzrect[data-id]');
+      const r = plane.getBoundingClientRect();
+
+      if (card) {
+        const bounds = chipBounds(card, r);
+        const orig = visualOrigin(card, bounds);
+        drag = {
+          kind: 'table', el: card, planeRect: r, pointerId: e.pointerId,
+          origX: orig.x, origY: orig.y, origZone: card.dataset.zone,
+          startX: e.clientX, startY: e.clientY, bounds: bounds,
+        };
+        card.setPointerCapture(e.pointerId);
+        card.classList.add('dragging');
+        e.preventDefault();
+      } else if (handle) {
+        const z = handle.closest('.fzrect');
+        drag = {
+          kind: 'resize', el: z, planeRect: r, pointerId: e.pointerId,
+          origX: parseFloat(z.dataset.x), origY: parseFloat(z.dataset.y),
+          origW: parseFloat(z.dataset.w), origH: parseFloat(z.dataset.h),
+          startX: e.clientX, startY: e.clientY,
+          tables: tablesOfZone(plane, z.dataset.id).map(function (c) {
+            const b = chipBounds(c, r);
+            const o = visualOrigin(c, b);
+            return { el: c, x: o.x, y: o.y, bounds: b };
+          }),
+        };
+        z.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      } else if (zoneEl) {
+        drag = {
+          kind: 'move', el: zoneEl, planeRect: r, pointerId: e.pointerId,
+          origX: parseFloat(zoneEl.dataset.x), origY: parseFloat(zoneEl.dataset.y),
+          origW: parseFloat(zoneEl.dataset.w), origH: parseFloat(zoneEl.dataset.h),
+          startX: e.clientX, startY: e.clientY,
+          tables: tablesOfZone(plane, zoneEl.dataset.id).map(function (c) {
+            const b = chipBounds(c, r);
+            const o = visualOrigin(c, b);
+            return { el: c, x: o.x, y: o.y, bounds: b };
+          }),
+        };
+        zoneEl.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      }
+    });
+
+    plane.addEventListener('pointermove', function (e) {
+      if (!drag) return;
+      if (e.pointerId !== drag.pointerId) return;   // not the owning pointer
+      const dxPm = (e.clientX - drag.startX) / drag.planeRect.width * 1000;
+      const dyPm = (e.clientY - drag.startY) / drag.planeRect.height * 1000;
+
+      if (drag.kind === 'table') {
+        drag.curX = clamp(drag.origX + dxPm, drag.bounds.minX, drag.bounds.maxX);
+        drag.curY = clamp(drag.origY + dyPm, drag.bounds.minY, drag.bounds.maxY);
+        drag.el.style.setProperty('--x', pct(drag.curX));
+        drag.el.style.setProperty('--y', pct(drag.curY));
+      } else if (drag.kind === 'move') {
+        // The zone rectangle itself keeps top-left semantics — no centring
+        // correction needed, its own box already describes its full extent.
+        const x = clamp(drag.origX + dxPm, 0, 1000 - drag.origW);
+        const y = clamp(drag.origY + dyPm, 0, 1000 - drag.origH);
+        const realDx = x - drag.origX, realDy = y - drag.origY;
+        drag.curX = x; drag.curY = y;
+        drag.el.style.setProperty('--fx', pct(x));
+        drag.el.style.setProperty('--fy', pct(y));
+        drag.tables.forEach(function (t) {
+          t.curX = clamp(t.x + realDx, t.bounds.minX, t.bounds.maxX);
+          t.curY = clamp(t.y + realDy, t.bounds.minY, t.bounds.maxY);
+          t.el.style.setProperty('--x', pct(t.curX));
+          t.el.style.setProperty('--y', pct(t.curY));
+        });
+      } else if (drag.kind === 'resize') {
+        const w = clamp(drag.origW + dxPm, 60, 1000 - drag.origX);
+        const h = clamp(drag.origH + dyPm, 60, 1000 - drag.origY);
+        drag.curW = w; drag.curH = h;
+        drag.el.style.setProperty('--fw', pct(w));
+        drag.el.style.setProperty('--fh', pct(h));
+        const sx = w / drag.origW, sy = h / drag.origH;
+        drag.tables.forEach(function (t) {
+          t.curX = clamp(drag.origX + (t.x - drag.origX) * sx, t.bounds.minX, t.bounds.maxX);
+          t.curY = clamp(drag.origY + (t.y - drag.origY) * sy, t.bounds.minY, t.bounds.maxY);
+          t.el.style.setProperty('--x', pct(t.curX));
+          t.el.style.setProperty('--y', pct(t.curY));
+        });
+      }
+    });
+
+    plane.addEventListener('pointerup', function (e) {
+      if (!drag) return;
+      if (e.pointerId !== drag.pointerId) return;
+      const d = drag;
+      drag = null;
+
+      if (d.kind === 'table') {
+        d.el.classList.remove('dragging');
+        const x = Math.round(d.curX !== undefined ? d.curX : d.origX);
+        const y = Math.round(d.curY !== undefined ? d.curY : d.origY);
+        // Hit-test the drop point against the zone rectangles — dropping
+        // inside a different zone re-assigns the table to it. Topmost-first
+        // (elementsFromPoint), same fix the admin builder's own review
+        // required, not a hand-rolled geometric containment check.
+        const cr = d.el.getBoundingClientRect();
+        const cx = cr.left + cr.width / 2, cy = cr.top + cr.height / 2;
+        const topZone = document.elementsFromPoint(cx, cy)
+          .find(function (el) { return el.classList.contains('fzrect'); });
+        const newZoneId = topZone ? topZone.dataset.id : d.origZone;
+        let entry = d.el.dataset.id + ':' + x + ':' + y;
+        if (newZoneId && newZoneId !== d.origZone) entry += '::' + newZoneId;
+        post('/admin/tables/map-layout', { tables: entry }).then(function (r) {
+          mark(d.el, r.ok);
+          if (r.ok) {
+            d.el.dataset.x = x; d.el.dataset.y = y;
+            if (newZoneId !== d.origZone) d.el.dataset.zone = newZoneId;
+          }
+        }).catch(function () { mark(d.el, false); });
+        return;
+      }
+
+      // move / resize: the zone and every table it carries save atomically.
+      const x = Math.round(d.curX !== undefined ? d.curX : d.origX);
+      const y = Math.round(d.curY !== undefined ? d.curY : d.origY);
+      const w = Math.round(d.curW !== undefined ? d.curW : d.origW);
+      const h = Math.round(d.curH !== undefined ? d.curH : d.origH);
+      const entries = d.tables.map(function (t) {
+        const tx = Math.round(t.curX !== undefined ? t.curX : t.x);
+        const ty = Math.round(t.curY !== undefined ? t.curY : t.y);
+        return t.el.dataset.id + ':' + tx + ':' + ty;
+      }).join(',');
+      post('/admin/zones/' + d.el.dataset.id + '/move-layout', {
+        pos_x: x, pos_y: y, width: w, height: h, tables: entries,
+      }).then(function (r) {
+        mark(d.el, r.ok);
+        d.tables.forEach(function (t) { mark(t.el, r.ok); });
+        if (r.ok) {
+          d.el.dataset.x = x; d.el.dataset.y = y; d.el.dataset.w = w; d.el.dataset.h = h;
+          d.tables.forEach(function (t) {
+            t.el.dataset.x = Math.round(t.curX !== undefined ? t.curX : t.x);
+            t.el.dataset.y = Math.round(t.curY !== undefined ? t.curY : t.y);
+          });
+          d.el.classList.toggle('overlap-warn', r.headers.get('X-Zone-Overlap-Warning') === 'exact');
+        }
+      }).catch(function () {
+        mark(d.el, false);
+        d.tables.forEach(function (t) { mark(t.el, false); });
+      });
+    });
+
+    // A cancelled gesture (browser-initiated) must never autosave, and must
+    // never leave the next gesture stuck behind stale capture/drag state —
+    // same reasoning and same fix as the admin builder's own pointercancel
+    // handler. Only the pointer that opened this gesture may cancel it.
+    plane.addEventListener('pointercancel', function (e) {
+      if (!drag) return;
+      if (e.pointerId !== drag.pointerId) return;
+      const d = drag;
+      drag = null;
+      try { d.el.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
+      d.el.classList.remove('dragging');
+      mark(d.el, false, 'Move cancelled before saving — drag again to retry.');
+      if (d.tables) {
+        d.tables.forEach(function (t) {
+          mark(t.el, false, 'Move cancelled before saving — drag again to retry.');
+        });
+      }
+    });
+
+    // While arranging, a click must not open the order or toggle a free
+    // card's seat form.
+    plane.addEventListener('click', function (e) {
+      if (editing) { e.preventDefault(); e.stopPropagation(); }
+    }, true);
+  });
+
+  toggle.addEventListener('click', function () {
+    editing = !editing;
+    // Arranging only makes sense on the map — switch to it if we're in the list.
+    if (editing && !document.querySelector('.floor.as-map') && viewToggle) viewToggle.click();
+    document.querySelectorAll('.floor').forEach(function (f) { f.classList.toggle('editing', editing); });
+    document.body.classList.toggle('fp-editing', editing);   // pauses the idle auto-reload above
+    toggle.classList.toggle('on', editing);
+    toggle.textContent = editing ? '✏️ Arrange · on' : '✏️ Arrange';
+  });
 })();
 </script>
 {% endblock %}

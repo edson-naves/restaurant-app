@@ -496,6 +496,78 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 }
 .waiter-all { color: var(--muted); }
 
+/* Operational floor map (Map/Arrange) — the SAME cards as the list, laid out
+   by their real floor-plan position (map_x_per_mille/map_y_per_mille).
+   Switching to it is only adding .as-map to .floor; the cards keep their
+   look, just shrunk and pinned. Restored from the abandoned feat/floor-map
+   prototype (the visual design), with the drag mechanics rewritten to match
+   the admin Floor Plan Builder's already-reviewed pointer/bounds handling —
+   see the script in web/templates/floor.html for why. */
+.floor.as-map .zpanel, .floor.as-map .zpanel-grid { display: contents; }
+.floor.as-map .zpanel-head { display: none; }
+.floor.as-map {
+  display: block; position: relative; width: 100%;
+  height: min(82vh, 1040px); overflow: auto;       /* the whole floor area; scroll to reach it */
+  border: 1px solid var(--line); border-radius: var(--radius);
+  /* Not fully transparent — a 70%-opaque panel backing, so the map reads as
+     its own surface without fully hiding the page behind it. */
+  background: color-mix(in srgb, var(--panel) 70%, transparent);
+  touch-action: none;   /* pointer events drive drag/resize directly, not the OS */
+}
+/* Invisible in the list (cards fall straight into the zone-panel grid) and
+   becomes the positioning plane in map mode — the full floor area, so its
+   empty regions stay usable space you can drag zones into. */
+.map-plane { display: contents; }
+.floor.as-map .map-plane {
+  display: block; position: relative; width: max(100%, 1360px); height: 1120px;
+  background:
+    repeating-linear-gradient(0deg, transparent 0 39px, rgba(127,127,127,.05) 39px 40px),
+    repeating-linear-gradient(90deg, transparent 0 39px, rgba(127,127,127,.05) 39px 40px);
+}
+.floor.as-map .tbl {
+  position: absolute; left: var(--x, 50%); top: var(--y, 50%);
+  transform: translate(-50%, -50%);
+  width: 132px; min-height: 0; padding: 8px 10px; gap: 2px; z-index: 2;
+  box-shadow: 0 2px 9px rgba(0,0,0,.28);
+  border-color: var(--wc, var(--line)); border-left-color: var(--wc, var(--line)) !important;
+}
+.floor.as-map .tbl .n { font-size: 14px; }
+.floor.as-map .tbl:hover { z-index: 6; }
+.floor.as-map .tbl[open] { z-index: 7; }           /* an opened seat form on top */
+.floor.as-map .tbl .meta { font-size: 11px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.floor.as-map .tbl .tot { margin-top: 4px; }
+.floor.as-map .tbl-del { top: 6px; right: 6px; width: 22px; height: 22px; }
+.floor.as-map .tbl.unsaved { outline: 2px solid var(--occupied); }
+
+/* Zone rectangles — behind the cards, only in map mode. */
+.fzrect { display: none; }
+.floor.as-map .fzrect {
+  display: block; position: absolute; box-sizing: border-box;
+  left: var(--fx); top: var(--fy); width: var(--fw); height: var(--fh);
+  border: 2px dashed var(--zc); border-radius: 12px; pointer-events: none; z-index: 1;
+}
+.floor.as-map .fzrect::before { content: ""; position: absolute; inset: 0;
+  background: var(--zc); opacity: .06; border-radius: 10px; }
+.fzrect-name { position: absolute; top: 5px; left: 10px; font-size: 11px; font-weight: 700;
+  letter-spacing: .5px; text-transform: uppercase; color: var(--zc); }
+.floor.as-map .fzrect.unsaved { outline: 2px solid var(--occupied); }
+/* Advisory only — the move already saved (see .unsaved above for a real
+   failure). Flags a zone that now exactly overlaps another active zone. */
+.floor.as-map .fzrect.overlap-warn { outline: 2px dashed var(--accent); outline-offset: 2px; }
+
+/* Arrange mode: drag tables and drag/resize zones right on the operational
+   map. Off by default so a normal tap opens the order / seats the table. */
+.fzrect-handle { display: none; }
+.floor.as-map.editing .tbl { cursor: move; user-select: none; -webkit-user-select: none; }
+.floor.as-map.editing .tbl.dragging { z-index: 20; box-shadow: 0 12px 28px rgba(0,0,0,.5); }
+.floor.as-map.editing .fzrect { pointer-events: auto; cursor: move; }
+.floor.as-map.editing .fzrect-handle {
+  display: block; position: absolute; right: -8px; bottom: -8px; z-index: 3;
+  width: 17px; height: 17px; border-radius: 4px;
+  background: var(--zc); border: 2px solid var(--panel); cursor: nwse-resize;
+}
+
 /* Reservation table picker (4.1.5): small click-to-select cards inside the
    same .zpanel used on the Floor page, so the two screens read as one system. */
 .restbl-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(94px, 1fr)); gap: 8px; }
