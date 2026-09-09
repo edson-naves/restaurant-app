@@ -83,44 +83,15 @@
 </div>
 
 <div class="res-grid">
-  <!-- LEFT: reservations + booking form -->
+  {# Picker-first layout: the floor-map table picker is the primary, wide
+     column (what a host looks at most while on the phone with a guest);
+     the two compact forms (book / walk-in) live in the narrower side
+     column instead of stacking above the picker. Restored from the
+     abandoned feat/floor-map prototype's own arrangement — no functional
+     change, #bookform/#wlform keep their exact ids and fields either way,
+     so nothing that posts to them cares which column they render in. #}
+  <!-- LEFT: table picker + upcoming reservations -->
   <div>
-    <div class="card" id="book">
-      <div class="between" style="margin-bottom:14px">
-        <h2 style="margin:0">Book a reservation</h2>
-        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
-          <label class="tick" style="margin:0"><input form="bookform" type="checkbox" name="send_confirmation" checked> Send confirmation <span class="sub" style="font-weight:400;margin:0">(SMS)</span></label>
-          <button form="bookform" class="btn sm primary">Add reservation</button>
-        </div>
-      </div>
-      <form method="post" action="/reservations" id="bookform">
-        <div class="formline">
-          <div class="field" style="flex:2;min-width:150px;margin:0"><label>Guest name</label><input type="text" name="guest_name" placeholder="e.g. John Smith" required></div>
-          <div class="field" style="width:140px;margin:0">
-            <label>Party size</label>
-            <div class="qtystep">
-              <button type="button" class="qbtn" onclick="bump('res_party',-1)">−</button>
-              <input type="number" id="res_party" name="party_size" value="2" min="1" max="40">
-              <button type="button" class="qbtn" onclick="bump('res_party',1)">+</button>
-            </div>
-          </div>
-          <div class="field" style="width:160px;margin:0"><label>Date</label><input type="date" name="date" value="{{ today_str }}"></div>
-          <div class="field" style="width:160px;margin:0"><label>Time</label><input type="time" name="time" value="19:00"></div>
-        </div>
-        <div class="formline" style="margin-top:12px">
-          <div class="field" style="width:190px;margin:0"><label>Phone (optional)</label><input type="text" name="phone" placeholder="e.g. 604-123-4567"></div>
-          <div class="field" style="width:170px;margin:0">
-            <label>Table preference</label>
-            <select name="table_pref">
-              <option value="Any">Any</option>
-              {% for t in free_tables %}<option value="Table {{ t.number }}">Table {{ t.number }}</option>{% endfor %}
-            </select>
-          </div>
-          <div class="field" style="flex:1;min-width:180px;margin:0"><label>Notes (optional)</label><input type="text" name="notes" placeholder="e.g. window seat, birthday..."></div>
-        </div>
-      </form>
-    </div>
-
     {% if map_floors %}
     <div class="card" id="reservation-picker">
       <div class="between" style="margin-bottom:10px">
@@ -199,8 +170,54 @@
     </div>
   </div>
 
-  <!-- RIGHT: waitlist + add walk-in + at a glance -->
+  <!-- RIGHT: book a reservation + add walk-in + waitlist -->
   <div>
+    <div class="card" id="book">
+      <div class="between" style="margin-bottom:14px">
+        <h2 style="margin:0">Book a reservation</h2>
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+          <label class="tick" style="margin:0"><input form="bookform" type="checkbox" name="send_confirmation" checked> Send confirmation <span class="sub" style="font-weight:400;margin:0">(SMS)</span></label>
+          <button form="bookform" class="btn sm primary">Add reservation</button>
+        </div>
+      </div>
+      <form method="post" action="/reservations" id="bookform">
+        <div class="formline">
+          <div class="field" style="margin:0"><label>Guest name</label><input type="text" name="guest_name" placeholder="e.g. John Smith" required></div>
+        </div>
+        <div class="formline" style="margin-top:12px">
+          <div class="field" style="width:140px;margin:0">
+            <label>Party size</label>
+            <div class="qtystep">
+              <button type="button" class="qbtn" onclick="bump('res_party',-1)">−</button>
+              <input type="number" id="res_party" name="party_size" value="2" min="1" max="40">
+              <button type="button" class="qbtn" onclick="bump('res_party',1)">+</button>
+            </div>
+          </div>
+          <div class="field" style="flex:1;min-width:130px;margin:0"><label>Date</label><input type="date" name="date" value="{{ today_str }}"></div>
+        </div>
+        <div class="formline" style="margin-top:12px">
+          <div class="field" style="flex:1;min-width:130px;margin:0"><label>Time</label><input type="time" name="time" value="19:00"></div>
+          <div class="field" style="flex:1;min-width:150px;margin:0"><label>Phone (optional)</label><input type="text" name="phone" placeholder="e.g. 604-123-4567"></div>
+        </div>
+        <div class="formline" style="margin-top:12px">
+          <div class="field" style="margin:0">
+            {# In the picker-first layout the table list is read off the map
+               to the left, not re-picked from a dropdown here — this now
+               shows a live count instead of a preference select. Table
+               preference by name is still honoured server-side if a
+               manager types free text into notes; nothing about the
+               /reservations POST contract changed. #}
+            <label>Tables</label>
+            <input type="text" id="resTableSummary" readonly value="No tables — pick on the panels"
+                   style="background:var(--panel-2);cursor:default">
+          </div>
+        </div>
+        <div class="formline" style="margin-top:12px">
+          <div class="field" style="margin:0"><label>Notes (optional)</label><input type="text" name="notes" placeholder="e.g. window seat, birthday..."></div>
+        </div>
+      </form>
+    </div>
+
     <div class="card">
       <div class="between" style="margin-bottom:14px">
         <h2 style="margin:0">Add walk-in to waitlist</h2>
@@ -298,6 +315,14 @@ function setTableSelected(button, selected) {
   document.getElementById('selected-tables').textContent = count
     ? count + ' table' + (count === 1 ? '' : 's') + ' selected'
     : 'No tables selected';
+  var summary = document.getElementById('resTableSummary');
+  if (summary) {
+    var numbers = Array.from(document.querySelectorAll('.restbl.sel'))
+      .map(function (b) { return b.title.match(/Table (\S+)/)[1]; });
+    summary.value = numbers.length
+      ? 'Table' + (numbers.length === 1 ? '' : 's') + ' ' + numbers.join(', ')
+      : 'No tables — pick on the panels';
+  }
 }
 
 document.querySelectorAll('.restbl').forEach(function (button) {

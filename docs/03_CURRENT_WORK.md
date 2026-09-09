@@ -2319,13 +2319,23 @@ there; this block is markup/CSS/JS only. Verified interactively
 selects then clears a zone's tables with the count label updating
 correctly, zero console errors.
 
-**Deliberately not done in this pass (judged lower value for the time
-available, not forgotten):** the reservations page's left/right column
-content swap (picker primary, forms secondary) seen in the old branch's
-screenshot — the page is already two columns today, this would be a
-pure rearrangement of which card sits where, not a new capability, and
-carried more layout-regression risk for comparatively less value than
-the two items actually done.
+**Block 4 — small, UI-only:**
+Reservations page left/right column swap (picker primary, forms
+secondary), matching the old branch's screenshot: the table picker is
+now the first thing in the LEFT column; the "Book a reservation" card
+moved into the RIGHT column, directly above "Add walk-in to waitlist",
+with its fields regrouped (guest name full-width; party size+date
+paired; time+phone paired). The old `<select name="table_pref">`
+dropdown is gone — table selection has come from the picker's hidden
+`table_ids` inputs since Block 3, and `table_pref` already defaulted to
+`""` server-side (`app/routers/reservations.py`), so removing the
+`<select>` is not a breaking change. In its place, a readonly
+`#resTableSummary` field shows the live picker selection ("No tables —
+pick on the panels" / "Table 1" / "Tables 1, 2, ...") — wired directly
+into the existing `setTableSelected()` function so it never drifts from
+the picker's own state. Verified interactively (disposable SQLite,
+zero console errors): picker column renders left of the booking form,
+summary field updates on select and on deselect.
 
 **Tests — real execution, per block, re-confirmed together at the end:**
 ```text
@@ -2340,11 +2350,11 @@ tests/test_floor_spatial.py, tests/test_reservations_map.py,
     tests/test_floor_admin_ui.py, tests/test_floor_zone_overlap.py,
     tests/test_floor_map_coordinates.py, tests/test_migrate.py: all pass,
     re-run after each block and again at the end.
-git diff --check: clean, all three commits.
+git diff --check: clean, all four commits.
 ```
 
 **Risks, disclosed:**
-- Three commits, one review pass expected to cover all of them — by
+- Four commits, one review pass expected to cover all of them — by
   explicit user instruction, trading finer-grained review checkpoints for
   finishing more work inside a fixed time/token window. Block 2 (Arrange)
   is where the real risk concentrates; it got the most scrutiny (a real
@@ -2355,12 +2365,10 @@ git diff --check: clean, all three commits.
   content (stations strip, ready-to-serve pill, price) — dense cards may
   visually crowd; this matches the old branch's own design exactly and
   was not changed, but is untested against a very busy real card.
-- Reservations column layout intentionally left as today's (see above) —
-  flagged, not silently dropped.
 
 **This slice is IMPLEMENTED and self-tested. It is NOT reviewed, NOT
 integrated, NOT pushed, NOT deployed** — independent review of the full
-diff (all three commits) is the next step. `3c32968` remains the current,
+diff (all four commits) is the next step. `3c32968` remains the current,
 deployed, healthy state of `origin/main` and of production, unaffected by
 anything in this section.
 
