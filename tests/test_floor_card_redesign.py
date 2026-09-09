@@ -193,10 +193,11 @@ def test_zpanel_grid_does_not_stretch_cards_to_match_tallest_row_neighbour():
 
 
 def test_card_title_row_reserves_room_for_the_corner_retire_button():
-    """.tbl-del is absolutely positioned over the same top-right corner the
-    status icon floats into — without reserved space they visually overlap
-    (confirmed with a real browser session: the icon was fully hidden behind
-    the retire button on every free table an Owner could see)."""
+    """.tbl-del is absolutely positioned in the same top-right corner the
+    status icon occupies — without reserved space/an offset they visually
+    overlap (confirmed with a real browser session: the icon was fully
+    hidden behind the retire button on every free table an Owner could
+    see)."""
     css = open(
         os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                       "web", "static", "app.css"),
@@ -205,6 +206,33 @@ def test_card_title_row_reserves_room_for_the_corner_retire_button():
     start = css.index("\n.tbl .n {") + 1   # not the ".floor.as-map .tbl .n" suffix match
     line = css[start:css.index("}", start) + 1]
     check("padding-right" in line, "the card's title row reserves space so its status icon never sits under the retire button")
+    del_start = css.index("\n.tbl-del {") + 1
+    del_block = css[del_start:css.index("}", del_start) + 1]
+    check("right: 32px" in del_block or "right:32px" in del_block,
+          "the retire button is shifted clear of the icon's fixed spot (right:10px), not sharing it")
+
+
+def test_status_icon_is_pinned_to_the_card_not_floated_inside_dot_n():
+    """A `float:right` inside .n anchors to whichever block box actually
+    contains it — and .n sits at a different DOM depth in the two card
+    variants (a direct flex child of .tbl on an occupied card, nested
+    inside <summary> on a free/reserved one), so the SAME float rule landed
+    the icon at two different distances from the card's edge depending on
+    which variant rendered. Confirmed with a real browser session across
+    both variants side by side (37px vs 13px from the edge) before this
+    fix — reported by the user as icons "randomly distributed" across the
+    floor. Pinning the icon to .tbl itself (position:absolute, .tbl already
+    establishes the positioning context) makes it identical regardless of
+    which variant rendered it."""
+    css = open(
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                      "web", "static", "app.css"),
+        encoding="utf-8",
+    ).read()
+    start = css.index("\n.tbl .n .sicon {") + 1
+    block = css[start:css.index("}", start) + 1]
+    check("position: absolute" in block, "the status icon is pinned to the card's own corner, not floated inside .n")
+    check("float" not in block, "no leftover float rule that could re-anchor the icon inconsistently")
 
 
 if __name__ == "__main__":
@@ -215,6 +243,7 @@ if __name__ == "__main__":
         test_held_table_no_show_is_wired_and_guest_name_is_tooltip_only,
         test_zpanel_grid_does_not_stretch_cards_to_match_tallest_row_neighbour,
         test_card_title_row_reserves_room_for_the_corner_retire_button,
+        test_status_icon_is_pinned_to_the_card_not_floated_inside_dot_n,
     ):
         print(f"- {fn.__name__}")
         fn()
