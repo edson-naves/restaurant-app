@@ -145,11 +145,28 @@ def _table_map_positions(
 
     A table already dragged uses its real map_x_per_mille/map_y_per_mille.
     One never placed gets a fallback: its zone's never-placed tables, sorted
-    by id, spread as distinct points on a ring centred on that zone's own
-    rectangle (design §4.4 — a rank-based bijection, not id parity or id % N,
-    both of which collide for some id sets). Nothing is written to the
-    database here — recomputed fresh from whatever is NULL right now.
+    by id, laid out in a grid that fills the zone's own rectangle (design
+    §4.4 — a rank-based bijection, not id parity or id % N, both of which
+    collide for some id sets). A grid, not a ring around the zone's edge —
+    a ring only uses the zone's perimeter, so once a zone accumulates more
+    than a handful of never-arranged tables the ring gets too crowded to
+    avoid heavy overlap, and every table in it re-angles whenever the count
+    changes by even one (reported after adding a single table to a zone
+    that already held over a dozen unplaced ones). A grid uses the zone's
+    actual area and reflows far less per table added. Cell size is a rough
+    match for the rendered map card (132px wide on a plane whose CSS width
+    floors at 1360px, height at 1120px — see .floor.as-map .tbl/.map-plane in
+    app.css) converted to this same per-mille scale; a zone that is
+    genuinely too small for its table count still overlaps some (unavoidable
+    without literally resizing the zone, which this does not do) but far
+    less than the ring did, and the fix is the same as always: drag them
+    apart once, real positions then override this entirely. Nothing is
+    written to the database here — recomputed fresh from whatever is NULL
+    right now.
     """
+    CELL_W_PM = 110   # ~132px card + gap, on a 1360px-wide plane -> 1000 per-mille
+    CELL_H_PM = 95    # ~compact card height + gap, on a 1120px-tall plane
+
     positions: dict[int, tuple[int, int]] = {}
     unplaced_by_zone: dict[int, list[RestaurantTable]] = {}
     for t in tables:
@@ -164,14 +181,18 @@ def _table_map_positions(
         if zone is None:
             continue
         n = len(unplaced)
-        cx, cy = zone.pos_x + zone.width / 2, zone.pos_y + zone.height / 2
-        radius = max(0.0, min(zone.width, zone.height) / 2 - 40)
+        cols = max(1, min(n, int(zone.width // CELL_W_PM) or 1))
+        rows = math.ceil(n / cols)
+        # Centred inside the zone's rectangle, not pinned to a corner, so a
+        # zone much bigger than its unplaced-table count doesn't look
+        # lopsided (only matters while width/height exceed the grid's own
+        # footprint; clamped at 0 otherwise).
+        origin_x = zone.pos_x + max(0.0, (zone.width - cols * CELL_W_PM) / 2)
+        origin_y = zone.pos_y + max(0.0, (zone.height - rows * CELL_H_PM) / 2)
         for rank, table in enumerate(sorted(unplaced, key=lambda t: t.id)):
-            if n == 1:
-                x, y = cx, cy
-            else:
-                angle = 2 * math.pi * rank / n
-                x, y = cx + radius * math.cos(angle), cy + radius * math.sin(angle)
+            col, row = rank % cols, rank // cols
+            x = origin_x + (col + 0.5) * CELL_W_PM
+            y = origin_y + (row + 0.5) * CELL_H_PM
             positions[table.id] = (max(0, min(1000, round(x))), max(0, min(1000, round(y))))
     return positions
 

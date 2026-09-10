@@ -366,11 +366,45 @@ def test_reservation_picker_has_select_all_that_skips_booked_tables():
     db.close()
 
 
+def test_many_unplaced_tables_in_one_zone_spread_into_a_grid_not_a_crowded_ring():
+    """Reported production bug: adding one more table to a zone that already
+    held over a dozen never-arranged ones made the whole group appear to
+    "jump" into a tight, heavily overlapping cluster. Root cause: the
+    fallback used to spread unplaced tables on a ring around the zone's
+    edge — fine for a handful, but a ring only uses the zone's perimeter, so
+    it runs out of room fast, and every table in it re-angles whenever the
+    unplaced count changes at all. Now a grid fills the zone's actual area:
+    confirm here that 12 unplaced tables in one zone land on at least two
+    distinct rows (not still crammed onto one ring/line) and that no two of
+    them share the exact same position — the grid, not chance, is what
+    keeps them apart."""
+    db = _session()
+    owner, waiter, floor, zone = _seed(db)  # pos_x=10, pos_y=20, width=300, height=250
+    for i in range(12):
+        db.add(RestaurantTable(number=i + 1, zone_id=zone.id, capacity=4, is_active=True))
+    db.commit()
+    c = _client(db, owner)
+
+    body = c.get(f"/?floor={floor.id}").text
+    import re
+    coords = [(float(x), float(y)) for x, y in
+              re.findall(r'--x: ([\d.]+)%; --y: ([\d.]+)%', body)]
+    check(len(coords) == 12, f"all 12 unplaced tables rendered a position (got {len(coords)})")
+    check(len(set(coords)) == 12, "no two of them share the exact same position")
+    distinct_y = {y for _, y in coords}
+    check(len(distinct_y) >= 2,
+          "they spread across at least two distinct rows — a crowded single ring/line "
+          f"would put them all at (rank-varying x AND y simultaneously); got y values {sorted(distinct_y)}")
+    app.dependency_overrides.clear()
+    db.close()
+
+
 if __name__ == "__main__":
     for fn in (
         test_floor_page_renders_map_plane_and_zone_rects,
         test_never_placed_table_falls_back_inside_its_own_zone_not_the_plane_centre,
         test_table_created_from_the_floor_page_renders_inside_its_zone,
+        test_many_unplaced_tables_in_one_zone_spread_into_a_grid_not_a_crowded_ring,
         test_waiter_without_settings_permission_gets_no_arrange_button,
         test_arrange_script_reuses_pointer_ownership_and_visible_bounds,
         test_idle_auto_reload_is_paused_while_arranging,
